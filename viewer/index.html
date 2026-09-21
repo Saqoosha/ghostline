@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JDL-2026-R6 — DVR on the scan</title>
+    <style>
+      :root { color-scheme: light; }
+      html, body { margin: 0; height: 100%; background: #0c0c0e; color: #ddd; font: 13px/1.4 ui-monospace, Menlo, monospace; overflow: hidden; }
+      #app { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; height: 100%; }
+      /* min 0 + an absolutely placed canvas: resizeCanvas writes px sizes on the canvas, and a
+         canvas in flow would then hold its grid cell open when the window shrinks */
+      #view { position: relative; background: #000; min-width: 0; min-height: 0; overflow: hidden; }
+      #view canvas { position: absolute; left: 0; top: 0; display: block; }
+      #dvr { position: relative; background: #000; display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; overflow: hidden; }
+      #dvr video { max-width: 100%; max-height: 100%; }
+      /* compare: the video sits over the 3D view and a wipe reveals the render underneath */
+      /* compare: the canvas spans both cells (free camera left, matched camera right) */
+      #app.compare #view { grid-column: 1 / -1; }
+      /* transparent: the box covers the 3D view, and only the video is clipped by the wipe */
+      #app.compare #dvr { position: absolute; inset: 0; bottom: var(--bar, 92px); pointer-events: none; background: transparent; }
+      #app.compare #dvr video { width: 100%; height: 100%; object-fit: contain; clip-path: inset(0 0 0 var(--wipe, 50%)); }
+      #bar { grid-column: 1 / -1; padding: 8px 12px; background: #16161a; border-top: 1px solid #2a2a30; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      #bar label { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
+      #bar input[type=range] { width: 100%; }
+      #timeline { flex: 1 1 100%; display: flex; gap: 8px; align-items: center; }
+      #status { position: absolute; left: 10px; top: 8px; color: #9ad; background: rgba(0,0,0,.55); padding: 4px 8px; border-radius: 4px; pointer-events: none; white-space: pre; }
+      #legend { color: #999; white-space: nowrap } #legend i { font-style: normal }
+      button { background: #26262c; color: #ddd; border: 1px solid #3a3a42; border-radius: 4px; padding: 4px 10px; font: inherit; cursor: pointer; }
+      button.on { background: #3b5bdb; border-color: #5b7bfb; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="view"><canvas id="c"></canvas><div id="status">loading…</div></div>
+      <div id="dvr"><video id="video" src="/data/dvr_pinhole.mp4" muted playsinline preload="auto"></video><video id="scanvideo" muted playsinline preload="auto" hidden></video></div>
+      <div id="bar">
+        <div id="timeline">
+          <button id="play">play</button>
+          <span id="tlabel" style="min-width:24ch">80.000 s  #0</span>
+          <label>speed <select id="rate"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option></select>×</label>
+          <input id="seek" type="range" min="0" max="5875" step="1" value="0" />
+        </div>
+        <label><input type="checkbox" id="follow" /> follow DVR camera</label>
+        <label><input type="checkbox" id="compare" /> compare (wipe)</label>
+        <label>wipe <input type="range" id="wipe" min="0" max="100" value="50" style="width:120px" /></label>
+        <label><input type="checkbox" id="showScan" /> scan cameras</label>
+        <label><input type="checkbox" id="showPath" checked /> DVR path</label>
+        <span id="legend"><i style="color:#4dff66">■</i> colmap <i style="color:#ff9926">■</i> lk <i style="color:#ff4dd9">■</i> interp <i style="color:#4dd9ff">■</i> refined <i style="color:#8c8c8c">■</i> ground</span>
+        <label>poses <select id="poseset"><option value="poses60_refined10.json">refined (all)</option><option value="poses60_refined9.json">refined (run 9, short arc)</option><option value="poses60_refined8.json">refined (run 7+8, lost anchors)</option><option value="poses60_refined7.json">refined (colmap gaps)</option><option value="poses60_refined6.json">refined (blur)</option><option value="poses60_refined5.json">refined (bands)</option><option value="poses60_refined.json">refined (run 3+4)</option><option value="poses60_init.json">interpolated</option></select></label>
+        <label>colours <select id="scene"><option value="JDL-2026-R6-fix-web-edit">your edit</option><option value="JDL-2026-R6-fix-web-dvrmatch">matched to DVR</option><option value="JDL-2026-R6-fix-web">original</option></select></label>
+        <label>scan cam <input id="scancam" type="number" min="-1" max="646" value="-1" style="width:6ch" /> <span id="scanlabel"></span></label>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
