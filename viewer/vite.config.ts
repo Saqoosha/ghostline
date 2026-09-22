@@ -15,4 +15,5 @@ const marksApi: Plugin = {
     })
   }
 }
-export default defineConfig({ server: { fs: { allow: ['..'] } }, build: { target: 'es2022' }, plugins: [marksApi] })
+// VITE_BASE is the path the page is published under (tools/publish-dvr-viewer.sh sets /dvr/<name>/).
+export default defineConfig({ base: process.env.VITE_BASE ?? '/', server: { fs: { allow: ['..'] } }, build: { target: 'es2022', copyPublicDir: false }, plugins: [marksApi] })   // public/data is the dev symlink to the data, not an asset

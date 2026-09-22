@@ -7,6 +7,9 @@ type Pose = { i: number; t: number; pos: number[]; quat: number[]; src: string }
 type ScanCam = { name: string; clip: string; t: number; pos: number[]; quat: number[] }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
+// Data lives next to the page: public/data (a symlink to build/dvr/hdz_0067) under the dev
+// server, and <base>/data/ on vdgs.saqoo.sh, where the Worker streams it from R2.
+const DATA = import.meta.env.BASE_URL + 'data/'
 const canvas = $<HTMLCanvasElement>('c'), video = $<HTMLVideoElement>('video'), scanvideo = $<HTMLVideoElement>('scanvideo'), status = $('status')
 const app = new pc.Application(canvas, { mouse: new pc.Mouse(canvas), keyboard: new pc.Keyboard(window), graphicsDeviceOptions: { antialias: false } })
 app.setCanvasFillMode(pc.FILLMODE_NONE)
@@ -65,7 +68,7 @@ let asset: pc.Asset | null = null
 function loadScene(name: string) {
   if (asset) { splat.removeComponent('gsplat'); app.assets.remove(asset); asset.unload(); asset = null }
   status.textContent = 'loading ' + name + '…'
-  const a = new pc.Asset(name, 'gsplat', { url: `/data/scene/${name}.sog` }); asset = a
+  const a = new pc.Asset(name, 'gsplat', { url: `${DATA}scene/${name}.sog` }); asset = a
   app.assets.add(a)
   a.on('load', () => { if (asset !== a) return; splat.addComponent('gsplat', { asset: a }); if (!splat.parent) app.root.addChild(splat); status.textContent = name })
   a.on('error', (err: string) => { status.textContent = 'scene failed: ' + err })
@@ -79,11 +82,11 @@ let poses: Pose[] = [], scan: ScanCam[] = [], gates: Record<string, number[]> = 
 const DVR = { fx: 402.8, w: 960, h: 720, t0: 80, fps: 60 }       // from dvr_pinhole.mp4.json
 const SCAN = { fx: 1048.44, fy: 1048.62, w: 2688, h: 2016, fps: 59.94 }
 async function loadPoses(name: string) {
-  const j = await fetch('/data/' + name).then(r => r.json()); poses = j.poses
+  const j = await fetch(DATA + name).then(r => r.json()); poses = j.poses
   status.textContent = `${name}: ${poses.filter(Boolean).length} frames`
 }
-fetch('/data/scan_cameras.json').then(r => r.json()).then(j => { scan = j.cameras; gates = j.gates })
-fetch('/data/dvr_pinhole.mp4.json').then(r => r.json()).then(j => { DVR.fx = j.fx; DVR.w = j.width; DVR.h = j.height; DVR.t0 = j.t0; DVR.fps = j.fps })
+fetch(DATA + 'scan_cameras.json').then(r => r.json()).then(j => { scan = j.cameras; gates = j.gates })
+fetch(DATA + 'dvr_pinhole.mp4.json').then(r => r.json()).then(j => { DVR.fx = j.fx; DVR.w = j.width; DVR.h = j.height; DVR.t0 = j.t0; DVR.fps = j.fps })
 loadPoses('poses60_refined15.json')
 
 // --- ui
@@ -107,7 +110,7 @@ ui.scancam.oninput = () => {
   const sc = Number(ui.scancam.value); orbit.enabled = orbitAllowed()
   const s = scan[sc]
   if (s) {                                        // the frame this scan camera was solved from
-    const src = `/data/scan_${s.clip}.mp4`; if (!scanvideo.src.endsWith(src)) scanvideo.src = src
+    const src = `${DATA}scan_${s.clip}.mp4`; if (!scanvideo.src.endsWith(src)) scanvideo.src = src
     scanvideo.currentTime = s.t + 1e-4; video.hidden = true; scanvideo.hidden = false
   } else { video.hidden = false; scanvideo.hidden = true }
   layout()
@@ -142,8 +145,24 @@ function lmRefresh() {
   for (const id of Object.keys(marks.landmarks)) { const o = document.createElement('option'); o.value = id; o.textContent = `${id} ${marks.landmarks[id].name}`.trim(); mk.lm.appendChild(o) }
   if (cur && marks.landmarks[cur]) mk.lm.value = cur
 }
-async function marksLoad() { try { marks = await fetch('/api/marks').then(r => r.json()) } catch { } lmRefresh() }
-async function marksSave() { await fetch('/api/marks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(marks, null, 1) }) }
+// The dev server takes marks through /api/marks and writes marks.json; the published site has
+// no writer, so there the page shows the published marks.json, keeps new marks in the browser
+// (localStorage) and offers them as a download.
+let marksApi = true
+async function marksLoad() {
+  try { const r = await fetch('/api/marks'); if (!r.ok) throw 0; marks = await r.json() }
+  catch { marksApi = false
+    try { marks = await fetch(DATA + 'marks.json').then(r => r.json()) } catch { }
+    try { const l = localStorage.getItem('marks'); if (l) marks = JSON.parse(l) } catch { }
+    mk.info.textContent = 'read-only site: new marks stay in this browser (download to keep)' }
+  lmRefresh()
+}
+async function marksSave() {
+  if (marksApi) { await fetch('/api/marks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(marks, null, 1) }); return }
+  try { localStorage.setItem('marks', JSON.stringify(marks)) } catch { }
+}
+$<HTMLButtonElement>('dlmarks').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(marks, null, 1)], { type: 'application/json' })); a.download = 'marks.json'; a.click() }
+scanvideo.onerror = () => { scanvideo.hidden = true; video.hidden = false }   // the scan's proxy videos are not published
 marksLoad()
 mk.mode.onchange = () => { $('app').classList.toggle('marking', mk.mode.checked) }
 mk.newlm.onclick = () => { const n = Object.keys(marks.landmarks).length + 1; const id = String(n); const name = prompt('landmark name (e.g. flag purple, gate B left foot)', `lm${n}`) ?? `lm${n}`; marks.landmarks[id] = { name }; lmRefresh(); mk.lm.value = id; marksSave() }

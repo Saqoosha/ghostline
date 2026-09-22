@@ -139,7 +139,12 @@ COLMAP フレームの平均回転で 1 姿勢にし、`src: "ground"`。refine 
 
 ## ビューア（`viewer/`）
 
-`bun run dev`、`public/data` → `build/dvr/hdz_0067` のシンボリックリンク。SOG は
+公開版は **https://vdgs.saqoo.sh/dvr/jdl-2026-r6/**（`tools/publish-dvr-viewer.sh jdl-2026-r6 build/dvr/hdz_0067`：
+ページは静的アセット、データは R2 の `dvr/jdl-2026-r6/data/`。仕組みは docs/distribution.ja.md）。公開版に
+書き込み口は無いので、mark モードで打った印はそのブラウザの localStorage に残り `download` で JSON に出す。
+`marks.json` を更新したら同じスクリプトで上げ直す（`rclone --checksum` なので変わったものだけ送る）。
+
+手元は `bun run dev`、`public/data` → `build/dvr/hdz_0067` のシンボリックリンク。SOG は
 `npx @playcanvas/splat-transform`（座標は回らない）。web 座標は右手系 x 東・y 上・z 南（Unity の z 反転）。
 COLMAP のカメラは x 軸 180° を掛けて PlayCanvas のカメラにする。
 
