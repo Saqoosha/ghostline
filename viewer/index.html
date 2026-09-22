@@ -20,6 +20,10 @@
       /* transparent: the box covers the 3D view, and only the video is clipped by the wipe */
       #app.compare #dvr { position: absolute; inset: 0; bottom: var(--bar, 92px); pointer-events: none; background: transparent; }
       #app.compare #dvr video { width: 100%; height: 100%; object-fit: contain; clip-path: inset(0 0 0 var(--wipe, 50%)); }
+      /* marks: an overlay the size of the video's picture; it takes the clicks in mark mode */
+      #marks { position: absolute; pointer-events: none; }
+      #app.marking #dvr { pointer-events: auto; } #app.marking #marks { pointer-events: auto; cursor: crosshair; }
+      #markbar { color: #bbb; } #markbar select { min-width: 8ch; }
       #bar { grid-column: 1 / -1; padding: 8px 12px; background: #16161a; border-top: 1px solid #2a2a30; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
       #bar label { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
       #bar input[type=range] { width: 100%; }
@@ -33,7 +37,7 @@
   <body>
     <div id="app">
       <div id="view"><canvas id="c"></canvas><div id="status">loading…</div></div>
-      <div id="dvr"><video id="video" src="/data/dvr_pinhole.mp4" muted playsinline preload="auto"></video><video id="scanvideo" muted playsinline preload="auto" hidden></video></div>
+      <div id="dvr"><video id="video" src="/data/dvr_pinhole.mp4" muted playsinline preload="auto"></video><video id="scanvideo" muted playsinline preload="auto" hidden></video><canvas id="marks"></canvas></div>
       <div id="bar">
         <div id="timeline">
           <button id="play">play</button>
@@ -46,10 +50,11 @@
         <label>wipe <input type="range" id="wipe" min="0" max="100" value="50" style="width:120px" /></label>
         <label><input type="checkbox" id="showScan" /> scan cameras</label>
         <label><input type="checkbox" id="showPath" checked /> DVR path</label>
-        <span id="legend"><i style="color:#4dff66">■</i> colmap <i style="color:#ff9926">■</i> lk <i style="color:#ff4dd9">■</i> interp <i style="color:#4dd9ff">■</i> refined <i style="color:#8c8c8c">■</i> ground</span>
-        <label>poses <select id="poseset"><option value="poses60_refined10.json">refined (all)</option><option value="poses60_refined9.json">refined (run 9, short arc)</option><option value="poses60_refined8.json">refined (run 7+8, lost anchors)</option><option value="poses60_refined7.json">refined (colmap gaps)</option><option value="poses60_refined6.json">refined (blur)</option><option value="poses60_refined5.json">refined (bands)</option><option value="poses60_refined.json">refined (run 3+4)</option><option value="poses60_init.json">interpolated</option></select></label>
+        <span id="legend"><i style="color:#4dff66">■</i> colmap <i style="color:#ff9926">■</i> lk <i style="color:#ff4dd9">■</i> interp <i style="color:#4dd9ff">■</i> refined <i style="color:#8c8c8c">■</i> ground <i style="color:#ffe14d">■</i> manual</span>
+        <label>poses <select id="poseset"><option value="poses60_refined15.json">refined (all + marks)</option><option value="poses60_refined14.json">refined (run 14)</option><option value="poses60_refined13.json">refined (run 13, first marks)</option><option value="poses60_refined10.json">refined (run 10, before marks)</option><option value="poses60_refined12.json">refined (run 12, inlier-weighted)</option><option value="poses60_refined9.json">refined (run 9, short arc)</option><option value="poses60_refined8.json">refined (run 7+8, lost anchors)</option><option value="poses60_refined7.json">refined (colmap gaps)</option><option value="poses60_refined6.json">refined (blur)</option><option value="poses60_refined5.json">refined (bands)</option><option value="poses60_refined.json">refined (run 3+4)</option><option value="poses60_init15.json">interpolated (run 15, marks, before refine)</option><option value="poses60_init.json">interpolated (run 10, no marks)</option></select></label>
         <label>colours <select id="scene"><option value="JDL-2026-R6-fix-web-edit">your edit</option><option value="JDL-2026-R6-fix-web-dvrmatch">matched to DVR</option><option value="JDL-2026-R6-fix-web">original</option></select></label>
         <label>scan cam <input id="scancam" type="number" min="-1" max="646" value="-1" style="width:6ch" /> <span id="scanlabel"></span></label>
+        <span id="markbar"><label><input type="checkbox" id="markmode" /> mark</label> landmark <select id="landmark"></select> <button id="newlm">+ new</button> <button id="undomark">undo</button> ground y <input id="groundy" type="number" step="0.1" value="1.5" style="width:6ch" /> <button id="resetlm">reset 3D</button> <span id="markinfo"></span></span>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

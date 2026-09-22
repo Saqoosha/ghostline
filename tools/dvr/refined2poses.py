@@ -5,7 +5,7 @@ import json, sys, numpy as np
 from scipy.spatial.transform import Rotation as Rot, Slerp
 MAXGAP = 0.5                                                   # s
 init = json.load(open(sys.argv[1])); N, T0, FPS = len(init["poses"]), init["t0"], init["fps"]
-rec = [json.loads(l) for l in open(sys.argv[2])]
+rec = list({r["i"]: r for r in (json.loads(l) for l in open(sys.argv[2]))}.values())   # a resumed run may repeat a frame: last record wins
 acc = sorted([r for r in rec if r["accepted"]], key=lambda r: r["i"])
 byi = {r["i"]: r for r in rec}
 t = np.array([r["t"] for r in acc]); P = np.array([r["pos"] for r in acc]); sl = Slerp(t, Rot.from_quat([r["quat"] for r in acc]))

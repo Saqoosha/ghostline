@@ -80,14 +80,18 @@ for i, n in enumerate(frames):
 # smoother disagrees with by more than OUT_M and smooth again: a single wrong registration that the
 # speed test let through still tugs the curve by metres, and this is where it shows.
 q, r, OUT_M = 40.0, 0.4, 2.0
+# A measurement's weight follows its 3D-point count. With one sigma for all, #907 (770 inliers,
+# right) was thrown out as an outlier because its 22-31 inlier neighbours (3-6 m off) outvoted it,
+# and the interpolated pylon turn ran through the flag (#915, 2026-09-22).
+def sig_of(n): return 0.3 if n >= 200 else 0.4 if n >= 100 else 0.6 if n >= 40 else 1.0 if n >= 20 else 1.5
 def rts(K):
-    tk = np.array([x["t"] for x in K]); Z = np.array([x["pos"] for x in K])
-    xs, Ps, xp, Pp = [], [], [], []; x = np.r_[Z[0], 0, 0, 0]; P = np.diag([r*r]*3 + [400]*3); H = np.c_[np.eye(3), np.zeros((3, 3))]
+    tk = np.array([x["t"] for x in K]); Z = np.array([x["pos"] for x in K]); sg = np.array([sig_of(x["inliers"]) for x in K])
+    xs, Ps, xp, Pp = [], [], [], []; x = np.r_[Z[0], 0, 0, 0]; P = np.diag([sg[0]**2]*3 + [400]*3); H = np.c_[np.eye(3), np.zeros((3, 3))]
     for i in range(len(K)):
         if i > 0:
             dt = tk[i] - tk[i-1]; F = np.eye(6); F[:3, 3:] = dt * np.eye(3); G = np.r_[0.5*dt*dt*np.eye(3), dt*np.eye(3)]; x = F @ x; P = F @ P @ F.T + q*q * G @ G.T
         xp.append(x.copy()); Pp.append(P.copy())
-        S = H @ P @ H.T + r*r*np.eye(3); Kg = P @ H.T @ np.linalg.inv(S); x = x + Kg @ (Z[i] - H @ x); P = (np.eye(6) - Kg @ H) @ P; xs.append(x.copy()); Ps.append(P.copy())
+        S = H @ P @ H.T + sg[i]**2*np.eye(3); Kg = P @ H.T @ np.linalg.inv(S); x = x + Kg @ (Z[i] - H @ x); P = (np.eye(6) - Kg @ H) @ P; xs.append(x.copy()); Ps.append(P.copy())
     xsm = [None] * len(K); xsm[-1] = xs[-1]
     for i in range(len(K) - 2, -1, -1):
         dt = tk[i+1] - tk[i]; F = np.eye(6); F[:3, 3:] = dt * np.eye(3); Cg = Ps[i] @ F.T @ np.linalg.inv(Pp[i+1]); xsm[i] = xs[i] + Cg @ (xsm[i+1] - xp[i+1])
@@ -95,7 +99,7 @@ def rts(K):
 n_out = 0
 for _ in range(4):
     K = [x for x in out if x["pos"] is not None]; X = rts(K)
-    res = np.linalg.norm(np.array([x["pos"] for x in K]) - X[:, :3], axis=1); bad = res > OUT_M
+    res = np.linalg.norm(np.array([x["pos"] for x in K]) - X[:, :3], axis=1); bad = res > np.array([OUT_M * max(1.0, sig_of(x["inliers"]) / 0.6) for x in K])
     for x, s_, b in zip(K, X, bad):
         if b: x["label"] = "outlier"; x["pos"] = None; x.pop("smooth", None); x.pop("vel", None); n_out += 1
         else: x["smooth"] = s_[:3].tolist(); x["vel"] = s_[3:].tolist()

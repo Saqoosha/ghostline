@@ -8,6 +8,11 @@ import json, sys, time, math, os, numpy as np, torch, cv2
 from plyfile import PlyData
 from gsplat import rasterization
 dev = "cuda"
+# WDDM lets CUDA spill into system memory instead of failing: a render with the camera inside the
+# grass or a flag (a translation-search candidate 2 m lower) filled the 24 GB and the job sat at
+# 100 % GPU for an hour doing nothing (run 11a, 2026-09-22). Cap the allocator so it raises OOM,
+# and skip the candidate.
+torch.cuda.set_per_process_memory_fraction(0.85)
 ply, video, poses_json, out_path = sys.argv[1:5]
 stride = int(sys.argv[5]) if len(sys.argv) > 5 else 1
 LIMIT = int(os.environ.get("LIMIT", 0))                      # stop after this many frames (timing runs)
@@ -30,6 +35,12 @@ EDGE = float(os.environ.get("EDGE", 0))
 # SEARCH=d evaluates the coarsest loss on a yaw/pitch grid of +-d deg (1 deg steps, no gradients)
 # per frame and starts the descent from the best cell.
 COARSE, SEARCH = int(os.environ.get("COARSE", 2)), float(os.environ.get("SEARCH", 0))
+# TSEARCH=d: grid over the camera-frame translation dx, dz in [-d, d] (1 m steps) and dy in {-2, 0, 2}
+# at the coarsest level, before the descent. The descent moves a pose ~1 m at most; #915 sat 6 m
+# left of where the DVR put it (a pylon turn interpolated straight through the flag), with the
+# loss falling monotonically toward the true spot (0.896 -> 0.746 at +6 m). The prior and the
+# acceptance limit are measured from the searched start, not the init (MAX_TR env, default 1.5).
+TSEARCH = float(os.environ.get("TSEARCH", 0))
 # BLUR=sigma (px at the fine level, scaled per level): Gaussian-blur both the DVR frame and the
 # render before the loss. Measured on #184 (yaw sweep, band loss): unblurred, the horizon band is
 # flat (3.23-3.39 over +-6 deg, no minimum) and the grass bands fall monotonically to one side, so
@@ -45,7 +56,7 @@ def gauss_blur(img, sigma):                        # img (B,h,w,3), separable, d
     x = F_.conv2d(x, g1.view(1, 1, k, 1).expand(3, 1, k, 1), padding=(k // 2, 0), groups=3)
     return x.permute(0, 2, 3, 1)
 PRIOR, SIG_R, SIG_T = 0.1, math.radians(6.0), 1.0
-MAX_ROT, MAX_TR = 10.0, 1.5
+MAX_ROT, MAX_TR = 10.0, float(os.environ.get("MAX_TR", 1.5))
 # ---- scene
 v = PlyData.read(ply)["vertex"].data
 if OPMIN > 0: v = v[1 / (1 + np.exp(-v["opacity"])) >= OPMIN]
@@ -159,24 +170,37 @@ for b0 in range(0, len(todo), B):
     Rc2w = [qxyzw_to_R(poses[i]["quat"]) for i in idx]; C = [np.array(poses[i]["pos"]) for i in idx]
     base = torch.tensor(np.stack([np.r_[np.c_[R.T, -R.T @ c], [[0, 0, 0, 1]]] for R, c in zip(Rc2w, C)]), dtype=torch.float32, device=dev)
     xi0 = torch.zeros(n, 6, device=dev)
-    if SEARCH:                                     # grid over camera-frame pitch (x) and yaw (y) at the coarsest level
+    if SEARCH or TSEARCH:                          # grid at the coarsest level: rotation (pitch, yaw) and/or camera-frame translation
         with torch.no_grad():
             L0 = levels[0]; tgt0, m0, w0 = per[0]; bestL = None
-            for dp in np.arange(-SEARCH, SEARCH + 0.5, 1.0):
-                for dy in np.arange(-SEARCH, SEARCH + 0.5, 1.0):
+            rots = [(dp, dy) for dp in np.arange(-SEARCH, SEARCH + 0.5, 1.0) for dy in np.arange(-SEARCH, SEARCH + 0.5, 1.0)] if SEARCH else [(0.0, 0.0)]
+            trans = [(tx, ty, tz) for ty in (-2.0, 0.0, 2.0) for tz in np.arange(-TSEARCH, TSEARCH + 0.5, 1.0) for tx in np.arange(-TSEARCH, TSEARCH + 0.5, 1.0)] if TSEARCH else [(0.0, 0.0, 0.0)]
+            ymin = torch.tensor([poses[i]["pos"][1] for i in idx], device=dev)   # world y of the init (ground is ~1.5 in this scene)
+            for dp, dy in rots:
+                for tx, ty, tz in trans:
                     cand = torch.zeros(n, 6, device=dev); cand[:, 0] = math.radians(dp); cand[:, 1] = math.radians(dy)
-                    r_, a_ = render(se3_exp(cand) @ base, L0); lc = loss_fn(r_, a_, tgt0, m0, w0, L0.sigma)
+                    # camera-frame translation of the camera by (tx,ty,tz) = w2c translation of -(tx,ty,tz)
+                    cand[:, 3] = -tx; cand[:, 4] = -ty; cand[:, 5] = -tz
+                    if ty < 0:                     # never search below 2.5 m world y: the camera lands in the grass
+                        cand[:, 4] = torch.where(ymin + ty < 2.5, torch.zeros_like(cand[:, 4]), cand[:, 4])
+                    try:
+                        r_, a_ = render(se3_exp(cand) @ base, L0); lc = loss_fn(r_, a_, tgt0, m0, w0, L0.sigma)
+                    except torch.cuda.OutOfMemoryError:
+                        torch.cuda.empty_cache(); continue
                     if bestL is None: bestL = lc.clone(); xi0 = cand
                     else: better = lc < bestL; bestL = torch.where(better, lc, bestL); xi0 = torch.where(better[:, None], cand, xi0)
     xi = xi0.clone().requires_grad_(True); opt = torch.optim.Adam([xi], lr=0.01)
     with torch.no_grad(): ri, ai = render(base, levels[-1]); li = loss_fn(ri, ai, *per[-1], levels[-1].sigma)  # (tgt, mask, weight)
-    best, best_xi = li.clone(), torch.zeros(n, 6, device=dev)
+    best, best_xi = li.clone(), xi0.clone()
     for it in range(ITERS):
         lvl = min(len(levels) - 1, it * 3 // ITERS) if len(levels) == 3 else (0 if it < ITERS // 3 else 1)
         L = levels[lvl]; tgt, m, w = per[lvl]
         for g in opt.param_groups: g["lr"] = 0.01 * (0.25 ** (it / ITERS))
-        opt.zero_grad(); ren, alpha = render(se3_exp(xi) @ base, L)
-        prior = PRIOR * ((xi[:, :3] / SIG_R).pow(2).sum(1) + (xi[:, 3:] / SIG_T).pow(2).sum(1))
+        opt.zero_grad()
+        try: ren, alpha = render(se3_exp(xi) @ base, L)
+        except torch.cuda.OutOfMemoryError: torch.cuda.empty_cache(); print(f"  OOM in descent at batch starting #{idx[0]}, keeping the best so far", flush=True); break
+        dxi = xi - xi0                             # the prior holds the pose near the (searched) start, not the init
+        prior = PRIOR * ((dxi[:, :3] / SIG_R).pow(2).sum(1) + (dxi[:, 3:] / SIG_T).pow(2).sum(1))
         lb = loss_fn(ren, alpha, tgt, m, w, L.sigma) + prior; lb.sum().backward(); opt.step()
         if lvl == len(levels) - 1:
             with torch.no_grad():

@@ -221,3 +221,101 @@ things were tried before the answer:
 
 Run 10 = the 10 frames on the long arc, refined (all accepted, 2.3–6.3°, loss 2.20 → 1.50 at #1663,
 1.04 → 0.91 at #1668). Merged with run 9 → `poses60_refined10.json` (viewer default "refined (all)").
+
+## Run 11 (2026-09-22, overnight) — translation search: a negative result
+
+Saqoosha: "#915 is refined but not good enough." The DVR shows the purple flag 5 m ahead; the
+render from the refined pose has no near flag, and a top-down render of the scan puts that flag
+right under the drone's position — the pose is ~6 m off, not its orientation. A position sweep at
+#915 (camera x/z ±6 m, blurred band loss) fell monotonically from 0.896 at (0,0) to 0.746 at +6 m;
+the yaw sweep had its minimum at 0. #910–#939 is a pylon turn around that flag with no observation
+inside, interpolated straight through the flag, and the anchors at its edges (#905–#910, 22–31
+inliers) were themselves 3–6 m off while the strong #907 (770 inliers) had been rejected as a
+smoother outlier.
+
+So `refine_batch.py` got `TSEARCH=d`: a grid over camera-frame dx, dz ∈ [−d, d] (1 m) and dy ∈
+{−2, 0, +2} at 120×90 before the descent, prior and acceptance measured from the searched start
+(`MAX_TR` env). On #905–#939 it lowered the loss from 0.9–1.2 to 0.62–0.86 and dropped the altitude
+5.9 → 2.8 m (consistent with the flag top above the camera), but the per-frame optima jumped 3–5 m
+between neighbours; median-5 + Kalman/RTS + a second refine (`smooth_pass.py`) still jumped. Two
+stalls on the way: a candidate 2 m lower puts the camera in the grass and the render spilled the
+24 GB into system memory at 100 % GPU for an hour (fixed with `set_per_process_memory_fraction(0.85)`,
+OOM caught, candidates below world y 2.5 skipped).
+
+Pass A over every non-ground frame (5564; 3973 + 1591, ~2.9 s/frame, 5 h) is the verdict:
+accepted 4462 (80 %), shift from init p50 5.6 m, loss 1.121 → 0.955. **Strong COLMAP anchors
+(≥ 200 inliers, n = 455) moved p50 5.95 m (2.6 m down, 4.6 m sideways, random directions) with the
+loss falling 1.054 → 0.909** — as much as the interpolated frames did. Those anchors are right to
+well under a metre, so the blurred band loss has spurious minima 5 m from the truth on most frames:
+grass texture and look-alike flags repeat at that scale. The search cannot be trusted anywhere,
+including at #915. Run 11c (refine from the smoothed pass-A positions) was killed; the viewer stays
+on run 10. `refined11a_all.jsonl` is kept as the record.
+
+What this leaves: the photometric loss refines within ~1 m and a few degrees, and that is all it can
+do. Positions inside long unobserved gaps need geometry — more anchors (the mapper failed on grass),
+or observations weighted by their inlier count so that #907 (770) outranks its 22-inlier neighbours
+in the smoother (not done; `resolve.py` / `interp60.py` treat every measurement as σ 0.4 m).
+
+## Run 12 (2026-09-22 morning) — inlier-weighted smoothing: no measurable gain
+
+`resolve.py` and `interp60.py` now weight every observation by its 3D-point count (σ 0.3 m at
+≥ 200 inliers, 0.4 at ≥ 100, 0.6 at ≥ 40, 1.0 at ≥ 20, 1.5 for the LK fill; the smoother's outlier
+threshold scales with σ). #907 (770 inliers) is kept again and #905–#915 move ~1.3 m toward it;
+init positions change p50 0.27 m, p90 0.81 m, 2580 frames by > 0.3 m / 0.5°. Those were refined
+(run 12: accepted 2349/2580, 9 cm / 1.4°) and merged with run 10's unchanged records →
+`poses60_refined12.json` (5080 refined, no step > 1.1 m).
+
+Against run 10 on 105 frames (blurred band loss): all-band mean 0.964 → 0.969, better 18 / worse 22 /
+same 65; #915 0.896 → 0.918, #1612 0.962 → 0.929. A wash. The weighting is kept in the tools (it is
+the right model) but the viewer stays on run 10; run 12 is selectable as "refined (run 12,
+inlier-weighted)". The hairpin #1662–#1673 re-checked under the new init: the long arc still wins
+the horizon band on 8/10 frames (e.g. 4.7 → 3.3), the all band is within noise; kept long.
+
+State of play after the night: every observed frame has been through the blurred photometric
+refinement; positions inside unobserved pylon turns (#910–#939) are still the smoother's straight
+line, and neither photometric search (run 11) nor re-weighting (run 12) recovers them. What would:
+more anchors there (register those frames against a scan that has the race-day flags), or hand
+hints (a point on the DVR frame matched to the scan) fed to the resolver as measurements.
+
+## Run 13 (2026-09-22) — human marks: the fix that worked
+
+Saqoosha: "human can adjust it but computer algorithm can't." So the viewer got a marking mode
+(`mark`, key m): a landmark is a thing the wind does not move (flag base, gate foot); its 3D position
+is set by clicking it in the free view from two viewpoints (ray intersection; one click falls back to
+the ground plane y = 1.5; arrows / PageUp-Down nudge; `reset 3D`), and a mark is a click on the DVR
+frame tagged with the landmark. Saved through the dev server to `marks.json`. He placed 23 landmarks
+and 246 marks on 230 frames (mostly one lap, #1312–#2379) in about an hour.
+
+`marks_solve.py`: per marked frame, least squares on the marks' reprojection over the pose, rotation
+prior 3°, and for one-mark frames an altitude prior (0.7 m) and a loose position prior (2.5 m) to pick
+the point along the ray; bounded (15°, 8 m) after unbounded solves walked 10⁸ m on 7 frames whose
+landmark was behind the camera (#1610–#1638, the 500°/s turn: still unsolved, they need 2+ marks).
+202 frames solved, moved p50 0.5 m p90 1.5 m. Written into the track as `manual` observations;
+`interp60.py` gives them σ 0.05 m (σ 0.15 left the marks at 10 px, 0.05 at 6 px; automatic
+observations are 0.3–1.5). Run 13 refined the 1039 frames whose init changed (accepted 940, 9 cm /
+1.1°), then the marked frames themselves were put back to the human solution: the photometric refine
+had pulled them from 6.4 to 10.5 px.
+
+Scored by the marks themselves (`marks_eval.py`, residual of each mark against where the pose set
+projects its landmark):
+
+| pose set | p50 | p90 | within 30 px |
+|---|---|---|---|
+| run 10 | 32 px | 211 px | 47 % |
+| run 13 init (manual σ 0.05) | 6.4 | 22 | 92 % |
+| run 13 refined, marked frames restored | 6.4 | 22 | 92 % |
+
+`poses60_refined13.json` is the viewer default ("refined (all + marks)"); marked frames show as
+`manual` (yellow) on the path. #915 itself was not marked (the marks cover 102–120 s), so it is
+unchanged; the same procedure applies there.
+
+## Run 14 (2026-09-22) — the second batch of marks
+
+413 marks on 378 frames (the first lap plus #410–#971, i.e. the #915 pylon turn). 10 frames are still
+unsolvable from one mark each because the init pose has the landmark behind the camera (#547–#553 and
+#1610–#1638, both 400–500°/s turns); they need two marks on the same frame. #915 moved 3.5 m. Refined
+the 519 changed frames (a WSL restart by another session killed the run at 232; resumed, and
+`refined2poses.py` now collapses repeated records, last wins), marked frames restored to the human
+solution → `poses60_refined14.json` (viewer default): 4708 refined, 378 manual, 226 colmap, 162 lk,
+90 interp; no step > 1.1 m. Marks residual p50 7.0 px, p90 22.7, within 30 px 92 % (run 13 scored
+13.3 / 324 / 64 % on the same 407 marks).

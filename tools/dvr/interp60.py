@@ -5,7 +5,7 @@ end velocities drew a loop there). Orientation: slerp between kept frames.
 Output frame: web (x east, y up, z south), metres, right-handed."""
 import json, sys, numpy as np
 from scipy.spatial.transform import Rotation as Rot, Slerp
-d = [x for x in json.load(open(sys.argv[1])) if x["pos"] is not None]
+d = sorted([x for x in json.load(open(sys.argv[1])) if x["pos"] is not None], key=lambda x: x["t"])   # manual entries are appended out of order
 # An LK frame whose PnP returned the previous LK frame's position (< 2 cm apart while the drone
 # moves ~0.3 m/frame) is a stale track, not a measurement: 14 of 2050 at 2026-09-21, in runs of
 # up to 4 (#184-#187), and each one pulled the smoother toward a point the drone had left.
@@ -22,34 +22,39 @@ tm = np.array([x["t"] for x in d]); Z = np.array([x["pos"] for x in d]) @ Mz
 # jumps of 30-50 deg in a fast turn (106.7 s). Positions from every kept frame. An LK frame is
 # labelled "lk", not "kept": its slerped heading and few-point PnP are worth refining (#184 was
 # 3 deg of yaw and 0.4 m off while run 3 skipped it as observed).
-rd = [x for x in d if not x["name"].startswith("lk/")]
+rd, seen = [], set()
+for x in d:                                                          # one rotation per time: manual entries replace a frame's own
+    if x["name"].startswith("lk/") or x["t"] in seen: continue
+    rd.append(x); seen.add(x["t"])
 tr = np.array([x["t"] for x in rd]); Rs = Rot.from_matrix(np.array([Mz @ np.array(x["R"]) for x in rd])); sl = Slerp(tr, Rs)
 T0, FPS, N = 80.0, 60, int(sys.argv[3]); q, r = 40.0, 0.4          # accel [m/s^2], measurement sigma [m]
 TAKEOFF = 116                                                        # the drone sits on the ground until this frame (Saqoosha, from the DVR)
 tg = T0 + np.arange(N) / FPS
-meas = {}                                                            # grid index -> measurement
-for t_, z in zip(tm, Z): meas.setdefault(int(round((t_ - T0) * FPS)), []).append(z)
+meas = {}                                                            # grid index -> [(measurement, sigma)]
+def sig_of(n): return 0.3 if n >= 200 else 0.4 if n >= 100 else 0.6 if n >= 40 else 1.0 if n >= 20 else 1.5   # as resolve.py
+MANUAL_SIG = float(__import__("os").environ.get("MANUAL_SIG", 0.05))   # a human mark outranks every automatic observation
+for x, z in zip(d, Z): meas.setdefault(int(round((x["t"] - T0) * FPS)), []).append((z, MANUAL_SIG if x.get("label") == "manual" else sig_of(x["inliers"])))
 col = {int(round((x["t"] - T0) * FPS)) for x in rd}                  # grid indices COLMAP registered
 H = np.c_[np.eye(3), np.zeros((3, 3))]; dt = 1 / FPS
 F = np.eye(6); F[:3, 3:] = dt * np.eye(3); G = np.r_[0.5*dt*dt*np.eye(3), dt*np.eye(3)]; Q = q*q * G @ G.T
 i0, i1 = min(meas), max(meas)
-x = np.r_[np.mean(meas[i0], axis=0), 0, 0, 0]; P = np.diag([r*r]*3 + [400]*3)
+x = np.r_[np.mean([z for z, _ in meas[i0]], axis=0), 0, 0, 0]; P = np.diag([r*r]*3 + [400]*3)
 xs, Ps, xp, Pp = [], [], [], []
 for i in range(i0, i1 + 1):
     if i > i0: x = F @ x; P = F @ P @ F.T + Q
     xp.append(x.copy()); Pp.append(P.copy())
-    for z in meas.get(i, []):
-        S_ = H @ P @ H.T + r*r*np.eye(3); K = P @ H.T @ np.linalg.inv(S_); x = x + K @ (z - H @ x); P = (np.eye(6) - K @ H) @ P
+    for z, sg in meas.get(i, []):
+        S_ = H @ P @ H.T + sg*sg*np.eye(3); K = P @ H.T @ np.linalg.inv(S_); x = x + K @ (z - H @ x); P = (np.eye(6) - K @ H) @ P
     xs.append(x.copy()); Ps.append(P.copy())
 xsm = [None] * len(xs); xsm[-1] = xs[-1]
 for k in range(len(xs) - 2, -1, -1):
     C = Ps[k] @ F.T @ np.linalg.inv(Pp[k+1]); xsm[k] = xs[k] + C @ (xsm[k+1] - xp[k+1])
 # Ground: every observation before take-off is the same pose, so average them (position: mean of
 # all measurements; rotation: chordal mean of the COLMAP frames) and give it to every frame there.
-gpos = np.median([z for i in meas if i < TAKEOFF for z in meas[i]], axis=0)     # median: one PnP sat 1.8 m out
+gpos = np.median([z for i in meas if i < TAKEOFF for z, _ in meas[i]], axis=0)     # median: one PnP sat 1.8 m out
 gq = np.array([x.as_quat() for x, t_ in zip(Rs, tr) if int(round((t_ - T0) * FPS)) < TAKEOFF]); gq[gq[:, 3] < 0] *= -1
 gquat = Rot.from_quat(gq.mean(axis=0) / np.linalg.norm(gq.mean(axis=0))).as_quat()
-print(f"ground: frames {i0}-{TAKEOFF-1}, {sum(len(meas[i]) for i in meas if i < TAKEOFF)} observations, spread p50 {np.median(np.linalg.norm([z for i in meas if i < TAKEOFF for z in meas[i]] - gpos, axis=1)):.2f} max {np.linalg.norm([z for i in meas if i < TAKEOFF for z in meas[i]] - gpos, axis=1).max():.2f} m")
+print(f"ground: frames {i0}-{TAKEOFF-1}, {sum(len(meas[i]) for i in meas if i < TAKEOFF)} observations, spread p50 {np.median(np.linalg.norm([z for i in meas if i < TAKEOFF for z, _ in meas[i]] - gpos, axis=1)):.2f} max {np.linalg.norm([z for i in meas if i < TAKEOFF for z, _ in meas[i]] - gpos, axis=1).max():.2f} m")
 out = [None] * N
 for k, i in enumerate(range(i0, i1 + 1)):
     tt = tg[i]; qv = sl([min(max(tt, tr[0]), tr[-1])]).as_quat()[0]

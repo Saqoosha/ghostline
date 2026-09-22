@@ -84,7 +84,7 @@ async function loadPoses(name: string) {
 }
 fetch('/data/scan_cameras.json').then(r => r.json()).then(j => { scan = j.cameras; gates = j.gates })
 fetch('/data/dvr_pinhole.mp4.json').then(r => r.json()).then(j => { DVR.fx = j.fx; DVR.w = j.width; DVR.h = j.height; DVR.t0 = j.t0; DVR.fps = j.fps })
-loadPoses('poses60_refined10.json')
+loadPoses('poses60_refined15.json')
 
 // --- ui
 const ui = { follow: $<HTMLInputElement>('follow'), compare: $<HTMLInputElement>('compare'), wipe: $<HTMLInputElement>('wipe'),
@@ -114,12 +114,119 @@ ui.scancam.oninput = () => {
 }
 window.addEventListener('keydown', e => {
   if (e.target instanceof HTMLInputElement) return
+  if (mk.mode.checked && marks.landmarks[mk.lm.value]?.pos) {          // nudge the selected landmark: arrows on the ground, PageUp/Down in height
+    const lm = marks.landmarks[mk.lm.value]; const st = e.shiftKey ? 1 : 0.1; const p = lm.pos!
+    const mv: Record<string, number[]> = { ArrowLeft: [-st, 0, 0], ArrowRight: [st, 0, 0], ArrowUp: [0, 0, -st], ArrowDown: [0, 0, st], PageUp: [0, st, 0], PageDown: [0, -st, 0] }
+    if (mv[e.key]) { lm.pos = p.map((x, k) => Math.round((x + mv[e.key][k]) * 100) / 100); delete lm.rays; marksSave(); e.preventDefault(); return }
+  }
   if (e.key === ' ') { ui.play.click(); e.preventDefault() }
   if (e.key === 'ArrowRight') video.currentTime += (e.shiftKey ? 10 : 1) / DVR.fps
   if (e.key === 'ArrowLeft') video.currentTime -= (e.shiftKey ? 10 : 1) / DVR.fps
   if (e.key === 'f') { ui.follow.checked = !ui.follow.checked; ui.follow.onchange!(new Event('change')) }
   if (e.key === 'c') { ui.compare.checked = !ui.compare.checked; ui.compare.onchange!(new Event('change')) }
+  if (e.key === 'm') { mk.mode.checked = !mk.mode.checked; mk.mode.onchange!(new Event('change')) }
+
+  if (/^[1-9]$/.test(e.key) && marks.landmarks[e.key]) mk.lm.value = e.key
 })
+
+// --- marks: human correspondences. A mark is a pixel on a DVR frame (pinhole coordinates) tagged with
+// a landmark id (a flag base, a gate foot). The solver (tools/dvr/marks_solve.py) triangulates each
+// landmark from marks on well-posed frames and then solves the badly-posed frames from their marks;
+// the page only collects them and draws, for the current pose, where each known landmark projects.
+type Mark = { i: number; id: string; u: number; v: number }
+type Marks = { landmarks: Record<string, { name: string; pos?: number[]; rays?: number[][] }>; marks: Mark[] }
+let marks: Marks = { landmarks: {}, marks: [] }
+const mk = { mode: $<HTMLInputElement>('markmode'), lm: $<HTMLSelectElement>('landmark'), newlm: $<HTMLButtonElement>('newlm'), undo: $<HTMLButtonElement>('undomark'), info: $('markinfo'), canvas: $<HTMLCanvasElement>('marks') }
+function lmRefresh() {
+  const cur = mk.lm.value; mk.lm.innerHTML = ''
+  for (const id of Object.keys(marks.landmarks)) { const o = document.createElement('option'); o.value = id; o.textContent = `${id} ${marks.landmarks[id].name}`.trim(); mk.lm.appendChild(o) }
+  if (cur && marks.landmarks[cur]) mk.lm.value = cur
+}
+async function marksLoad() { try { marks = await fetch('/api/marks').then(r => r.json()) } catch { } lmRefresh() }
+async function marksSave() { await fetch('/api/marks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(marks, null, 1) }) }
+marksLoad()
+mk.mode.onchange = () => { $('app').classList.toggle('marking', mk.mode.checked) }
+mk.newlm.onclick = () => { const n = Object.keys(marks.landmarks).length + 1; const id = String(n); const name = prompt('landmark name (e.g. flag purple, gate B left foot)', `lm${n}`) ?? `lm${n}`; marks.landmarks[id] = { name }; lmRefresh(); mk.lm.value = id; marksSave() }
+mk.undo.onclick = () => { marks.marks.pop(); marksSave() }
+// the video keeps 4:3 inside its box (object-fit: contain), so the picture rect is the largest 4:3 box centred in the element
+function pictureRect() {
+  const r = video.getBoundingClientRect(); const w = Math.min(r.width, r.height * 4 / 3), h = w * 3 / 4
+  return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, w, h }
+}
+mk.canvas.addEventListener('pointerdown', e => {
+  if (!mk.mode.checked) return
+  const id = mk.lm.value; if (!id) { alert('add a landmark first (+ new)'); return }
+  const pr = pictureRect(); const u = (e.clientX - pr.left) / pr.w * DVR.w, v = (e.clientY - pr.top) / pr.h * DVR.h
+  if (u < 0 || v < 0 || u > DVR.w || v > DVR.h) return
+  const i = frameOf(video.currentTime)
+  marks.marks = marks.marks.filter(m => !(m.i === i && m.id === id)); marks.marks.push({ i, id, u: Math.round(u * 10) / 10, v: Math.round(v * 10) / 10 }); marksSave()
+  e.preventDefault()
+})
+// A click in the free 3D view (mark mode, no drag) puts the selected landmark on the ground plane
+// under the cursor: the ray through the pixel meets y = groundY. The field is flat enough that the
+// take-off ground level (camera y 1.58 sitting on the grass) serves the whole course; the box lets
+// it be changed. The solver keeps a landmark that already has a position and only triangulates
+// the ones without.
+const groundY = $<HTMLInputElement>('groundy')
+let press: { x: number; y: number } | null = null
+canvas.addEventListener('pointerdown', e => { press = { x: e.clientX, y: e.clientY } })
+canvas.addEventListener('pointerup', e => {
+  if (!press || !mk.mode.checked || !orbit.enabled) { press = null; return }
+  const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y); press = null
+  if (moved > 4) return
+  const id = mk.lm.value; if (!id) { alert('add a landmark first (+ new)'); return }
+  const r = canvas.getBoundingClientRect(); const sx = e.clientX - r.left, sy = e.clientY - r.top
+  const c = cam.camera!; const rect = c.rect
+  if (sx > r.width * (rect.x + rect.z) || sy > r.height * (1 - rect.y)) return          // outside the free view's rect (compare mode)
+  const near = c.screenToWorld(sx, sy, c.nearClip, new pc.Vec3()), far = c.screenToWorld(sx, sy, c.farClip, new pc.Vec3())
+  const d = far.clone().sub(near).normalize()
+  // One click is a ray; the depth along it is a guess (the ground plane). A second click from a
+  // different viewpoint replaces the guess by the closest point of the rays; more rays average.
+  const lm = marks.landmarks[id]; lm.rays = (lm.rays ?? []).filter(r => Math.abs(new pc.Vec3(r[3], r[4], r[5]).dot(d)) < Math.cos(8 * Math.PI / 180))   // drop rays within 8 deg of this one (a re-click from the same place)
+  lm.rays.push([near.x, near.y, near.z, d.x, d.y, d.z])
+  if (lm.rays.length >= 2) {
+    const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], b = [0, 0, 0]
+    for (const r of lm.rays) { const o = r.slice(0, 3), v = r.slice(3, 6)
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { const m = (i === j ? 1 : 0) - v[i] * v[j]; A[i][j] += m; b[i] += m * o[j] } }
+    const X = solve3(A, b); if (X) lm.pos = X.map(x => Math.round(x * 100) / 100)
+  } else {
+    const gy = Number(groundY.value); if (Math.abs(d.y) < 1e-6) return
+    const t = (gy - near.y) / d.y; if (t < 0) return
+    const X = near.clone().add(d.mulScalar(t)); lm.pos = [Math.round(X.x * 100) / 100, Math.round(gy * 100) / 100, Math.round(X.z * 100) / 100]
+  }
+  marksSave()
+})
+function solve3(A: number[][], b: number[]): number[] | null {     // Cramer's rule, 3x3
+  const det = (m: number[][]) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+  const D = det(A); if (Math.abs(D) < 1e-9) return null
+  return [0, 1, 2].map(k => det(A.map((row, i) => row.map((v, j) => j === k ? b[i] : v))) / D)
+}
+$<HTMLButtonElement>('resetlm').onclick = () => { const lm = marks.landmarks[mk.lm.value]; if (lm) { delete lm.pos; delete lm.rays; marksSave() } }
+// project a world point with the DVR camera (COLMAP axes: x right, y down, z forward)
+function projectDvr(p: Pose, X: number[]): [number, number] | null {
+  const q = new pc.Quat(p!.quat[0], p!.quat[1], p!.quat[2], p!.quat[3]).invert()
+  const d = q.transformVector(new pc.Vec3(X[0] - p!.pos[0], X[1] - p!.pos[1], X[2] - p!.pos[2]), new pc.Vec3())
+  if (d.z <= 0.1) return null
+  return [DVR.fx * d.x / d.z + DVR.w / 2, DVR.fx * d.y / d.z + DVR.h / 2]
+}
+function drawMarks(i: number, p: Pose) {
+  const pr = pictureRect(); const dr = dvr.getBoundingClientRect(); const c = mk.canvas
+  Object.assign(c.style, { left: pr.left - dr.left + 'px', top: pr.top - dr.top + 'px', width: pr.w + 'px', height: pr.h + 'px' })
+  const W = Math.round(pr.w * devicePixelRatio), H = Math.round(pr.h * devicePixelRatio)
+  if (c.width !== W || c.height !== H) { c.width = W; c.height = H }
+  const g = c.getContext('2d')!; g.clearRect(0, 0, W, H); const sx = W / DVR.w, sy = H / DVR.h
+  g.lineWidth = 2 * devicePixelRatio; g.font = `${12 * devicePixelRatio}px ui-monospace, monospace`
+  for (const m of marks.marks) if (m.i === i) {       // the human's mark: yellow ring
+    g.strokeStyle = '#ffe14d'; g.fillStyle = '#ffe14d'; g.beginPath(); g.arc(m.u * sx, m.v * sy, 7 * devicePixelRatio, 0, Math.PI * 2); g.stroke(); g.fillText(m.id, m.u * sx + 9 * devicePixelRatio, m.v * sy - 6 * devicePixelRatio)
+  }
+  if (p) for (const id in marks.landmarks) {          // where the current pose says the landmark is: cyan cross
+    const X = marks.landmarks[id].pos; if (!X) continue; const uv = projectDvr(p, X); if (!uv) continue
+    const [u, v] = [uv[0] * sx, uv[1] * sy]; if (u < 0 || v < 0 || u > W || v > H) continue
+    const r = 7 * devicePixelRatio; g.strokeStyle = '#4dd9ff'; g.fillStyle = '#4dd9ff'; g.beginPath(); g.moveTo(u - r, v); g.lineTo(u + r, v); g.moveTo(u, v - r); g.lineTo(u, v + r); g.stroke(); g.fillText(id, u + 9 * devicePixelRatio, v + 14 * devicePixelRatio)
+  }
+  const n = marks.marks.filter(m => m.i === i).length, tot = marks.marks.length, fr = new Set(marks.marks.map(m => m.i)).size
+  mk.info.textContent = `${n} on this frame · ${tot} marks on ${fr} frames`
+}
 
 // --- layout: the 3D canvas follows its box; in compare mode the video is laid exactly over it
 const view = $('view'), dvr = $('dvr')
@@ -159,8 +266,8 @@ new ResizeObserver(layout).observe(view); window.addEventListener('resize', layo
 
 // --- per frame
 // path colour = how the frame's pose was obtained (src): COLMAP-registered, LK gap fill, interpolated, photometrically refined
-const cSrc: Record<string, pc.Color> = { kept: new pc.Color(0.3, 1, 0.4), lk: new pc.Color(1, 0.6, 0.15), interp: new pc.Color(1, 0.3, 0.85), refined: new pc.Color(0.3, 0.85, 1), ground: new pc.Color(0.55, 0.55, 0.55) }
-const cPath = cSrc.interp, cScan = new pc.Color(0.2, 0.75, 1), cNow = new pc.Color(1, 1, 0.3)
+const cSrc: Record<string, pc.Color> = { kept: new pc.Color(0.3, 1, 0.4), lk: new pc.Color(1, 0.6, 0.15), interp: new pc.Color(1, 0.3, 0.85), refined: new pc.Color(0.3, 0.85, 1), ground: new pc.Color(0.55, 0.55, 0.55), manual: new pc.Color(1, 0.88, 0.3) }
+const cPath = cSrc.interp, cScan = new pc.Color(0.2, 0.75, 1), cNow = new pc.Color(1, 1, 0.3), cLm = new pc.Color(1, 0.88, 0.3)
 const pathPos: pc.Vec3[] = [], pathCol: pc.Color[] = []
 function frustum(pos: number[], quat: number[], hfovDeg: number, aspect: number, len: number, col: pc.Color, out: pc.Vec3[], cols: pc.Color[]) {
   const r = new pc.Quat(quat[0], quat[1], quat[2], quat[3]); const o = new pc.Vec3(pos[0], pos[1], pos[2])
@@ -168,7 +275,7 @@ function frustum(pos: number[], quat: number[], hfovDeg: number, aspect: number,
   const corners = [[-x, -y, len], [x, -y, len], [x, y, len], [-x, y, len]].map(c => r.transformVector(new pc.Vec3(c[0], c[1], c[2]), new pc.Vec3()).add(o))
   for (let k = 0; k < 4; k++) { out.push(o, corners[k], corners[k], corners[(k + 1) % 4]); cols.push(col, col, col, col) }
 }
-const SRC_NAME: Record<string, string> = { kept: 'colmap', lk: 'lk', interp: 'interp', refined: 'refined', ground: 'ground' }
+const SRC_NAME: Record<string, string> = { kept: 'colmap', lk: 'lk', interp: 'interp', refined: 'refined', ground: 'ground', manual: 'manual' }
 let lastPoses = poses
 app.on('update', () => {
   const i = Math.max(0, Math.min(poses.length - 1, frameOf(video.currentTime)))
@@ -191,6 +298,11 @@ app.on('update', () => {
   } else applyOrbit()
   if (p && ui.compare.checked) { applyPose(cam2, p.pos, p.quat); cam2.camera!.horizontalFov = false; cam2.camera!.fov = 2 * Math.atan(DVR.h / 2 / DVR.fx) * 180 / Math.PI }
   if (p && !(ui.follow.checked && sc < 0 && !ui.compare.checked)) frustum(p.pos, p.quat, 100, 4 / 3, 3, cNow, lines, cols)
+  for (const id in marks.landmarks) {                 // known landmarks: a short vertical tick with its id's colour
+    const X = marks.landmarks[id].pos; if (!X) continue
+    lines.push(new pc.Vec3(X[0], X[1], X[2]), new pc.Vec3(X[0], X[1] + 3, X[2])); cols.push(cLm, cLm)
+  }
   if (lines.length) app.drawLines(lines, cols, true)
+  drawMarks(i, p)
 })
 app.start(); layout()
