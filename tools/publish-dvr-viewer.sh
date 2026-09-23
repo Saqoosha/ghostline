@@ -35,9 +35,9 @@ export "RCLONE_CONFIG_${UC}_ACCESS_KEY_ID=$AK" "RCLONE_CONFIG_${UC}_SECRET_ACCES
 say "data -> r2:$BUCKET/dvr/$NAME/data/"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT INT TERM
 mkdir -p "$TMP/scene"
-for f in dvr_pinhole.mp4 dvr_pinhole.mp4.json poses60_refined15.json poses60_init15.json poses60_refined10.json scan_cameras.json marks.json; do
+for f in dvr_pinhole.mp4 dvr_pinhole.mp4.json poses60_refined15.json poses60_init15.json poses60_refined10.json scan_cameras.json marks.json sky.jpg; do
   cp "$DATA/$f" "$TMP/$f"; done
-cp "$DATA/scene/JDL-2026-R6-fix-web.sog" "$DATA/scene/JDL-2026-R6-fix-web-edit.sog" "$TMP/scene/"
+cp "$DATA/scene/JDL-2026-R6-fix-web.sog" "$DATA/scene/JDL-2026-R6-fix-web-edit.sog" "$DATA/scene/JDL-2026-R6-spirula-web-edit.sog" "$TMP/scene/"
 du -sh "$TMP"
 rclone --s3-no-check-bucket copy --checksum --progress "$TMP" "$REMOTE:$BUCKET/dvr/$NAME/data/"
 

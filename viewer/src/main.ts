@@ -16,6 +16,81 @@ app.setCanvasFillMode(pc.FILLMODE_NONE)
 app.setCanvasResolution(pc.RESOLUTION_AUTO)
 app.scene.ambientLight = new pc.Color(0.2, 0.2, 0.2)
 
+// --- sky. The capture was trained with the sky masked out, so there is nothing above the
+// horizon and the scene would otherwise end in the clear colour. One equirectangular image is
+// baked into a cubemap here, on the CPU, once: PlayCanvas takes a cubemap for scene.skybox, and
+// doing the reprojection by hand keeps it to one file with no cubemap asset manifest. The bytes
+// go in as plain sRGB, because this pipeline hands them to the screen unchanged - measured by
+// reading the framebuffer back: an encode either way lands 1.6 stops off and still looks sky-like.
+// It lives with the capture's data, not with the page: the sky is this capture's own, and the
+// page's public/ is not copied into the build (public/data is the dev symlink to the data).
+const SKY_URL = DATA + 'sky.jpg'
+// +x -x +y -y +z -z, in the GL cubemap convention (v runs down each face).
+const FACE: ((u: number, v: number) => number[])[] = [
+  (u, v) => [1, -v, -u], (u, v) => [-1, -v, u],
+  (u, v) => [u, 1, v], (u, v) => [u, -1, -v],
+  (u, v) => [u, -v, 1], (u, v) => [-u, -v, -1],
+]
+// The image is read as the usual equirect layout: the top row is straight up, and u = 0.5 looks
+// along -z. Which compass bearing that lands on depends on the photograph, so skyboxRotation
+// turns the whole dome; ?skyturn=<degrees> is there to find the value against the DVR frame.
+const SKY_TURN = Number(new URLSearchParams(location.search).get('skyturn') ?? 0)
+function bakeSky(img: HTMLImageElement, size = 512) {
+  const c = document.createElement('canvas')
+  c.width = img.naturalWidth; c.height = img.naturalHeight
+  const ctx = c.getContext('2d', { willReadFrequently: true })!
+  ctx.drawImage(img, 0, 0)
+  const src = ctx.getImageData(0, 0, c.width, c.height).data, sw = c.width, sh = c.height
+  const levels: Uint8Array[] = []
+  for (let f = 0; f < 6; f++) {
+    const px = new Uint8Array(size * size * 4)
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      const d = FACE[f](2 * (x + 0.5) / size - 1, 2 * (y + 0.5) / size - 1)
+      // PlayCanvas samples the skybox with `dir.x *= -1.0` (skyboxPS, the SKY_CUBEMAP branch):
+      // the cubemap face layout is the left-handed D3D one, and the engine flips x to meet it.
+      // So the world direction landing on this texel is the face direction with x negated -
+      // bake it the other way and the sky comes out mirrored east for west, which a rotation
+      // cannot undo. Caught by the sun sitting on the wrong side.
+      d[0] = -d[0]
+      const n = Math.hypot(d[0], d[1], d[2])
+      // Bilinear, wrapping in longitude and clamping in latitude - a nearest sample shows the
+      // source pixels as blocks on the zenith faces, where one texel covers a whole column.
+      const sx = (0.5 + Math.atan2(d[0] / n, -d[2] / n) / (2 * Math.PI)) * sw - 0.5
+      const sy = (Math.acos(Math.max(-1, Math.min(1, d[1] / n))) / Math.PI) * sh - 0.5
+      const x0 = Math.floor(sx), y0 = Math.max(0, Math.min(sh - 1, Math.floor(sy)))
+      const fx = sx - x0, fy = sy - y0
+      const x1 = (((x0 + 1) % sw) + sw) % sw, xa = ((x0 % sw) + sw) % sw
+      const y1 = Math.min(sh - 1, y0 + 1)
+      const o = (y * size + x) * 4
+      for (let i = 0; i < 3; i++) {
+        const a = src[(y0 * sw + xa) * 4 + i] * (1 - fx) + src[(y0 * sw + x1) * 4 + i] * fx
+        const b = src[(y1 * sw + xa) * 4 + i] * (1 - fx) + src[(y1 * sw + x1) * 4 + i] * fx
+        px[o + i] = a * (1 - fy) + b * fy
+      }
+      px[o + 3] = 255
+    }
+    levels.push(px)
+  }
+  return new pc.Texture(app.graphicsDevice, {
+    name: 'sky', cubemap: true, width: size, height: size, format: pc.PIXELFORMAT_RGBA8,
+    mipmaps: false, minFilter: pc.FILTER_LINEAR, magFilter: pc.FILTER_LINEAR,
+    addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE,
+    levels: [levels],
+  })
+}
+// The Skybox layer is pushed between the World layer's opaque and transparent passes, so the
+// splats - transparent, no depth write - still draw over it.
+let skyTex: pc.Texture | null = null
+const skyBox = $<HTMLInputElement>('sky')
+app.scene.skyboxMip = 0
+app.scene.skyboxRotation = new pc.Quat().setFromEulerAngles(0, SKY_TURN, 0)
+const applySky = () => { app.scene.skybox = skyBox.checked ? skyTex : null }
+skyBox.onchange = applySky
+const skyImg = new Image()
+skyImg.onload = () => { skyTex = bakeSky(skyImg); applySky() }
+skyImg.onerror = () => { status.textContent = 'sky failed: ' + SKY_URL; console.error('sky failed:', SKY_URL) }
+skyImg.src = SKY_URL
+
 // --- camera. COLMAP cameras look +z with y down; PlayCanvas cameras look -z with y up, so a
 // solved pose becomes a PlayCanvas rotation by a half turn about the camera's own x axis.
 const cam = new pc.Entity('cam')
@@ -23,11 +98,11 @@ cam.addComponent('camera', { clearColor: new pc.Color(0.03, 0.03, 0.04), fov: 60
 app.root.addChild(cam)
 // Compare mode shows three things: the free camera (cam, left half of the canvas), the render
 // from the DVR pose (cam2, a 4:3 box in the right half) and the DVR frame wiped over that box.
-// cam2 renders the World layer only, so the path, frusta and gate circles (Immediate layer) stay
-// in the free view and never sit on top of the photo.
+// cam2 renders the World and Skybox layers only, so the path, frusta and gate circles (Immediate
+// layer) stay in the free view and never sit on top of the photo.
 const cam2 = new pc.Entity('cam2')
 cam2.addComponent('camera', { clearColor: new pc.Color(0.03, 0.03, 0.04), fov: 60, nearClip: 0.2, farClip: 2000, priority: 1,
-  layers: [pc.LAYERID_WORLD], aspectRatioMode: pc.ASPECT_MANUAL, aspectRatio: 4 / 3 })
+  layers: [pc.LAYERID_WORLD, pc.LAYERID_SKYBOX], aspectRatioMode: pc.ASPECT_MANUAL, aspectRatio: 4 / 3 })
 app.root.addChild(cam2); cam2.enabled = false
 const X180 = new pc.Quat(1, 0, 0, 0)
 const q = new pc.Quat(), tmpV = new pc.Vec3()
@@ -61,7 +136,9 @@ canvas.addEventListener('wheel', e => { if (orbit.enabled) orbit.dist = Math.max
 
 // --- scene
 const splat = new pc.Entity('scene')
-// Three colour versions of the same splats; switching swaps the asset, nothing else changes.
+// The scans available for this capture; switching swaps the asset, nothing else changes.
+// spirula is a separate reconstruction (spirula-studio, 2.99M splats) in the same web frame;
+// the DVR poses were solved against the fix model, so its overlay is the one to trust.
 const sceneSel = $<HTMLSelectElement>('scene')
 sceneSel.value = new URLSearchParams(location.search).get('scene') ?? sceneSel.value
 let asset: pc.Asset | null = null
@@ -317,7 +394,9 @@ app.on('update', () => {
   } else applyOrbit()
   if (p && ui.compare.checked) { applyPose(cam2, p.pos, p.quat); cam2.camera!.horizontalFov = false; cam2.camera!.fov = 2 * Math.atan(DVR.h / 2 / DVR.fx) * 180 / Math.PI }
   if (p && !(ui.follow.checked && sc < 0 && !ui.compare.checked)) frustum(p.pos, p.quat, 100, 4 / 3, 3, cNow, lines, cols)
-  for (const id in marks.landmarks) {                 // known landmarks: a short vertical tick with its id's colour
+  // Known landmarks: a short vertical tick each. They are furniture for placing marks, and
+  // they stand in front of the capture everywhere, so they come up only with mark mode.
+  if (mk.mode.checked) for (const id in marks.landmarks) {
     const X = marks.landmarks[id].pos; if (!X) continue
     lines.push(new pc.Vec3(X[0], X[1], X[2]), new pc.Vec3(X[0], X[1] + 3, X[2])); cols.push(cLm, cLm)
   }
