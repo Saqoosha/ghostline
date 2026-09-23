@@ -41,8 +41,9 @@ def get(rel):
                  % (url, getattr(e, "code", None) or e, name))
 
 # Asset references as the build writes them: absolute under the viewer's base, or relative.
-ref = re.compile(rb'(?:%s)?(assets/[A-Za-z0-9_.-]+\.(?:js|mjs|css|wasm|png|jpg|svg|woff2?))'
-                 % re.escape(prefix.encode()))
+# The same shape check_live_viewers.py (tools/_live.py ASSET) looks for, nested paths
+# included - a copy pulled with a narrower pattern could then fail that check.
+ref = re.compile(rb'(?:%s)?(assets(?:/[A-Za-z0-9_.-]+)+)' % re.escape(prefix.encode()))
 todo, seen = [], set()
 # Cloudflare Web Analytics adds its beacon before </body> in some responses; kept, it would
 # be deployed as part of the page and injected again on top.
