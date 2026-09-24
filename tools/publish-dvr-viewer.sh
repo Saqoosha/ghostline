@@ -66,7 +66,7 @@ say "data -> r2:$BUCKET/dvr/$NAME/data/"
 # listing, which would otherwise be published as dvr/$NAME/data/dvr.json.
 UP="$TMP/data"
 mkdir -p "$UP/scene"
-for f in dvr_pinhole.mp4 dvr_pinhole.mp4.json poses60_refined15.json poses60_init15.json poses60_refined10.json scan_cameras.json marks.json sky.jpg; do
+for f in dvr_pinhole.mp4 dvr_pinhole.mp4.json poses60_refined15.json poses60_init15.json poses60_refined10.json poses60_cpr2.json poses60_cpr2_raw.json scan_cameras.json marks.json sky.jpg; do
   cp "$DATA/$f" "$UP/$f"; done
 cp "$DATA/scene/JDL-2026-R6-fix-web.sog" "$DATA/scene/JDL-2026-R6-fix-web-edit.sog" "$DATA/scene/JDL-2026-R6-spirula-web-edit.sog" "$UP/scene/"
 du -sh "$UP"

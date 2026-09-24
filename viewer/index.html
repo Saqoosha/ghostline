@@ -41,7 +41,7 @@
       <div id="bar">
         <div id="timeline">
           <button id="play">play</button>
-          <span id="tlabel" style="min-width:24ch">80.000 s  #0</span>
+          <span id="tlabel" style="min-width:24ch; white-space:nowrap">80.000 s  #0</span>
           <label>speed <select id="rate"><option>0.1</option><option>0.25</option><option>0.5</option><option selected>1</option></select>×</label>
           <input id="seek" type="range" min="0" max="5875" step="1" value="0" />
         </div>
@@ -50,8 +50,8 @@
         <label>wipe <input type="range" id="wipe" min="0" max="100" value="50" style="width:120px" /></label>
         <label><input type="checkbox" id="showScan" /> scan cameras</label>
         <label><input type="checkbox" id="showPath" checked /> DVR path</label>
-        <span id="legend"><i style="color:#4dff66">■</i> colmap <i style="color:#ff9926">■</i> lk <i style="color:#ff4dd9">■</i> interp <i style="color:#4dd9ff">■</i> refined <i style="color:#8c8c8c">■</i> ground <i style="color:#ffe14d">■</i> manual</span>
-        <label>poses <select id="poseset"><option value="poses60_refined15.json">refined (all + marks)</option><option value="poses60_init15.json">interpolated (marks, before refine)</option><option value="poses60_refined10.json">refined (before marks)</option></select></label>
+        <span id="legend"><i style="color:#4dff66">■</i> colmap <i style="color:#ff9926">■</i> lk / cpr rot <i style="color:#ff4dd9">■</i> interp / cpr fill <i style="color:#4dd9ff">■</i> refined / cpr <i style="color:#8c8c8c">■</i> ground <i style="color:#ffe14d">■</i> manual</span>
+        <label>poses <select id="poseset"><option value="poses60_cpr2.json" selected>CPR (render + MASt3R, no marks)</option><option value="poses60_cpr2_raw.json">CPR, rotation not smoothed</option><option value="poses60_refined15.json">refined (all + marks)</option><option value="poses60_init15.json">interpolated (marks, before refine)</option><option value="poses60_refined10.json">refined (before marks)</option></select></label>
         <label>scene <select id="scene"><option value="JDL-2026-R6-spirula-web-edit">spirula</option><option value="JDL-2026-R6-fix-web-edit">fix, colour edit</option><option value="JDL-2026-R6-fix-web">fix, original</option></select></label>
         <label><input type="checkbox" id="sky" checked /> sky</label>
         <label>scan cam <input id="scancam" type="number" min="-1" max="646" value="-1" style="width:6ch" /> <span id="scanlabel"></span></label>
