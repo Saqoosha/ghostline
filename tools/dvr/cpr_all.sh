@@ -38,4 +38,12 @@ for r in map(json.loads, open('cprall3.jsonl')):
 open('cprall23.jsonl', 'w').write(''.join(json.dumps(m[i]) + '\n' for i in sorted(m)))"
 ROT_SIGMA=0 $PY cpr_fuse.py poses60_refined10.json cprall23.jsonl poses60_cpr2_raw.json > cprall3_fuse.log 2>&1
 $PY cpr_fuse.py poses60_refined10.json cprall23.jsonl poses60_cpr2.json >> cprall3_fuse.log 2>&1
+# the matches as they are, for comparison: no gate, fusion or fill (a frame without >= 100 inliers stays empty)
+$PY -c "
+import json
+S = json.load(open('poses60_cpr2.json')); out = [None] * len(S['poses'])
+for r in map(json.loads, open('cprall23.jsonl')):
+    if r.get('inliers', 0) >= 100 and r['i'] < len(out):
+        out[r['i']] = {'i': r['i'], 't': round(S['t0'] + r['i'] / S['fps'], 4), 'pos': [round(x, 3) for x in r['pos']], 'quat': [round(x, 6) for x in r['quat']], 'src': 'cpr'}
+json.dump({**{k: v for k, v in S.items() if k != 'poses'}, 'poses': out}, open('poses60_cpr_match.json', 'w'))"
 echo ALL-DONE > cprall.done
