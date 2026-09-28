@@ -1,0 +1,1 @@
+far >10 px / >5 px: r0 67/204 of 539, strat 55/188, r2 27/137, r3 23/145 of 534 -> r3 (round 3 barely moves it; not run on the others)

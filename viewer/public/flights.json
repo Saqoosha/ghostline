@@ -1,0 +1,31 @@
+{
+ "flights": [
+  {
+   "data": "fdf-r6b-d05",
+   "label": "FDF R6 \u00b7 Saqoosha d05 (DVR)"
+  },
+  {
+   "data": "fdf-r6b-d07",
+   "label": "FDF R6 \u00b7 Saqoosha d07 (DVR)"
+  },
+  {
+   "data": "fdf-r6b-e02",
+   "label": "FDF R6 \u00b7 Saqoosha e02 (DVR)"
+  },
+  {
+   "data": "race-sf-saqoosha",
+   "label": "FDF R6 A-main SF \u00b7 SAQOOSHA"
+  },
+  {
+   "data": "race-sf-sena",
+   "label": "FDF R6 A-main SF \u00b7 SENA"
+  },
+  {
+   "data": "race-sf-knt",
+   "label": "FDF R6 A-main SF \u00b7 KNT"
+  }
+ ],
+ "races": [
+  "race-sf-semifinal"
+ ]
+}

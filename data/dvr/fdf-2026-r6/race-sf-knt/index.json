@@ -1,0 +1,45 @@
+{
+ "scene": "FDF-2026-R6b-spirula-web-dvr2",
+ "poses": [
+  {
+   "file": "poses60_m.json",
+   "label": "best: round 2 re-matched with culled render on the DVR-fitted scene + pad"
+  },
+  {
+   "file": "poses60_pad.json",
+   "label": "best: new BA (own-answer start, Huber rotation, k unmeasured 0.5) + pad placed by hand"
+  },
+  {
+   "file": "poses60_gapp.json",
+   "label": "best: gapo + pad placed by hand"
+  },
+  {
+   "file": "poses60_gapo.json",
+   "label": "best: gapi + BA started from each frame's own answer"
+  },
+  {
+   "file": "poses60_gapi.json",
+   "label": "best: noise painted, near splats cut, gaps + islands re-tracked"
+  },
+  {
+   "file": "poses60_gapc.json",
+   "label": "noise blocks painted over, gaps re-tracked"
+  },
+  {
+   "file": "poses60_gap.json",
+   "label": "latest: gaps re-tracked from both ends"
+  },
+  {
+   "file": "poses60.json",
+   "label": "now: round 2 rematch (far field)"
+  },
+  {
+   "file": "poses60_r0.json",
+   "label": "before: first solve"
+  },
+  {
+   "file": "poses60_rs.json",
+   "label": "now + rolling shutter 3 ms"
+  }
+ ]
+}

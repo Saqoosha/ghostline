@@ -2,15 +2,28 @@
 // (Avata 2 scan frames, HDZero DVR frames), and the two videos, so a render from any camera
 // can be laid over the frame it was solved from. Frame: x east, y up, z south, metres.
 import * as pc from 'playcanvas'
+import { bakeSky } from './sky'
 
 type Pose = { i: number; t: number; pos: number[]; quat: number[]; src: string } | null
 type ScanCam = { name: string; clip: string; t: number; pos: number[]; quat: number[] }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 // Data lives next to the page: public/data (a symlink to build/dvr/hdz_0067) under the dev
-// server, and <base>/data/ on vdgs.saqoo.sh, where the Worker streams it from R2.
-const DATA = import.meta.env.BASE_URL + 'data/'
+// server, and <base>/data/ on vdgs.saqoo.sh, where the Worker streams it from R2. ?data=<dir>
+// opens another flight's folder under public/ instead; ?poses= and ?scene= pick its files.
+const QS = new URLSearchParams(location.search)
+// VITE_DEFAULT_DATA: the folder a page with several flights opens when the URL names none (publish-dvr-viewer.sh sets it)
+const DATA_DIR = QS.get('data') || import.meta.env.VITE_DEFAULT_DATA || 'data'   // || not ??: a single-flight publish passes ''
+const DATA = import.meta.env.BASE_URL + DATA_DIR + '/'
+// A file named in the URL that the page's own list does not offer is added to it, so another
+// flight's pose set or scan opens without editing index.html.
+function pickFromUrl(sel: HTMLSelectElement, key: string) {
+  const v = QS.get(key); if (!v) return
+  if (!Array.from(sel.options).some(o => o.value === v)) sel.add(new Option(v, v), 0)
+  sel.value = v
+}
 const canvas = $<HTMLCanvasElement>('c'), video = $<HTMLVideoElement>('video'), scanvideo = $<HTMLVideoElement>('scanvideo'), status = $('status')
+video.src = DATA + 'dvr_pinhole.mp4'   // set here, not in index.html, so ?data= brings its own flight's video
 const app = new pc.Application(canvas, { mouse: new pc.Mouse(canvas), keyboard: new pc.Keyboard(window), graphicsDeviceOptions: { antialias: false } })
 app.setCanvasFillMode(pc.FILLMODE_NONE)
 app.setCanvasResolution(pc.RESOLUTION_AUTO)
@@ -25,59 +38,10 @@ app.scene.ambientLight = new pc.Color(0.2, 0.2, 0.2)
 // It lives with the capture's data, not with the page: the sky is this capture's own, and the
 // page's public/ is not copied into the build (public/data is the dev symlink to the data).
 const SKY_URL = DATA + 'sky.jpg'
-// +x -x +y -y +z -z, in the GL cubemap convention (v runs down each face).
-const FACE: ((u: number, v: number) => number[])[] = [
-  (u, v) => [1, -v, -u], (u, v) => [-1, -v, u],
-  (u, v) => [u, 1, v], (u, v) => [u, -1, -v],
-  (u, v) => [u, -v, 1], (u, v) => [-u, -v, -1],
-]
 // The image is read as the usual equirect layout: the top row is straight up, and u = 0.5 looks
 // along -z. Which compass bearing that lands on depends on the photograph, so skyboxRotation
 // turns the whole dome; ?skyturn=<degrees> is there to find the value against the DVR frame.
 const SKY_TURN = Number(new URLSearchParams(location.search).get('skyturn') ?? 0)
-function bakeSky(img: HTMLImageElement, size = 512) {
-  const c = document.createElement('canvas')
-  c.width = img.naturalWidth; c.height = img.naturalHeight
-  const ctx = c.getContext('2d', { willReadFrequently: true })!
-  ctx.drawImage(img, 0, 0)
-  const src = ctx.getImageData(0, 0, c.width, c.height).data, sw = c.width, sh = c.height
-  const levels: Uint8Array[] = []
-  for (let f = 0; f < 6; f++) {
-    const px = new Uint8Array(size * size * 4)
-    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-      const d = FACE[f](2 * (x + 0.5) / size - 1, 2 * (y + 0.5) / size - 1)
-      // PlayCanvas samples the skybox with `dir.x *= -1.0` (skyboxPS, the SKY_CUBEMAP branch):
-      // the cubemap face layout is the left-handed D3D one, and the engine flips x to meet it.
-      // So the world direction landing on this texel is the face direction with x negated -
-      // bake it the other way and the sky comes out mirrored east for west, which a rotation
-      // cannot undo. Caught by the sun sitting on the wrong side.
-      d[0] = -d[0]
-      const n = Math.hypot(d[0], d[1], d[2])
-      // Bilinear, wrapping in longitude and clamping in latitude - a nearest sample shows the
-      // source pixels as blocks on the zenith faces, where one texel covers a whole column.
-      const sx = (0.5 + Math.atan2(d[0] / n, -d[2] / n) / (2 * Math.PI)) * sw - 0.5
-      const sy = (Math.acos(Math.max(-1, Math.min(1, d[1] / n))) / Math.PI) * sh - 0.5
-      const x0 = Math.floor(sx), y0 = Math.max(0, Math.min(sh - 1, Math.floor(sy)))
-      const fx = sx - x0, fy = sy - y0
-      const x1 = (((x0 + 1) % sw) + sw) % sw, xa = ((x0 % sw) + sw) % sw
-      const y1 = Math.min(sh - 1, y0 + 1)
-      const o = (y * size + x) * 4
-      for (let i = 0; i < 3; i++) {
-        const a = src[(y0 * sw + xa) * 4 + i] * (1 - fx) + src[(y0 * sw + x1) * 4 + i] * fx
-        const b = src[(y1 * sw + xa) * 4 + i] * (1 - fx) + src[(y1 * sw + x1) * 4 + i] * fx
-        px[o + i] = a * (1 - fy) + b * fy
-      }
-      px[o + 3] = 255
-    }
-    levels.push(px)
-  }
-  return new pc.Texture(app.graphicsDevice, {
-    name: 'sky', cubemap: true, width: size, height: size, format: pc.PIXELFORMAT_RGBA8,
-    mipmaps: false, minFilter: pc.FILTER_LINEAR, magFilter: pc.FILTER_LINEAR,
-    addressU: pc.ADDRESS_CLAMP_TO_EDGE, addressV: pc.ADDRESS_CLAMP_TO_EDGE,
-    levels: [levels],
-  })
-}
 // The Skybox layer is pushed between the World layer's opaque and transparent passes, so the
 // splats - transparent, no depth write - still draw over it.
 let skyTex: pc.Texture | null = null
@@ -87,9 +51,9 @@ app.scene.skyboxRotation = new pc.Quat().setFromEulerAngles(0, SKY_TURN, 0)
 const applySky = () => { app.scene.skybox = skyBox.checked ? skyTex : null }
 skyBox.onchange = applySky
 const skyImg = new Image()
-skyImg.onload = () => { skyTex = bakeSky(skyImg); applySky() }
+skyImg.onload = () => { skyTex = bakeSky(app.graphicsDevice, skyImg); applySky() }
 skyImg.onerror = () => { status.textContent = 'sky failed: ' + SKY_URL; console.error('sky failed:', SKY_URL) }
-skyImg.src = SKY_URL
+if (!QS.get('nosky')) skyImg.src = SKY_URL                 // ?nosky=1: no sky image, the splats against the clear colour
 
 // --- camera. COLMAP cameras look +z with y down; PlayCanvas cameras look -z with y up, so a
 // solved pose becomes a PlayCanvas rotation by a half turn about the camera's own x axis.
@@ -140,7 +104,7 @@ const splat = new pc.Entity('scene')
 // spirula is a separate reconstruction (spirula-studio, 2.99M splats) in the same web frame;
 // the DVR poses were solved against the fix model, so its overlay is the one to trust.
 const sceneSel = $<HTMLSelectElement>('scene')
-sceneSel.value = new URLSearchParams(location.search).get('scene') ?? sceneSel.value
+pickFromUrl(sceneSel, 'scene')
 let asset: pc.Asset | null = null
 function loadScene(name: string) {
   if (asset) { splat.removeComponent('gsplat'); app.assets.remove(asset); asset.unload(); asset = null }
@@ -148,7 +112,7 @@ function loadScene(name: string) {
   const a = new pc.Asset(name, 'gsplat', { url: `${DATA}scene/${name}.sog` }); asset = a
   app.assets.add(a)
   a.on('load', () => { if (asset !== a) return; splat.addComponent('gsplat', { asset: a }); if (!splat.parent) app.root.addChild(splat); status.textContent = name })
-  a.on('error', (err: string) => { status.textContent = 'scene failed: ' + err })
+  a.on('error', (err: string) => { if (asset === a) status.textContent = 'scene failed: ' + err })
   app.assets.load(a)
 }
 sceneSel.onchange = () => loadScene(sceneSel.value)
@@ -160,11 +124,37 @@ const DVR = { fx: 402.8, w: 960, h: 720, t0: 80, fps: 60 }       // from dvr_pin
 const SCAN = { fx: 1048.44, fy: 1048.62, w: 2688, h: 2016, fps: 59.94 }
 async function loadPoses(name: string) {
   const j = await fetch(DATA + name).then(r => r.json()); poses = j.poses
+  $<HTMLInputElement>('seek').max = String(poses.length - 1)   // index.html's 5875 is hdz_0067's length
   status.textContent = `${name}: ${poses.filter(Boolean).length} frames`
 }
 fetch(DATA + 'scan_cameras.json').then(r => r.json()).then(j => { scan = j.cameras; gates = j.gates })
 fetch(DATA + 'dvr_pinhole.mp4.json').then(r => r.json()).then(j => { DVR.fx = j.fx; DVR.w = j.width; DVR.h = j.height; DVR.t0 = j.t0; DVR.fps = j.fps })
-loadPoses((document.getElementById('poseset') as HTMLSelectElement).value)   // the selected option in index.html
+// A flight's folder may carry index.json ({"poses": [{"file", "label"}, ...], "scene"}): its pose sets replace the
+// page's own list (which names hdz_0067's files). flights.json next to the page lists the folders ({"flights":
+// [{"data", "label"}, ...]}) for the flight menu; switching reloads the page with ?data=, keeping the view settings.
+async function setupFlight() {
+  const pose = document.getElementById('poseset') as HTMLSelectElement
+  try {
+    const ix = await fetch(DATA + 'index.json').then(r => { if (!r.ok) throw 0; return r.json() })
+    pose.replaceChildren(...ix.poses.map((p: { file: string; label: string }) => new Option(p.label, p.file)))
+    if (ix.scene) {                                      // the flight's own scan; the page's own list names hdz_0067's
+      sceneSel.replaceChildren(new Option(ix.scene, ix.scene)); pickFromUrl(sceneSel, 'scene')
+      loadScene(sceneSel.value)
+    }
+  } catch { }
+  pickFromUrl(pose, 'poses')
+  loadPoses(pose.value)
+  const fsel = document.getElementById('flight') as HTMLSelectElement
+  try {
+    const fl = await fetch(import.meta.env.BASE_URL + 'flights.json').then(r => { if (!r.ok) throw 0; return r.json() })
+    fsel.replaceChildren(...fl.flights.map((f: { data: string; label: string }) => new Option(f.label, f.data)))
+    fsel.value = DATA_DIR
+    const cur = fl.flights.find((f: { data: string }) => f.data === DATA_DIR); if (cur) document.title = cur.label   // not the page's JDL title
+    fsel.onchange = () => { const q = new URLSearchParams(location.search); q.set('data', fsel.value); q.delete('poses'); q.delete('scene'); location.search = q.toString() }
+    fsel.parentElement!.hidden = false
+  } catch { }
+}
+setupFlight()
 
 // --- ui
 const ui = { follow: $<HTMLInputElement>('follow'), compare: $<HTMLInputElement>('compare'), wipe: $<HTMLInputElement>('wipe'),
@@ -194,6 +184,7 @@ ui.scancam.oninput = () => {
 }
 window.addEventListener('keydown', e => {
   if (e.target instanceof HTMLInputElement) return
+  if (padKey(e)) { e.preventDefault(); return }
   if (mk.mode.checked && marks.landmarks[mk.lm.value]?.pos) {          // nudge the selected landmark: arrows on the ground, PageUp/Down in height
     const lm = marks.landmarks[mk.lm.value]; const st = e.shiftKey ? 1 : 0.1; const p = lm.pos!
     const mv: Record<string, number[]> = { ArrowLeft: [-st, 0, 0], ArrowRight: [st, 0, 0], ArrowUp: [0, 0, -st], ArrowDown: [0, 0, st], PageUp: [0, st, 0], PageDown: [0, -st, 0] }
@@ -225,18 +216,19 @@ function lmRefresh() {
 // The dev server takes marks through /api/marks and writes marks.json; the published site has
 // no writer, so there the page shows the published marks.json, keeps new marks in the browser
 // (localStorage) and offers them as a download.
-let marksApi = true
+let marksApi = true              // the dev API writes public/<flight>/marks.json (?data=), public/data for hdz_0067
+const MARKS_KEY = DATA_DIR === 'data' ? 'marks' : 'marks:' + DATA_DIR   // viewers on one site share localStorage
 async function marksLoad() {
-  try { const r = await fetch('/api/marks'); if (!r.ok) throw 0; marks = await r.json() }
+  try { if (!marksApi) throw 0; const r = await fetch(`/api/marks?data=${DATA_DIR}`); if (!r.ok) throw 0; marks = await r.json() }
   catch { marksApi = false
     try { marks = await fetch(DATA + 'marks.json').then(r => r.json()) } catch { }
-    try { const l = localStorage.getItem('marks'); if (l) marks = JSON.parse(l) } catch { }
+    try { const l = localStorage.getItem(MARKS_KEY); if (l) marks = JSON.parse(l) } catch { }
     mk.info.textContent = 'read-only site: new marks stay in this browser (download to keep)' }
   lmRefresh()
 }
 async function marksSave() {
-  if (marksApi) { await fetch('/api/marks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(marks, null, 1) }); return }
-  try { localStorage.setItem('marks', JSON.stringify(marks)) } catch { }
+  if (marksApi) { await fetch(`/api/marks?data=${DATA_DIR}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(marks, null, 1) }); return }
+  try { localStorage.setItem(MARKS_KEY, JSON.stringify(marks)) } catch { }
 }
 $<HTMLButtonElement>('dlmarks').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(marks, null, 1)], { type: 'application/json' })); a.download = 'marks.json'; a.click() }
 scanvideo.onerror = () => { scanvideo.hidden = true; video.hidden = false }   // the scan's proxy videos are not published
@@ -324,6 +316,83 @@ function drawMarks(i: number, p: Pose) {
   mk.info.textContent = `${n} on this frame · ${tot} marks on ${fr} frames`
 }
 
+// --- pad: where the drone sat before takeoff. takeoff.py holds every frame before takeoff (src "ground") at one pose
+// fitted backwards from the flight, which can be metres off; the first DVR frame shows the pad itself. In pad mode
+// those frames draw from the edited pose, so with compare on frame 0 the render can be walked onto the picture.
+// Keys: arrows move along the ground relative to where the camera looks, W/S (or PageUp/Down) height, Q/E yaw, R/F pitch,
+// Z/X roll; shift steps 10x, option 1/10 (0.1 m / 1 deg -> 1 m / 10 deg, 0.01 m / 0.1 deg). A click in the free 3D view drops the pad there at its
+// current height. Saved (dev server) to <flight>/pad.json, which takeoff.py then uses in place of its own fit.
+type Pad = { pos: number[]; quat: number[] }
+let pad: Pad | null = null, padOrig: Pad | null = null, padTimer = 0
+const pd = { mode: $<HTMLInputElement>('padmode'), info: $('padinfo'), reset: $<HTMLButtonElement>('padreset') }
+const padFlight = QS.get('data') ?? 'data'
+const groundPose = (): Pad | null => { const g = poses.find(p => p && p.src === 'ground'); return g ? { pos: [...g.pos], quat: [...g.quat] } : null }
+async function padLoad() {
+  padOrig = groundPose()
+  try { const r = await fetch(`/api/pad?data=${padFlight}`); if (!r.ok) throw 0; pad = await r.json() } catch { pad = padOrig && { pos: [...padOrig.pos], quat: [...padOrig.quat] } }
+  padShow()
+}
+function padShow() {
+  if (!pad) { pd.info.textContent = 'no ground frames in this pose set'; return }
+  const e = new pc.Quat(pad.quat[0], pad.quat[1], pad.quat[2], pad.quat[3]).getEulerAngles()
+  const dp = padOrig ? Math.hypot(...pad.pos.map((x, k) => x - padOrig!.pos[k])) : 0
+  pd.info.textContent = `pos ${pad.pos.map(x => x.toFixed(2)).join(', ')}  rot ${[e.x, e.y, e.z].map(x => x.toFixed(1)).join(', ')}  moved ${dp.toFixed(2)} m`
+}
+function padSave() {
+  padShow(); lastPoses = []                                   // redraw the path with the pad's segment
+  clearTimeout(padTimer); padTimer = window.setTimeout(() => {
+    fetch(`/api/pad?data=${padFlight}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pos: pad!.pos.map(x => Math.round(x * 1000) / 1000), quat: pad!.quat.map(x => Math.round(x * 1e6) / 1e6) }) })
+      .then(r => { if (!r.ok) throw 0; pd.info.textContent += '  saved' }).catch(() => { pd.info.textContent += '  NOT saved (dev server only)' })
+  }, 300)
+}
+pd.mode.onchange = () => { pd.mode.blur(); if (pd.mode.checked && !pad) padLoad(); lastPoses = [] }
+pd.reset.onclick = () => { pd.reset.blur(); padOrig = groundPose(); if (padOrig) { pad = { pos: [...padOrig.pos], quat: [...padOrig.quat] }; padSave() } }
+function padKey(e: KeyboardEvent): boolean {
+  if (!pd.mode.checked || !pad) return false
+  if (e.metaKey || e.ctrlKey) return false
+  const s = e.shiftKey ? 10 : e.altKey ? 0.1 : 1, st = 0.1 * s, dg = s
+  const r = new pc.Quat(pad.quat[0], pad.quat[1], pad.quat[2], pad.quat[3])
+  const flat = (v: pc.Vec3) => { v.y = 0; return v.length() > 1e-6 ? v.normalize() : v }
+  const fwd = flat(r.transformVector(new pc.Vec3(0, 0, 1), new pc.Vec3())), right = flat(r.transformVector(new pc.Vec3(1, 0, 0), new pc.Vec3()))
+  const move = (v: pc.Vec3, k: number) => { pad!.pos = pad!.pos.map((x, i) => x + [v.x, v.y, v.z][i] * k) }
+  const turn = (axis: pc.Vec3, deg: number, world: boolean) => {
+    const d = new pc.Quat().setFromAxisAngle(axis, deg)
+    const n = world ? d.mul(r) : r.clone().mul(d); pad!.quat = [n.x, n.y, n.z, n.w]
+  }
+  switch (e.code) {                                             // code, not key: option+letter types another character on a Mac
+    case 'ArrowUp': move(fwd, st); break
+    case 'ArrowDown': move(fwd, -st); break
+    case 'ArrowRight': move(right, st); break
+    case 'ArrowLeft': move(right, -st); break
+    case 'PageUp': case 'KeyW': move(new pc.Vec3(0, 1, 0), st); break
+    case 'PageDown': case 'KeyS': move(new pc.Vec3(0, 1, 0), -st); break
+    case 'KeyQ': turn(new pc.Vec3(0, 1, 0), dg, true); break          // yaw about world up
+    case 'KeyE': turn(new pc.Vec3(0, 1, 0), -dg, true); break
+    case 'KeyR': turn(new pc.Vec3(1, 0, 0), dg, false); break         // pitch about the camera's x (right)
+    case 'KeyF': turn(new pc.Vec3(1, 0, 0), -dg, false); break
+    case 'KeyZ': turn(new pc.Vec3(0, 0, 1), dg, false); break         // roll about the camera's z (forward)
+    case 'KeyX': turn(new pc.Vec3(0, 0, 1), -dg, false); break
+    default: return false
+  }
+  padSave(); return true
+}
+canvas.addEventListener('pointerup', e => {
+  if (!pd.mode.checked || !pad || !orbit.enabled || !padPress) return
+  const moved = Math.hypot(e.clientX - padPress.x, e.clientY - padPress.y); padPress = null
+  if (moved > 4) return
+  const r = canvas.getBoundingClientRect(); const sx = e.clientX - r.left, sy = e.clientY - r.top
+  const c = cam.camera!; const rect = c.rect
+  if (sx > r.width * (rect.x + rect.z) || sy > r.height * (1 - rect.y)) return
+  const near = c.screenToWorld(sx, sy, c.nearClip, new pc.Vec3()), far = c.screenToWorld(sx, sy, c.farClip, new pc.Vec3())
+  const d = far.sub(near).normalize(); if (Math.abs(d.y) < 1e-6) return
+  const t = (pad.pos[1] - near.y) / d.y; if (t < 0) return
+  const X = near.add(d.mulScalar(t)); pad.pos = [X.x, pad.pos[1], X.z]; padSave()
+})
+let padPress: { x: number; y: number } | null = null
+canvas.addEventListener('pointerdown', e => { padPress = { x: e.clientX, y: e.clientY } })
+// the pose drawn for frame i: the edited pad for the frames held on the pad
+const shown = (p: Pose): Pose => p && pd.mode.checked && pad && p.src === 'ground' ? { ...p, pos: pad.pos, quat: pad.quat } : p
+
 // --- layout: the 3D canvas follows its box; in compare mode the video is laid exactly over it
 const view = $('view'), dvr = $('dvr')
 function layout() {
@@ -363,7 +432,9 @@ new ResizeObserver(layout).observe(view); window.addEventListener('resize', layo
 // --- per frame
 // path colour = how the frame's pose was obtained (src): COLMAP-registered, LK gap fill, interpolated, photometrically refined
 const cSrc: Record<string, pc.Color> = { kept: new pc.Color(0.3, 1, 0.4), lk: new pc.Color(1, 0.6, 0.15), interp: new pc.Color(1, 0.3, 0.85), refined: new pc.Color(0.3, 0.85, 1), ground: new pc.Color(0.55, 0.55, 0.55), manual: new pc.Color(1, 0.88, 0.3),
-  cpr: new pc.Color(0.3, 0.85, 1), 'cpr-rot': new pc.Color(1, 0.6, 0.15), 'cpr-fill': new pc.Color(1, 0.3, 0.85) }   // CPR: position and rotation measured / rotation only / rotation interpolated
+  cpr: new pc.Color(0.3, 0.85, 1), 'cpr-rot': new pc.Color(1, 0.6, 0.15), 'cpr-fill': new pc.Color(1, 0.3, 0.85),   // CPR: position and rotation measured / rotation only / rotation interpolated
+  ba: new pc.Color(0.3, 0.85, 1), 'ba-fill': new pc.Color(1, 0.3, 0.85),   // cpr_ba.py: on the frame's own points / on the motion prior alone
+  takeoff: new pc.Color(0.55, 0.55, 0.55) }   // takeoff.py: the climb off the pad, fitted from rest
 const cPath = cSrc.interp, cScan = new pc.Color(0.2, 0.75, 1), cNow = new pc.Color(1, 1, 0.3), cLm = new pc.Color(1, 0.88, 0.3)
 const pathPos: pc.Vec3[] = [], pathCol: pc.Color[] = []
 function frustum(pos: number[], quat: number[], hfovDeg: number, aspect: number, len: number, col: pc.Color, out: pc.Vec3[], cols: pc.Color[]) {
@@ -372,17 +443,17 @@ function frustum(pos: number[], quat: number[], hfovDeg: number, aspect: number,
   const corners = [[-x, -y, len], [x, -y, len], [x, y, len], [-x, y, len]].map(c => r.transformVector(new pc.Vec3(c[0], c[1], c[2]), new pc.Vec3()).add(o))
   for (let k = 0; k < 4; k++) { out.push(o, corners[k], corners[k], corners[(k + 1) % 4]); cols.push(col, col, col, col) }
 }
-const SRC_NAME: Record<string, string> = { kept: 'colmap', lk: 'lk', interp: 'interp', refined: 'refined', ground: 'ground', manual: 'manual', cpr: 'cpr', 'cpr-rot': 'cpr rot', 'cpr-fill': 'cpr fill' }
+const SRC_NAME: Record<string, string> = { kept: 'colmap', lk: 'lk', interp: 'interp', refined: 'refined', ground: 'ground', manual: 'manual', cpr: 'cpr', 'cpr-rot': 'cpr rot', 'cpr-fill': 'cpr fill', ba: 'ba', 'ba-fill': 'ba fill', takeoff: 'takeoff' }
 let lastPoses = poses
 app.on('update', () => {
   const i = Math.max(0, Math.min(poses.length - 1, frameOf(video.currentTime)))
-  ui.seek.value = String(i); const p = poses[i]
+  ui.seek.value = String(i); const p = shown(poses[i])
   ui.tlabel.textContent = `${(DVR.t0 + i / DVR.fps).toFixed(3)} s  #${i}  ${p ? SRC_NAME[p.src] ?? p.src : '-'}`
   const lines: pc.Vec3[] = [], cols: pc.Color[] = []
   if (ui.showPath.checked) {
     if (lastPoses !== poses) { pathPos.length = 0; pathCol.length = 0; lastPoses = poses
       let prev: Pose = null
-      for (const x of poses) { if (x && prev) { pathPos.push(new pc.Vec3(prev.pos[0], prev.pos[1], prev.pos[2]), new pc.Vec3(x.pos[0], x.pos[1], x.pos[2])); const c = cSrc[x.src] ?? cPath; pathCol.push(c, c) } prev = x } }
+      for (const x0 of poses) { const x = shown(x0); if (x && prev) { pathPos.push(new pc.Vec3(prev.pos[0], prev.pos[1], prev.pos[2]), new pc.Vec3(x.pos[0], x.pos[1], x.pos[2])); const c = cSrc[x.src] ?? cPath; pathCol.push(c, c) } prev = x } }
     if (pathPos.length) app.drawLines(pathPos, pathCol, true)
   }
   if (ui.showScan.checked) for (const s of scan) frustum(s.pos, s.quat, 104, 4 / 3, 0.8, cScan, lines, cols)
@@ -401,6 +472,7 @@ app.on('update', () => {
     const X = marks.landmarks[id].pos; if (!X) continue
     lines.push(new pc.Vec3(X[0], X[1], X[2]), new pc.Vec3(X[0], X[1] + 3, X[2])); cols.push(cLm, cLm)
   }
+  if (pd.mode.checked && pad) frustum(pad.pos, pad.quat, 100, 4 / 3, 1.5, cLm, lines, cols)   // the pad being edited
   if (lines.length) app.drawLines(lines, cols, true)
   drawMarks(i, p)
 })

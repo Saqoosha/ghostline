@@ -1,0 +1,53 @@
+{
+ "title": "FDF CUP 2026 R6 · A Main semi-final A1",
+ "fps": 30,
+ "laps": 3,
+ "scene": "FDF-2026-R6b-spirula-web-dvr2",
+ "poses": "poses60_m.json",
+ "gate": "data/dvr/fdf-2026-r6/race-sf-semifinal/finish_gate.json",
+ "anchor": {
+  "pilot": "KANATAFPV",
+  "time": 50.676
+ },
+ "pilots": [
+  {
+   "name": "KANATAFPV",
+   "flight": "race-sf-knt",
+   "color": "#ff3b30",
+   "crashed": false,
+   "video": "dvr_knt.mp4",
+   "official": {
+    "pos": 1,
+    "laps": 3,
+    "time": "50.676",
+    "gap": ""
+   }
+  },
+  {
+   "name": "SENA",
+   "flight": "race-sf-sena",
+   "color": "#34c759",
+   "crashed": false,
+   "video": "dvr_sena.mp4",
+   "official": {
+    "pos": 2,
+    "laps": 3,
+    "time": "1:05.834",
+    "gap": "+15.158"
+   }
+  },
+  {
+   "name": "SAQOOSHA",
+   "flight": "race-sf-saqoosha",
+   "color": "#0a84ff",
+   "crashed": true,
+   "video": "dvr_saqoosha.mp4",
+   "official": {
+    "pos": 3,
+    "laps": 1,
+    "time": "24.400",
+    "gap": "-2L"
+   }
+  }
+ ]
+}

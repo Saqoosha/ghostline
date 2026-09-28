@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Block Labels</title>
+<style>
+  :root { --bg: #f4f2ee; --ink: #1d1d1b; --muted: #6b6861; --line: #d9d5cc; --mark: #e0314b; --accent: #2458c6; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .muted { color: var(--muted); }
+  button { font: inherit; padding: 5px 10px; border: 1px solid var(--line); background: #fff; border-radius: 6px; cursor: pointer; }
+  button:hover { border-color: var(--ink); }
+  #wrap { padding: 12px 16px; }
+  #stage { position: relative; width: 100%; max-width: 1400px; user-select: none; }
+  #stage img, #stage canvas { display: block; width: 100%; image-rendering: pixelated; }
+  #stage canvas { position: absolute; inset: 0; cursor: crosshair; }
+  #dots { display: flex; gap: 4px; flex-wrap: wrap; }
+  #dots span { width: 22px; height: 6px; border-radius: 3px; background: var(--line); }
+  #dots span.done { background: var(--accent); } #dots span.cur { outline: 2px solid var(--ink); }
+  kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; background: #fff; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>HDZero dropout blocks</h1>
+  <span id="pos" class="muted"></span>
+  <button id="prev">◀ prev</button><button id="next">next ▶</button>
+  <button id="clear">clear frame</button><button id="reset">back to proposal</button>
+  <label><input type="checkbox" id="grid" checked /> grid</label>
+  <span id="count" class="muted"></span>
+  <span id="saved" class="muted"></span>
+  <div id="dots"></div>
+  <span class="muted">click or drag to toggle blocks (red = noise) · <kbd>←</kbd><kbd>→</kbd> frames · <kbd>g</kbd> grid · <kbd>h</kbd> hide marks while held</span>
+</header>
+<div id="wrap"><div id="stage"><img id="img" alt="" /><canvas id="cv"></canvas></div></div>
+<script>
+const $ = id => document.getElementById(id)
+let meta, frames = [], idx = 0, labels = {}, cur = null, painting = null, hide = false, saveTimer = null
+async function load() {
+  meta = await fetch('frames.json').then(r => r.json()); frames = meta.frames
+  labels = await fetch('labels').then(r => r.json())
+  show(0)
+}
+async function show(i) {
+  idx = (i + frames.length) % frames.length; const f = frames[idx], key = String(f)
+  cur = labels[key] ? labels[key].map(r => r.slice()) : await fetch(String(f).padStart(5, '0') + '.init.json').then(r => r.json())
+  $('img').src = String(f).padStart(5, '0') + '.png'
+  $('img').onload = draw; $('pos').textContent = `frame #${f} (${idx + 1}/${frames.length})`
+  dots(); draw()
+}
+function dots() {
+  $('dots').replaceChildren(...frames.map((f, k) => { const s = document.createElement('span'); if (labels[String(f)]) s.className = 'done'; if (k === idx) s.classList.add('cur'); s.title = '#' + f; s.onclick = () => show(k); return s }))
+}
+function draw() {
+  const cv = $('cv'), img = $('img'); cv.width = img.naturalWidth || 960; cv.height = img.naturalHeight || 720
+  const g = cv.getContext('2d'); g.clearRect(0, 0, cv.width, cv.height); const B = meta.block
+  if (!hide) {
+    g.fillStyle = 'rgba(224,49,75,0.55)'
+    cur.forEach((row, r) => row.forEach((v, c) => { if (v) g.fillRect(Math.round(c * B), Math.round(r * B), Math.round((c + 1) * B) - Math.round(c * B), Math.round((r + 1) * B) - Math.round(r * B)) }))
+  }
+  if ($('grid').checked) {
+    g.strokeStyle = 'rgba(255,255,255,0.18)'; g.lineWidth = 1; g.beginPath()
+    for (let c = 0; c <= meta.nbx; c++) { const x = Math.round(c * B) + 0.5; g.moveTo(x, 0); g.lineTo(x, cv.height) }
+    for (let r = 0; r <= meta.nby; r++) { const y = Math.round(r * B) + 0.5; g.moveTo(0, y); g.lineTo(cv.width, y) }
+    g.stroke()
+  }
+  let n = 0; cur.forEach(row => row.forEach(v => n += v)); $('count').textContent = `${n} noise blocks (${(100 * n / (meta.nbx * meta.nby)).toFixed(1)}%)`
+}
+function cell(e) {
+  const r = $('cv').getBoundingClientRect(), x = (e.clientX - r.left) / r.width * $('cv').width, y = (e.clientY - r.top) / r.height * $('cv').height
+  return [Math.min(meta.nby - 1, Math.floor(y / meta.block)), Math.min(meta.nbx - 1, Math.floor(x / meta.block))]
+}
+function paint(e) { const [r, c] = cell(e); if (cur[r][c] !== painting) { cur[r][c] = painting; draw(); save() } }
+$('cv').addEventListener('pointerdown', e => { const [r, c] = cell(e); painting = cur[r][c] ? 0 : 1; $('cv').setPointerCapture(e.pointerId); paint(e) })
+$('cv').addEventListener('pointermove', e => { if (painting !== null) paint(e) })
+$('cv').addEventListener('pointerup', () => { painting = null })
+function save() {
+  labels[String(frames[idx])] = cur.map(r => r.slice()); dots(); $('saved').textContent = 'saving…'
+  clearTimeout(saveTimer); saveTimer = setTimeout(async () => {
+    await fetch('labels', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ [String(frames[idx])]: cur }) })
+    $('saved').textContent = 'saved'
+  }, 300)
+}
+$('prev').onclick = () => { if (!labels[String(frames[idx])]) save(); show(idx - 1) }
+$('next').onclick = () => { if (!labels[String(frames[idx])]) save(); show(idx + 1) }
+$('clear').onclick = () => { cur = cur.map(r => r.map(() => 0)); draw(); save() }
+$('reset').onclick = async () => { cur = await fetch(String(frames[idx]).padStart(5, '0') + '.init.json').then(r => r.json()); draw(); save() }
+$('grid').onchange = draw
+addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') $('prev').click(); else if (e.key === 'ArrowRight') $('next').click()
+  else if (e.key === 'g') { $('grid').checked = !$('grid').checked; draw() } else if (e.key === 'h' && !hide) { hide = true; draw() }
+})
+addEventListener('keyup', e => { if (e.key === 'h') { hide = false; draw() } })
+load()
+</script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FDF R6 Semi-final</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&family=Roboto+Mono:wght@500;700&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --pad: 16px; --tileh: calc((100vh - 2 * var(--pad) - 16px - 16px) / 3); --dvrw: calc(var(--tileh) * 4 / 3 + 16px);
+        --ink: #16181d; --muted: #6b7180; --line: #d9dce3; --panel: rgba(255, 255, 255, 0.9); --bg: #e9ebef;
+        --num: "Barlow Condensed", ui-sans-serif, system-ui, sans-serif; --ui: "Inter", ui-sans-serif, system-ui, sans-serif; --mono: "Roboto Mono", ui-monospace, monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 14px/1.4 var(--ui); overflow: hidden; }
+      #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+      .panel { position: fixed; z-index: 2; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; backdrop-filter: blur(6px); box-shadow: 0 6px 24px rgba(20, 24, 33, 0.12); }
+      #dvr { right: var(--pad); top: var(--pad); bottom: var(--pad); width: var(--dvrw); padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+      .tile { position: relative; border-radius: 6px; overflow: hidden; border-top: 4px solid; background: #000; flex: none; }
+      .tile video { display: block; width: 100%; height: calc(var(--tileh) - 4px); object-fit: cover; }
+      .tile .kmh { position: absolute; right: 8px; bottom: 6px; font: 700 26px var(--mono); color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,.8); white-space: pre; }
+      .tile span { position: absolute; left: 6px; top: 4px; font: 700 20px var(--num); color: #fff; padding: 2px 9px; border-radius: 3px; letter-spacing: .03em; }
+      #bar { left: var(--pad); right: calc(var(--dvrw) + 2 * var(--pad)); bottom: var(--pad); padding: 10px 14px 12px; }
+      #row1 { display: flex; gap: 8px; align-items: center; }
+      #play { font: 600 13px var(--ui); background: var(--ink); color: #fff; border: 0; border-radius: 8px; padding: 0 14px; cursor: pointer; min-width: 80px; }
+      #play, .iconbtn, .seg { height: 32px; box-sizing: border-box; }
+      .seg button { height: 100%; }
+      #row1 { flex-wrap: wrap; row-gap: 6px; }
+      .iconbtn { display: inline-grid; place-items: center; width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); cursor: pointer; }
+      .iconbtn:hover { border-color: var(--ink); }
+      svg[hidden] { display: none; }   /* the hidden attribute alone does not hide an svg */
+      .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
+      .seg button { font: 600 12px var(--ui); color: var(--muted); background: #fff; border: 0; padding: 0 10px; cursor: pointer; white-space: nowrap; }
+      .seg button + button { border-left: 1px solid var(--line); }
+      .seg button:hover { color: var(--ink); }
+      .seg button.on { background: var(--ink); color: #fff; }
+      .seg button i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+      .toggle { display: inline-flex; align-items: center; gap: 6px; height: 32px; box-sizing: border-box; font: 600 12px var(--ui); color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; cursor: pointer; white-space: nowrap; }
+      .toggle:hover { color: var(--ink); }
+      .toggle.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+      #clock { font: 700 22px var(--mono); min-width: 120px; }
+      #clock small { font: 500 13px var(--num); color: var(--muted); margin-left: 4px; }
+      select, label { font: 500 12px var(--ui); color: var(--muted); }
+      #title { left: var(--pad); top: var(--pad); padding: 6px 10px; font: 600 13px var(--ui); color: var(--ink); max-width: calc(100% - var(--dvrw) - 4 * var(--pad)); }
+      #title small { display: block; font: 500 11px var(--ui); color: var(--muted); }
+      #title small + small { max-width: 300px; margin-top: 2px; }
+      #grid { display: grid; grid-template-columns: auto 1fr; column-gap: 12px; margin-top: 8px; }
+      #info { display: grid; grid-template-rows: repeat(3, 30px); }
+      .pl { display: grid; grid-template-columns: 18px 118px 62px 96px; align-items: center; column-gap: 8px; white-space: nowrap; }
+      .pl .pos { font: 700 20px var(--num); }
+      .pl .name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+      .pl .name i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+      .pl .lap { font: 600 15px var(--num); color: var(--muted); }
+      .pl .time { font: 700 16px var(--mono); text-align: right; }
+      .pl.out { color: var(--muted); }
+      #tl { display: block; width: 100%; height: 90px; cursor: pointer; touch-action: none; }
+      .tag { position: fixed; z-index: 1; transform: translate(-50%, -135%); pointer-events: none; font: 700 20px var(--num); color: #fff; padding: 3px 10px 2px; border-radius: 4px; white-space: nowrap; letter-spacing: .03em; box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+      .tag small { font-weight: 500; opacity: .9; margin-left: 6px; }
+      #status { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); font: 500 12px var(--ui); color: var(--muted); background: var(--panel); padding: 4px 10px; border-radius: 6px; }
+      @media (max-width: 720px) { #dvr { display: none; } #bar { right: var(--pad); } #clock { font-size: 20px; min-width: 84px; } }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div id="status">loading…</div>
+    <div id="title" class="panel"></div>
+    <div id="dvr" class="panel"></div>
+    <div id="bar" class="panel">
+      <div id="row1">
+        <!-- icons: Heroicons v2 outline (MIT, github.com/tailwindlabs/heroicons) -->
+        <button id="soundbtn" class="iconbtn" title="the broadcast's sound" aria-label="sound on or off" aria-pressed="true">
+          <svg id="snd-on" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" width="18" height="18" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424" /><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" /></svg>
+          <svg id="snd-off" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" width="18" height="18" aria-hidden="true" hidden><path stroke-linecap="round" stroke-linejoin="round" d="M17.25 9.75 19.5 12m0 0 2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25" /><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" /></svg>
+        </button>
+        <button id="resetbtn" class="iconbtn" title="reset: time, camera and speed" aria-label="reset time, camera and speed">
+          <svg fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" width="18" height="18" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
+        </button>
+        <button id="play">▶ Play</button>
+        <div id="clock">0.000<small>s</small></div>
+        <select id="speed" hidden><option>0.25</option><option>0.5</option><option selected>1</option></select>
+        <div class="seg" id="speedseg" title="playback speed"></div>
+        <select id="cammode" hidden></select>
+        <div class="seg" id="camseg" title="camera (keys 1-6)"></div>
+        <input type="checkbox" id="showtrack" checked hidden />
+        <button class="toggle on" id="trackbtn" title="the track line" aria-pressed="true"><svg fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" width="16" height="16" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498 4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 0 0-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0Z" /></svg>Track line</button>
+      </div>
+      <div id="grid"><div id="info"></div><canvas id="tl"></canvas></div>
+    </div>
+    <script type="module" src="./src/race.ts"></script>
+  </body>
+</html>
