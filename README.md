@@ -5,5 +5,6 @@ same place, and replay it: one flight over the scan beside its video, or a whole
 
 - Viewers: https://ghostline.saqoo.sh
 - How it works (Japanese): [docs/dvr-localization.ja.md](docs/dvr-localization.ja.md)
+- Live position during a flight (Japanese): [docs/realtime-tracking.ja.md](docs/realtime-tracking.ja.md)
 
 Split out of [VDGS](https://github.com/Saqoosha/VDGS), which makes the scans.

@@ -434,7 +434,8 @@ new ResizeObserver(layout).observe(view); window.addEventListener('resize', layo
 const cSrc: Record<string, pc.Color> = { kept: new pc.Color(0.3, 1, 0.4), lk: new pc.Color(1, 0.6, 0.15), interp: new pc.Color(1, 0.3, 0.85), refined: new pc.Color(0.3, 0.85, 1), ground: new pc.Color(0.55, 0.55, 0.55), manual: new pc.Color(1, 0.88, 0.3),
   cpr: new pc.Color(0.3, 0.85, 1), 'cpr-rot': new pc.Color(1, 0.6, 0.15), 'cpr-fill': new pc.Color(1, 0.3, 0.85),   // CPR: position and rotation measured / rotation only / rotation interpolated
   ba: new pc.Color(0.3, 0.85, 1), 'ba-fill': new pc.Color(1, 0.3, 0.85),   // cpr_ba.py: on the frame's own points / on the motion prior alone
-  takeoff: new pc.Color(0.55, 0.55, 0.55) }   // takeoff.py: the climb off the pad, fitted from rest
+  takeoff: new pc.Color(0.55, 0.55, 0.55),   // takeoff.py: the climb off the pad, fitted from rest
+  rt: new pc.Color(0.3, 0.85, 1), 'rt-carry': new pc.Color(1, 0.6, 0.15), 'rt-wait': new pc.Color(0.55, 0.55, 0.55) }   // rt_track.py: newest answer within 0.1 s / older (tracking lost) / no answer yet
 const cPath = cSrc.interp, cScan = new pc.Color(0.2, 0.75, 1), cNow = new pc.Color(1, 1, 0.3), cLm = new pc.Color(1, 0.88, 0.3)
 const pathPos: pc.Vec3[] = [], pathCol: pc.Color[] = []
 function frustum(pos: number[], quat: number[], hfovDeg: number, aspect: number, len: number, col: pc.Color, out: pc.Vec3[], cols: pc.Color[]) {
@@ -443,7 +444,7 @@ function frustum(pos: number[], quat: number[], hfovDeg: number, aspect: number,
   const corners = [[-x, -y, len], [x, -y, len], [x, y, len], [-x, y, len]].map(c => r.transformVector(new pc.Vec3(c[0], c[1], c[2]), new pc.Vec3()).add(o))
   for (let k = 0; k < 4; k++) { out.push(o, corners[k], corners[k], corners[(k + 1) % 4]); cols.push(col, col, col, col) }
 }
-const SRC_NAME: Record<string, string> = { kept: 'colmap', lk: 'lk', interp: 'interp', refined: 'refined', ground: 'ground', manual: 'manual', cpr: 'cpr', 'cpr-rot': 'cpr rot', 'cpr-fill': 'cpr fill', ba: 'ba', 'ba-fill': 'ba fill', takeoff: 'takeoff' }
+const SRC_NAME: Record<string, string> = { kept: 'colmap', lk: 'lk', interp: 'interp', refined: 'refined', ground: 'ground', manual: 'manual', cpr: 'cpr', 'cpr-rot': 'cpr rot', 'cpr-fill': 'cpr fill', ba: 'ba', 'ba-fill': 'ba fill', takeoff: 'takeoff', rt: 'live', 'rt-carry': 'live carried', 'rt-wait': 'live, no answer yet' }
 let lastPoses = poses
 app.on('update', () => {
   const i = Math.max(0, Math.min(poses.length - 1, frameOf(video.currentTime)))

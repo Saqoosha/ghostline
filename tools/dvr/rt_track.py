@@ -1,0 +1,259 @@
+"""Live tracker, replayed: place each DVR frame on the scan using only the frames before it, against the keyframe map
+from rt_map.py, and time every step. Per frame: predict the pose from the last solved ones (constant velocity), pick the
+keyframes nearest to the prediction, XFeat on the frame + LighterGlue against their stored keypoints, PnP-RANSAC on the
+2D-3D matches. No answer for LOST seconds (or at the start): DINOv2 retrieval over all keyframes.
+Several pilots at once: every cycle takes the newest arrived frame of each stream, runs XFeat on all of them in one
+batch and every (frame, keyframe) pair - relocalization candidates included - through LighterGlue in one batch, and the
+PnPs in threads. Batching is the point: 8 pairs in one LighterGlue call take ~19 ms, one pair alone ~14 ms (4090).
+LIVE=1 replays at the videos' rate: frame i arrives at i/fps, a cycle takes the newest frame of each stream that has
+arrived and the ones in between are dropped, as on a capture card. The pose the viewer would draw at each frame comes
+from the answers finished by then - latency and drops included. Scored against the offline poses (truth, e.g.
+poses60_pad.json; frames the offline solve itself only interpolated are left out).
+usage (mastenv + kornia, ~/xfeat): rt_track.py map.npz,dvr_pinhole.mp4,out_prefix[,truth.json] [more streams ...]
+  writes per stream out_prefix.jsonl (per processed frame: pose, how it was found), out_prefix.json (the live dot: the
+  drawn pose of every frame, poses60 format, for the viewer) and out_prefix_trail.json (the trail, redrawn TRAIL_L late)
+env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s without an answer before relocalizing),
+     RELOC_TOPK (5), RELOC_MIN (50), TOPK (2048) keypoints on the frame, NMAX (0 = all frames), BATCH (16 pairs per call),
+     FRESH (0.1 s: an answer this old or newer is drawn "rt"), KQ (1e4, the drawn position's jerk density (m/s^3)^2 s),
+     BLEND (0.025 s; 0 = draw the filter as it jumps), TRAIL_L (0.2 s the trail is drawn late), TRAIL_W (0.25 s either
+     side in its fit), PIPE (2: overlap the next cycle's GPU work with this cycle's PnP, below)"""
+import json, sys, os, time, math, numpy as np, torch, cv2
+from concurrent.futures import ThreadPoolExecutor
+sys.path.insert(0, os.path.expanduser("~/xfeat")); from modules.xfeat import XFeat
+from scipy.spatial.transform import Rotation as Rot, Slerp
+dev = "cuda"; E = lambda k, d: float(os.environ.get(k, d))
+LIVE, NKF, MIN_INL, LOST = int(E("LIVE", 1)), int(E("NKF", 2)), int(E("MIN_INL", 30)), E("LOST", 0.33)
+RTOPK, RMIN, TOPK, NMAX, BATCH = int(E("RELOC_TOPK", 5)), int(E("RELOC_MIN", 50)), int(E("TOPK", 2048)), int(E("NMAX", 0)), int(E("BATCH", 16))
+FRESH, KQ, BLEND, TRAIL_L, TRAIL_W = E("FRESH", 0.1), E("KQ", 1e4), E("BLEND", 0.025), E("TRAIL_L", 0.2), E("TRAIL_W", 0.25)
+T = lambda a: torch.tensor(a, dtype=torch.float32, device=dev)
+def sync(): torch.cuda.synchronize()
+maps = {}
+class Stream:
+    def __init__(self, spec):
+        f = spec.split(","); self.map_npz, self.video, self.prefix = f[:3]; self.truth = f[3] if len(f) > 3 else None
+        if self.map_npz not in maps:
+            m = np.load(self.map_npz)
+            maps[self.map_npz] = dict(K=m["K"], size=[int(x) for x in m["size"]], n=m["n"], kp=T(m["kp"]), desc=torch.tensor(m["desc"], device=dev), X=m["X"],
+                                      pos=m["pos"], fwd=Rot.from_quat(m["quat"]).as_matrix()[:, :, 2], g=T(m["g"]))
+        self.m = maps[self.map_npz]; self.K = self.m["K"]; RW, RH = self.m["size"]
+        # frames: the pinhole video, at the map's size, with the OSD and the undistortion border masked (as cpr_track.py)
+        cam = self.cam = json.load(open(self.video + ".json")); W, H = cam["width"], cam["height"]; self.fps = cam.get("fps", 60)
+        Kfull = np.array([[cam["fx"], 0, cam["cx"]], [0, cam["fy"], cam["cy"]], [0, 0, 1]])
+        fk = cam["source_fisheye"]; Kf = np.array([[fk["fx"], 0, fk["cx"]], [0, fk["fy"], fk["cy"]], [0, 0, 1]])
+        m1, m2 = cv2.fisheye.initUndistortRectifyMap(Kf, np.array(fk["k"]), np.eye(3), Kfull, (W, H), cv2.CV_16SC2)
+        osd = np.full((H, W), 255, np.uint8); osd[:82] = 0; osd[632:] = 0
+        self.qvalid = T(cv2.resize((cv2.erode(cv2.remap(osd, m1, m2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST)) > 0
+        cap = cv2.VideoCapture(self.video); self.frames = []
+        while True:
+            ok, fr = cap.read()
+            if not ok or (NMAX and len(self.frames) >= NMAX): break
+            self.frames.append(cv2.resize(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB), (RW, RH), interpolation=cv2.INTER_AREA))
+        self.N = len(self.frames); self.next = 0; self.hist = []; self.recs = []
+        print(f"{self.prefix}: {self.N} frames at {self.fps} fps, {len(self.m['pos'])} keyframes", flush=True)
+    def nearest(self, R, p):                        # keyframes near the predicted pose, looking the same way
+        d = np.linalg.norm(self.m["pos"] - p, axis=1); ang = np.degrees(np.arccos(np.clip(self.m["fwd"] @ R.as_matrix()[:, 2], -1, 1)))
+        score = d / 1.5 + ang / 15; score[(d > 12) | (ang > 45)] = np.inf
+        return [int(k) for k in np.argsort(score)[:NKF] if np.isfinite(score[k])]
+streams = [Stream(s) for s in sys.argv[1:]]; RW, RH = streams[0].m["size"]
+assert all(s.m["size"] == [RW, RH] for s in streams), "all maps must share the render size"
+# ---- models
+xfeat = XFeat(top_k=TOPK)
+from modules.lighterglue import LighterGlue; LighterGlue.default_conf_xfeat["mp"] = False   # fp16: d05 solved 1,630 -> 761 frames, not faster
+LighterGlue.default_conf_xfeat["width_confidence"] = -1   # point pruning works only one pair at a time; the batch is worth more
+lg = LighterGlue().eval()
+dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14").to(dev).eval()
+MEAN, STD = T([0.485, 0.456, 0.406])[None, :, None, None], T([0.229, 0.224, 0.225])[None, :, None, None]
+SIZE = T([[RW, RH]])
+def features(batch):                                # [(stream, frame)] -> per frame (keypoints off the OSD / border, descriptors), and the tensor
+    x = torch.stack([torch.from_numpy(s.frames[i]) for s, i in batch]).to(dev).permute(0, 3, 1, 2).float() / 255
+    with torch.no_grad(): fs = xfeat.detectAndCompute(x, top_k=TOPK)
+    out = []
+    for (s, _), f in zip(batch, fs):
+        uv = f["keypoints"]; ix = uv.round().long(); ok = s.qvalid[ix[:, 1].clamp(0, RH - 1), ix[:, 0].clamp(0, RW - 1)]
+        out.append((uv[ok], f["descriptors"][ok]))
+    return out, x
+def match_all(pairs):                               # [(query (uv, desc), stream, keyframe)] -> per pair (uv on the frame, X in the world)
+    res = []
+    for c in range(0, len(pairs), BATCH):           # pad every side to TOPK points; matches onto padding are dropped
+        chunk = pairs[c:c + BATCH]; B = len(chunk)
+        kp0 = torch.zeros(B, TOPK, 2, device=dev); d0 = torch.zeros(B, TOPK, 64, device=dev); n0 = []
+        for b, ((uv, d), s, k) in enumerate(chunk): kp0[b, :len(uv)] = uv; d0[b, :len(uv)] = d; n0.append(len(uv))
+        ks = torch.tensor([k for _, _, k in chunk], device=dev); mp = chunk[0][1].m
+        same = all(s.m is mp for _, s, _ in chunk)
+        kp1 = mp["kp"][ks] if same else torch.stack([s.m["kp"][k] for _, s, k in chunk])
+        d1 = (mp["desc"][ks] if same else torch.stack([s.m["desc"][k] for _, s, k in chunk])).float()
+        with torch.no_grad():
+            o = lg.net({"image0": {"keypoints": kp0, "descriptors": d0, "image_size": SIZE.expand(B, 2)},
+                        "image1": {"keypoints": kp1, "descriptors": d1, "image_size": SIZE.expand(B, 2)}})
+        for b, (q, s, k) in enumerate(chunk):
+            idx = o["matches"][b].cpu().numpy(); idx = idx[(idx[:, 0] < n0[b]) & (idx[:, 1] < s.m["n"][k])]
+            res.append((q[0][idx[:, 0]].cpu().numpy(), s.m["X"][k][idx[:, 1]]))
+    return res
+def pnp(K, uv, X):
+    # MAGSAC, not SQPnP in a plain RANSAC: 12 -> 3 ms, and at 30% inliers (synthetic, 400 matches) it keeps 99 of 101
+    # where SQPnP returns none. Narrowing the matches around the predicted pose first did not help.
+    if len(uv) < 12: return None
+    ok, rv, tv, inl = cv2.solvePnPRansac(X.astype(np.float64), uv.astype(np.float64), K, None, iterationsCount=500, reprojectionError=3.0, flags=cv2.USAC_MAGSAC)
+    if not ok or inl is None or len(inl) < 12: return None
+    rv, tv = cv2.solvePnPRefineLM(X[inl[:, 0]].astype(np.float64), uv[inl[:, 0]].astype(np.float64), K, None, rv, tv)
+    Rw = cv2.Rodrigues(rv)[0]; return Rot.from_matrix(Rw.T), -Rw.T @ tv[:, 0], len(inl)
+def predict(hist, i):                               # constant velocity from the last few solved frames (frame, Rot, pos)
+    if len(hist) < 2: return hist[-1][1], hist[-1][2]
+    fi = np.array([h[0] for h in hist], float); vel = np.polyfit(fi, np.array([h[2] for h in hist]), 1)[0]
+    w = np.mean([(a[1].inv() * b[1]).as_rotvec() / (b[0] - a[0]) for a, b in zip(hist[:-1], hist[1:])], axis=0)
+    return hist[-1][1] * Rot.from_rotvec(w * (i - hist[-1][0])), hist[-1][2] + vel * (i - hist[-1][0])
+def plausible(r, pred, dt):                         # dt: seconds since the last answer (3 m + 60 m/s, 20 deg + 600 deg/s)
+    return r is not None and r[2] >= MIN_INL and np.linalg.norm(r[1] - pred[1]) < 3.0 + 60 * dt and np.degrees((r[0].inv() * pred[0]).magnitude()) < 20 + 600 * dt
+pool = ThreadPoolExecutor(max(4, len(streams)))
+# ---- a cycle over the streams that have a frame: XFeat (GPU) -> plan + LighterGlue (GPU) -> PnP (CPU threads).
+# PIPE overlaps the next cycle's GPU work with this cycle's PnP: 1 = only the next XFeat (the plan still sees every
+# answer), 2 = XFeat and matching (the next plan predicts from answers one cycle older). 0 = one after another.
+# LOST is time, not attempts: a faster tracker makes more attempts in the same gap, and giving up sooner sends it to the
+# slow global retrieval, which drops frames and loses it again
+# d05 alone: PIPE 0 28 Hz, 1 43 Hz, 2 56 Hz, the drawn position no worse (0.61 / 0.58 / 0.55 m p50); 4 streams at once
+# (3 race flights at 30 fps + d05): 2 gives 25-32 Hz each with the GPU busy all the time (XFeat 8 + LighterGlue 19 ms)
+PIPE = int(E("PIPE", 2))
+def front(batch):                                   # GPU: features
+    t = time.perf_counter(); q, x = features(batch); sync(); return dict(batch=batch, q=q, x=x, feat=time.perf_counter() - t)
+def middle(c):                                      # plan from the answers so far, relocalization retrieval, matching (GPU)
+    batch, q, x = c["batch"], c["q"], c["x"]; t = time.perf_counter(); plan, lost = [], []
+    for b, (s, i) in enumerate(batch):
+        if s.hist and (i - s.hist[-1][0]) / s.fps <= LOST:
+            pred = predict(s.hist, i); plan.append(("track", pred, s.nearest(*pred), s.hist[-1][0]))
+        else: plan.append(("reloc", None, None, None)); lost.append(b)
+    if lost:
+        with torch.no_grad(): g = torch.nn.functional.normalize(dino((torch.nn.functional.interpolate(x[lost], (168, 224), mode="area") - MEAN) / STD), dim=1)
+        for b, gb in zip(lost, g): plan[b] = ("reloc", None, torch.topk(batch[b][0].m["g"] @ gb, RTOPK).indices.tolist(), None)
+    pairs = [(q[b], batch[b][0], k) for b in range(len(batch)) for k in plan[b][2]]
+    res = match_all(pairs); sync(); per, n = [], 0
+    for b in range(len(batch)): per.append(res[n:n + len(plan[b][2])]); n += len(plan[b][2])
+    c.update(plan=plan, per=per, pairs=len(pairs), match=time.perf_counter() - t); return c
+def solve(c, b):                                    # CPU: PnP for one stream; returns (answer, how, finish time)
+    (s, i), (mode, pred, _, last), per = c["batch"][b], c["plan"][b], c["per"][b]
+    if mode == "track":
+        r = pnp(s.K, np.concatenate([u for u, _ in per]), np.concatenate([X for _, X in per])) if per else None
+        return (r, "track", time.perf_counter()) if plausible(r, pred, (i - last) / s.fps) else (None, None, time.perf_counter())
+    best = None
+    for uv, X in per:
+        r = pnp(s.K, uv, X)
+        if r and (best is None or r[2] > best[2]): best = r
+    return (best, "reloc", time.perf_counter()) if best and best[2] >= RMIN else (None, None, time.perf_counter())
+def land(c, out, t0, clock0):                       # apply the answers to the streams and record them
+    for (s, i), (r, how, tf) in zip(c["batch"], out):
+        done = clock0 + (tf - t0)
+        if r is not None:
+            if how == "reloc": s.hist = []
+            s.hist = (s.hist + [(i, r[0], r[1])])[-6:]
+        s.recs.append(dict(i=i, done=done, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how) if r else {"how": "none"})))
+    s_ = {k: c[k] * 1000 for k in ("feat", "match")}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
+def pick(clock):                                    # the newest arrived frame of each stream not already in flight
+    live = [s for s in streams if s.next < s.N]
+    if LIVE: ready = [s for s in live if s.next / s.fps <= clock + 1e-9]; batch = [(s, max(s.next, min(s.N - 1, int(math.floor(clock * s.fps + 1e-9))))) for s in ready]
+    else: batch = [(s, s.next) for s in live]
+    for s, i in batch: s.next = i + 1
+    return batch, live
+cycles = []
+for _ in range(3):                                  # warm up the kernels; the state it leaves is thrown away
+    c = middle(front([(s, 0) for s in streams])); [solve(c, b) for b in range(len(streams))]
+    for s in streams: s.hist = []
+cycles.clear(); clock, t_all, pending, steps = 0.0, time.time(), None, []
+while True:
+    t0, clock0 = time.perf_counter(), clock
+    futs = [pool.submit(solve, pending, b) for b in range(len(pending["batch"]))] if pending else None
+    batch, live = pick(clock)
+    if not batch and not futs:
+        if not live: break
+        clock = min(s.next / s.fps for s in live); continue
+    nxt = None
+    if PIPE == 0 and futs is None and batch:        # one after another: this batch's whole cycle now
+        nxt = middle(front(batch)); futs = [pool.submit(solve, nxt, b) for b in range(len(batch))]; pending, nxt = nxt, None
+    elif batch:
+        nxt = front(batch)
+        if PIPE >= 2: nxt = middle(nxt)
+    if futs is not None:
+        tw = time.perf_counter(); out = [f.result() for f in futs]; wait = time.perf_counter() - tw
+        land(pending, out, t0, clock0); cycles[-1]["wait"] = wait * 1000
+    if nxt is not None and PIPE == 1: nxt = middle(nxt)
+    pending = nxt; clock = clock0 + (time.perf_counter() - t0); steps.append((time.perf_counter() - t0) * 1000)
+    if len(steps) % 500 == 0: print(f"{len(steps)} steps, {(time.time() - t_all) / len(steps) * 1000:.1f} ms each", flush=True)
+pc = lambda a, q: float(np.percentile(a, q)) if len(a) else float("nan")
+print(f"PIPE {PIPE}: steps {len(steps)}, ms p50 {pc(steps, 50):.1f} p90 {pc(steps, 90):.1f}; streams per cycle p50 {pc([c['n'] for c in cycles], 50):.0f}, pairs p50 {pc([c['pairs'] for c in cycles], 50):.0f}; " +
+      ", ".join(f"{k} p50 {pc([c[k] for c in cycles if k in c], 50):.1f}" for k in ("feat", "match", "wait")) + " (wait: for the PnP threads after the GPU work)")
+# ---- per stream: what the viewer draws at frame j, from the answers finished by j/fps. Rotation: the newest answer
+# carried at constant angular velocity. Position: a constant-acceleration Kalman filter over the answers (measurement
+# sigma 0.25 m at 200 inliers, larger with fewer), then a new answer's jump is spread over BLEND instead of drawn at once.
+# The answers are what wobbles (0.25 m each at ~20 Hz), not the extrapolation: capping the carried speed at the recent
+# speed changed nothing. d05, tried on the answer log: last answer + velocity 0.86 m p50 / 17.7 cm wobble (distance to a
+# quadratic over 0.25 s); Kalman 0.60 / 15.2; Kalman + BLEND 1.5 frames 0.70 / 11.1; BLEND 3 frames 0.85 / 9.7.
+def Fm(dt): return np.array([[1, dt, dt * dt / 2], [0, 1, dt], [0, 0, 1]])
+def Qm(dt): return KQ * np.array([[dt**5 / 20, dt**4 / 8, dt**3 / 6], [dt**4 / 8, dt**3 / 3, dt**2 / 2], [dt**3 / 6, dt**2 / 2, dt]])
+FRAME = "web: x east, y up, z south, metres; quat (x,y,z,w) world-from-camera, COLMAP camera axes"
+def finish(s):
+    N, fps, cam = s.N, s.fps, s.cam
+    with open(s.prefix + ".jsonl", "w") as f:
+        for r in s.recs: f.write(json.dumps(r) + "\n")
+    sol = [r for r in s.recs if r["how"] != "none"]; drawn, k, h = [], 0, []; kx = kP = kf = None; off, last = np.zeros(3), None
+    for j in range(N):
+        new = False
+        while k < len(sol) and (sol[k]["done"] <= j / fps + 1e-9 if LIVE else sol[k]["i"] <= j):
+            s_ = sol[k]; reset = s_["how"] == "reloc" or not h; h = ([] if reset else h)[-5:] + [(s_["i"], Rot.from_quat(s_["quat"]), np.array(s_["pos"]))]; k += 1; new = True
+            z, r = np.array(s_["pos"]), 0.25 * math.sqrt(200 / max(s_["inl"], 30))
+            if reset or kx is None: kx, kP, kf = np.stack([z, np.zeros(3), np.zeros(3)]), np.diag([r * r, 100, 1000.]), s_["i"]
+            else:
+                dt = (s_["i"] - kf) / fps; A = Fm(dt); x = A @ kx; P = A @ kP @ A.T + Qm(dt); G = P[:, 0] / (P[0, 0] + r * r)
+                kx, kP, kf = x + np.outer(G, z - x[0]), P - np.outer(G, P[0]), s_["i"]
+        if not h: drawn.append(None); continue
+        age = (j - h[-1][0]) / fps
+        if age > 0.5: drawn.append((h[-1][1], kx[0], age)); last = None; continue   # past 0.5 s without an answer, stop extrapolating
+        p = kx[0] + kx[1] * (j - kf) / fps
+        if new and last is not None: off = last - p
+        off = off * math.exp(-1 / (BLEND * fps)) if BLEND > 0 else off * 0; last = p + off
+        drawn.append((predict(h, j)[0], last, age))
+    first = next((j for j, d in enumerate(drawn) if d), N)
+    out = []                                        # the viewer indexes poses by frame, so every frame gets one
+    for j in range(N if first < N else 0):
+        R, p, age = drawn[max(j, first)]
+        out.append({"i": j, "t": round(cam["t0"] + j / fps, 4), "pos": np.round(p, 3).tolist(), "quat": np.round(R.as_quat(), 6).tolist(),
+                    # live, the newest answer is always a few frames old (latency), so "fresh" means within FRESH
+                    "src": "rt-wait" if j < first else "rt" if age <= FRESH else "rt-carry"})
+    json.dump({"frame": FRAME, "t0": cam["t0"], "fps": fps, "poses": out}, open(s.prefix + ".json", "w"))
+    # the trail behind the live dot can be redrawn: frame j is drawn once the answers up to TRAIL_L later are in - a
+    # quadratic over the answers within TRAIL_W, weighted by inliers; rotation slerped between the answers around it.
+    # d05, on the answer log: 200 ms late -> 0.28 m p50 / 1.8 cm wobble (the live dot: 0.71 m / 11 cm).
+    trail = []
+    if sol:
+        fi = np.array([r["i"] for r in sol]); dn = np.array([r["done"] if LIVE else r["i"] / fps for r in sol]); AP = np.array([r["pos"] for r in sol])
+        wt = np.sqrt(np.minimum([r["inl"] for r in sol], 400) / 200); L, Wf = TRAIL_L * fps, TRAIL_W * fps
+        for j in range(N):
+            m = (dn <= (j + L) / fps + 1e-9) & (np.abs(fi - j) <= Wf)
+            a, b = np.searchsorted(fi, j, "right") - 1, np.searchsorted(fi, j)
+            if m.sum() < 4 or a < 0 or b >= len(fi) or fi[b] - fi[a] > 2 * Wf: trail.append(None); continue
+            p = np.polyfit(fi[m] - j, AP[m], 2, w=wt[m])[-1]
+            R = Rot.from_quat(sol[a]["quat"]) if a == b else Slerp([fi[a], fi[b]], Rot.from_quat([sol[a]["quat"], sol[b]["quat"]]))([j])[0]
+            trail.append((R, p))
+    else: trail = [None] * N
+    json.dump({"frame": FRAME, "t0": cam["t0"], "fps": fps,
+               "poses": [{"i": j, "t": round(cam["t0"] + j / fps, 4), **({"pos": np.round(trail[j][1], 3).tolist(), "quat": np.round(trail[j][0].as_quat(), 6).tolist(), "src": "rt"}
+                         if trail[j] else {"pos": o["pos"], "quat": o["quat"], "src": "rt-carry" if o["src"] == "rt" else o["src"]})} for j, o in enumerate(out)]},
+              open(s.prefix + "_trail.json", "w"))
+    # summary
+    dur = N / fps
+    print(f"== {s.prefix}: processed {len(s.recs)} of {N} frames ({len(s.recs) / dur:.1f} Hz), solved {len(sol)} ({len(sol) / dur:.1f} Hz, {sum(r['how'] == 'reloc' for r in sol)} by relocalizing)")
+    if LIVE and sol:
+        lat = np.array([r["done"] - r["i"] / fps for r in sol]) * 1000; print(f"latency ms (frame arrives -> pose): p50 {pc(lat, 50):.1f} p90 {pc(lat, 90):.1f}")
+    print(f"first drawn frame #{first}")
+    if s.truth:
+        tr = {p["i"]: p for p in json.load(open(s.truth))["poses"] if p.get("src") in ("ba", "ba-fill", "takeoff", "ground")}
+        def errs(pairs):
+            e = [(np.linalg.norm(np.array(p) - tr[j]["pos"]), np.degrees((Rot.from_quat(q).inv() * Rot.from_quat(tr[j]["quat"])).magnitude())) for j, q, p in pairs if j in tr]
+            return np.array(e).reshape(-1, 2)
+        for name, pairs in (("solved frames (the answer itself)", [(r["i"], r["quat"], r["pos"]) for r in sol]),
+                            (f"trail, {TRAIL_L * 1000:.0f} ms late", [(j, t[0].as_quat(), t[1]) for j, t in enumerate(trail) if t]),
+                            ("drawn, every frame (latency and drops included)", [(j, d[0].as_quat(), d[1]) for j, d in enumerate(drawn) if d])):
+            e = errs(pairs)
+            print(f"{name}: n {len(e)} of {len(tr)}; pos m p50 {pc(e[:, 0], 50):.2f} p90 {pc(e[:, 0], 90):.2f}; <1 m {np.mean(e[:, 0] < 1) * 100:.0f}% <2 m {np.mean(e[:, 0] < 2) * 100:.0f}%;"
+                  f" rot deg p50 {pc(e[:, 1], 50):.1f} p90 {pc(e[:, 1], 90):.1f}")
+        miss = [j for j in tr if j < N and (not drawn[j] or drawn[j][2] > FRESH)]
+        print(f"frames with truth but nothing fresh (no answer within FRESH): {len(miss)}")
+for s in streams: finish(s)
+print("RT-DONE", flush=True)
