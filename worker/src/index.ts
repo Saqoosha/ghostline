@@ -52,7 +52,7 @@ export default {
     headers.set('accept-ranges', 'bytes')
     headers.set('cache-control', cacheFor(key))
     if (!('body' in object)) return new Response(null, { status: 304, headers })
-    if (object.range && 'offset' in object.range) {
+    if (request.headers.has('range') && object.range && 'offset' in object.range) {   // R2 fills range in on a plain GET too
       const start = object.range.offset ?? 0
       const length = object.range.length ?? object.size - start
       headers.set('content-range', `bytes ${start}-${start + length - 1}/${object.size}`)
