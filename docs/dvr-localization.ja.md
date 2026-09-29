@@ -316,13 +316,13 @@ COLMAP フレームの平均回転で 1 姿勢にし、`src: "ground"`。refine 
 
 ## ビューア（`viewer/`）
 
-公開版は **https://vdgs.saqoo.sh/dvr/jdl-2026-r6/**（`tools/publish-dvr-viewer.sh jdl-2026-r6 build/dvr/hdz_0067`：
-ページは静的アセット、データは R2 の `dvr/jdl-2026-r6/data/`。仕組みは docs/distribution.ja.md）。公開版に
+公開版は **https://ghostline.saqoo.sh/jdl-2026-r6/**（`tools/publish-dvr-viewer.sh jdl-2026-r6 build/dvr/hdz_0067`：
+ページもデータも R2 の `dvr/jdl-2026-r6/` に上げ、`worker/` がそれを返す。publish は上げるだけで Worker の deploy は要らない）。公開版に
 書き込み口は無いので、mark モードで打った印はそのブラウザの localStorage に残り `download` で JSON に出す。
 `marks.json` を更新したら同じスクリプトで上げ直す（`rclone --checksum` なので変わったものだけ送る）。
-FDF の 6 本は **https://vdgs.saqoo.sh/dvr/fdf-2026-r6/**（`tools/publish-dvr-viewer.sh fdf-2026-r6 viewer/public/flights.json`）。
+FDF の 6 本は **https://ghostline.saqoo.sh/fdf-2026-r6/**（`tools/publish-dvr-viewer.sh fdf-2026-r6 viewer/public/flights.json`）。
 2 つ目の引数が `flights.json` のときは、各飛行の `index.json` が挙げる姿勢集合・動画・既定のシーン・空を `data/<flight>/` に置き
-（ワーカーが R2 へ回すのは `/dvr/<name>/data/` の下だけ）、ページは最初の飛行を開く（`VITE_DEFAULT_DATA`）。一覧のファイルが
+、ページは最初の飛行を開く（`VITE_DEFAULT_DATA`）。一覧のファイルが
 手元に無いと止まるので、先に `index.json` をそろえる。
 
 手元は `bun run dev`、`public/data` → `build/dvr/hdz_0067` のシンボリックリンク。SOG は

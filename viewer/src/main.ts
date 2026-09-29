@@ -9,7 +9,7 @@ type ScanCam = { name: string; clip: string; t: number; pos: number[]; quat: num
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 // Data lives next to the page: public/data (a symlink to build/dvr/hdz_0067) under the dev
-// server, and <base>/data/ on vdgs.saqoo.sh, where the Worker streams it from R2. ?data=<dir>
+// server, and <base>/data/ on ghostline.saqoo.sh, where the Worker streams it from R2. ?data=<dir>
 // opens another flight's folder under public/ instead; ?poses= and ?scene= pick its files.
 const QS = new URLSearchParams(location.search)
 // VITE_DEFAULT_DATA: the folder a page with several flights opens when the URL names none (publish-dvr-viewer.sh sets it)

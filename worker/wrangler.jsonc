@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ghostline",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  // Pages and data both live in R2 under dvr/<name>/ (the prefix they had on vdgs.saqoo.sh, in the
+  // same bucket), so publishing a viewer is an upload and never a redeploy of this Worker.
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "vdgs" }],
+  "routes": [{ "pattern": "ghostline.saqoo.sh", "custom_domain": true }],
+  "observability": { "enabled": true }
+}
