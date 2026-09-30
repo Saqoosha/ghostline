@@ -68,7 +68,9 @@ class GridSource:                                   # one decoded live video; it
     def run(self):                                  # a failure here must end the run, not leave the loop waiting forever
         try: self.read()
         finally:
-            self.ended = True; rc = self.proc.poll()
+            self.ended = True
+            try: rc = self.proc.wait(timeout=1)
+            except subprocess.TimeoutExpired: rc = None
             if rc: print(f"{self.url}: decoder exited with {rc}", flush=True)
     def read(self):
         size = self.W * self.H * 3

@@ -59,7 +59,7 @@ export class LiveDraw {
     }
     // no answer after frame j yet, or a gap around it: hold at the answer before j (never at one ahead of it)
     if (!before) return null                          // before the first answer
-    return { pos: before.pos, quat: before.quat, state: (after || (j - before.i) / this.fps > lostAfter) ? 'lost' : 'hold', frame: before.i }
+    return { pos: before.pos, quat: before.quat, state: (j - before.i) / this.fps > lostAfter ? 'lost' : 'hold', frame: before.i }
   }
   trailAt(t: number, upto: number, settle = 0.5): (number[] | null)[] {
     if (t < this.trailT) this.trail = []              // seeked back: start again
