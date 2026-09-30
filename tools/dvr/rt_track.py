@@ -22,7 +22,8 @@ env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s w
      RELOC_TOPK (5), RELOC_MIN (50), TOPK (2048) keypoints on the frame, MAPK (0 = all) per keyframe, NMAX (0 = all frames), BATCH (16 pairs per call),
      FRESH (0.1 s: an answer this old or newer is drawn "rt"), KQ (1e4, the drawn position's jerk density (m/s^3)^2 s),
      BLEND (0.025 s; 0 = draw the filter as it jumps), TRAIL_L (0.2 s the trail is drawn late), TRAIL_W (0.25 s either
-     side in its fit), PIPE (2: overlap the next cycle's GPU work with this cycle's PnP, below)"""
+     side in its fit), PIPE (2: overlap the next cycle's GPU work with this cycle's PnP, below),
+     FLOW (0; 1 = carry points to the next frame with LK instead of matching, below), FLOW_EVERY (8), FLOW_RESEED (60), FLOW_MIN (30)"""
 import json, sys, os, time, math, numpy as np, torch, cv2
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.expanduser(os.environ.get("XFEAT_DIR", "~/xfeat"))); from modules.xfeat import XFeat
@@ -31,6 +32,7 @@ dev = os.environ.get("DEV", "cuda"); E = lambda k, d: float(os.environ.get(k, d)
 LIVE, NKF, MIN_INL, LOST = int(E("LIVE", 1)), int(E("NKF", 2)), int(E("MIN_INL", 30)), E("LOST", 0.33)
 RTOPK, RMIN, TOPK, NMAX, BATCH = int(E("RELOC_TOPK", 5)), int(E("RELOC_MIN", 50)), int(E("TOPK", 2048)), int(E("NMAX", 0)), int(E("BATCH", 16))
 MAPK = int(E("MAPK", 0))                            # keypoints per keyframe used from the map (0 = all)
+FLOW, FLOW_EVERY, FLOW_RESEED, FLOW_MIN = int(E("FLOW", 0)), int(E("FLOW_EVERY", 8)), int(E("FLOW_RESEED", 60)), int(E("FLOW_MIN", 30))
 GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30), E("SEND_T0", 0), os.environ.get("FRAME_CODE")
 FRESH, KQ, BLEND, TRAIL_L, TRAIL_W = E("FRESH", 0.1), E("KQ", 1e4), E("BLEND", 0.025), E("TRAIL_L", 0.2), E("TRAIL_W", 0.25)
 T = lambda a: torch.tensor(a, dtype=torch.float32, device=dev)
@@ -84,7 +86,7 @@ class Stream:
         m1, m2 = cv2.fisheye.initUndistortRectifyMap(Kf, np.array(fk["k"]), np.eye(3), Kfull, (W, H), cv2.CV_16SC2)
         osd = np.full((H, W), 255, np.uint8); osd[:82] = 0; osd[632:] = 0
         self.qvalid = T(cv2.resize((cv2.erode(cv2.remap(osd, m1, m2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST)) > 0
-        self.next = 0; self.hist = []; self.recs = []
+        self.next = 0; self.hist = []; self.recs = []; self.flow = None
         if self.live:                               # cell pixel for every pinhole pixel of the map's size: 4:3 fisheye stretched to the cell
             x0, y0, w, h = self.rect; Km = self.K
             mx, my = cv2.fisheye.initUndistortRectifyMap(Kf, np.array(fk["k"]), np.eye(3), Km, (RW, RH), cv2.CV_32FC1)
@@ -151,7 +153,7 @@ def pnp(K, uv, X):
     ok, rv, tv, inl = cv2.solvePnPRansac(X.astype(np.float64), uv.astype(np.float64), K, None, iterationsCount=500, reprojectionError=3.0, flags=cv2.USAC_MAGSAC)
     if not ok or inl is None or len(inl) < 12: return None
     rv, tv = cv2.solvePnPRefineLM(X[inl[:, 0]].astype(np.float64), uv[inl[:, 0]].astype(np.float64), K, None, rv, tv)
-    Rw = cv2.Rodrigues(rv)[0]; return Rot.from_matrix(Rw.T), -Rw.T @ tv[:, 0], len(inl)
+    Rw = cv2.Rodrigues(rv)[0]; return Rot.from_matrix(Rw.T), -Rw.T @ tv[:, 0], len(inl), inl[:, 0]
 def predict(hist, i):                               # constant velocity from the last few solved frames (frame, Rot, pos)
     if len(hist) < 2: return hist[-1][1], hist[-1][2]
     fi = np.array([h[0] for h in hist], float); vel = np.polyfit(fi, np.array([h[2] for h in hist]), 1)[0]
@@ -168,40 +170,70 @@ pool = ThreadPoolExecutor(max(4, len(streams)))
 # d05 alone: PIPE 0 28 Hz, 1 43 Hz, 2 56 Hz, the drawn position no worse (0.61 / 0.58 / 0.55 m p50); 4 streams at once
 # (3 race flights at 30 fps + d05): 2 gives 25-32 Hz each with the GPU busy all the time (XFeat 8 + LighterGlue 19 ms)
 PIPE = int(E("PIPE", 2))
-def front(batch):                                   # GPU: features
-    t = time.perf_counter(); q, x = features(batch); sync(); return dict(batch=batch, q=q, x=x, feat=time.perf_counter() - t)
+def flowing(s):                                     # carry this stream's points with LK instead of matching (FLOW, below)
+    return bool(FLOW and s.hist and s.flow is not None and len(s.flow["X"]) >= FLOW_RESEED and s.flow["age"] < FLOW_EVERY)
+def front(batch):                                   # GPU: features, for the streams that will be matched
+    t = time.perf_counter(); fl = [flowing(s) for s, _ in batch]; sub = [b for b in range(len(batch)) if not fl[b]]
+    q, x, row = [None] * len(batch), None, {b: k for k, b in enumerate(sub)}
+    if sub:
+        qs, x = features([batch[b] for b in sub])
+        for b, qb in zip(sub, qs): q[b] = qb
+    sync(); return dict(batch=batch, q=q, x=x, row=row, fl=fl, feat=time.perf_counter() - t)
 def middle(c):                                      # plan from the answers so far, relocalization retrieval, matching (GPU)
     batch, q, x = c["batch"], c["q"], c["x"]; t = time.perf_counter(); plan, lost = [], []
     for b, (s, i) in enumerate(batch):
-        if s.hist and (i - s.hist[-1][0]) / s.fps <= LOST:
+        if c["fl"][b]:
+            plan.append(("flow", None, [], None))  # no XFeat, no matching: the CPU carries last frame's points over with LK
+        elif s.hist and (i - s.hist[-1][0]) / s.fps <= LOST:
             pred = predict(s.hist, i); plan.append(("track", pred, s.nearest(*pred), s.hist[-1][0]))
         else: plan.append(("reloc", None, None, None)); lost.append(b)
     if lost:
-        with torch.no_grad(): g = torch.nn.functional.normalize(dino(((torch.nn.functional.interpolate(x[lost], (168, 224), mode="area") if dev == "cuda" else   # MPS: area only for divisible sizes
-                                                                  torch.nn.functional.interpolate(x[lost], (168, 224), mode="bilinear", antialias=True)) - MEAN) / STD), dim=1)
+        with torch.no_grad(): g = torch.nn.functional.normalize(dino(((torch.nn.functional.interpolate(x[[c["row"][b] for b in lost]], (168, 224), mode="area") if dev == "cuda" else   # MPS: area only for divisible sizes
+                                                                  torch.nn.functional.interpolate(x[[c["row"][b] for b in lost]], (168, 224), mode="bilinear", antialias=True)) - MEAN) / STD), dim=1)
         for b, gb in zip(lost, g): plan[b] = ("reloc", None, torch.topk(batch[b][0].m["g"] @ gb, RTOPK).indices.tolist(), None)
     pairs = [(q[b], batch[b][0], k) for b in range(len(batch)) for k in plan[b][2]]
     res = match_all(pairs); sync(); per, n = [], 0
     for b in range(len(batch)): per.append(res[n:n + len(plan[b][2])]); n += len(plan[b][2])
     c.update(plan=plan, per=per, pairs=len(pairs), match=time.perf_counter() - t); return c
-def solve(c, b):                                    # CPU: PnP for one stream; returns (answer, how, finish time)
+# FLOW: after an answer, its inlier points (where they are in the frame, where they are in the world) are carried to the
+# next frame by pyramidal LK with a forward-backward check and solved again by PnP - no XFeat matching, no GPU. The
+# points thin out; below FLOW_RESEED, or after FLOW_EVERY carried frames, the next frame is matched again.
+FLOW_FB, FLOW_WIN = E("FLOW_FB", 1.0), int(E("FLOW_WIN", 21))   # forward-backward tolerance (px), LK window
+FLOW_SIG = E("FLOW_SIG", 1.0)                       # carried answers are coarser: their sigma in the drawn filter and trail x this
+LK = dict(winSize=(FLOW_WIN, FLOW_WIN), maxLevel=4, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, 0.03))
+def gray(s, i): return cv2.cvtColor(s.frames[i], cv2.COLOR_RGB2GRAY)
+def carry(s, i, uv, X, r, age):                    # the flow state an answer leaves behind
+    return dict(gray=gray(s, i), uv=np.ascontiguousarray(uv[r[3]], np.float32), X=X[r[3]], age=age) if FLOW else None
+def solve(c, b):                                    # CPU: PnP for one stream -> (answer, how, finish time, new flow state or "drop")
     (s, i), (mode, pred, _, last), per = c["batch"][b], c["plan"][b], c["per"][b]
+    if mode == "flow":
+        f = s.flow                                  # as the previous cycle left it (it has landed by now)
+        if f is None or not s.hist: return None, None, time.perf_counter(), "drop"
+        g = gray(s, i); p1, st, _ = cv2.calcOpticalFlowPyrLK(f["gray"], g, f["uv"], None, **LK)
+        p0, st2, _ = cv2.calcOpticalFlowPyrLK(g, f["gray"], p1, None, **LK)
+        ok = (st[:, 0] == 1) & (st2[:, 0] == 1) & (np.linalg.norm(p0 - f["uv"], axis=1) < FLOW_FB)
+        uv, X = p1[ok], f["X"][ok]; r = pnp(s.K, uv, X) if len(uv) >= FLOW_MIN else None
+        if r is not None and r[2] >= FLOW_MIN and plausible(r, predict(s.hist, i), (i - s.hist[-1][0]) / s.fps):
+            return r, "flow", time.perf_counter(), dict(gray=g, uv=np.ascontiguousarray(uv[r[3]], np.float32), X=X[r[3]], age=f["age"] + 1)
+        return None, None, time.perf_counter(), "drop"
     if mode == "track":
-        r = pnp(s.K, np.concatenate([u for u, _ in per]), np.concatenate([X for _, X in per])) if per else None
-        return (r, "track", time.perf_counter()) if plausible(r, pred, (i - last) / s.fps) else (None, None, time.perf_counter())
+        uv, X = (np.concatenate([u for u, _ in per]), np.concatenate([X for _, X in per])) if per else (None, None)
+        r = pnp(s.K, uv, X) if per else None
+        return (r, "track", time.perf_counter(), carry(s, i, uv, X, r, 0)) if plausible(r, pred, (i - last) / s.fps) else (None, None, time.perf_counter(), "drop")
     best = None
     for uv, X in per:
         r = pnp(s.K, uv, X)
-        if r and (best is None or r[2] > best[2]): best = r
-    return (best, "reloc", time.perf_counter()) if best and best[2] >= RMIN else (None, None, time.perf_counter())
+        if r and (best is None or r[2] > best[0][2]): best = (r, uv, X)
+    return (best[0], "reloc", time.perf_counter(), carry(s, i, best[1], best[2], best[0], 0)) if best and best[0][2] >= RMIN else (None, None, time.perf_counter(), "drop")
 def land(c, out, t0, clock0):                       # apply the answers to the streams and record them
-    for (s, i), (r, how, tf) in zip(c["batch"], out):
+    for b, ((s, i), (r, how, tf, fs)) in enumerate(zip(c["batch"], out)):
         done = (tf - s.t_base) if s.live else clock0 + (tf - t0)   # live: on the cell's own time line
+        s.flow = None if fs == "drop" else fs if fs is not None else s.flow
         if r is not None:
             if how == "reloc": s.hist = []
             s.hist = (s.hist + [(i, r[0], r[1])])[-6:]
         lat = dict(lat=round((tf - s.arrive[i]) * 1000, 1), e2e=round((time.time() - (time.perf_counter() - tf) - SEND_T0 - i / s.fps) * 1000, 1) if SEND_T0 else None) if s.live else {}
-        s.recs.append(dict(i=i, done=done, **lat, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how) if r else {"how": "none"})))
+        s.recs.append(dict(i=i, done=done, plan=c["plan"][b][0], **lat, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how) if r else {"how": "none"})))
     s_ = {k: c[k] * 1000 for k in ("feat", "match")}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
 REAL = any(s.live for s in streams)
 def pick(clock):                                    # the newest arrived frame of each stream not already in flight
@@ -217,7 +249,7 @@ def pick(clock):                                    # the newest arrived frame o
 cycles = []
 for _ in range(3):                                  # warm up the kernels; the state it leaves is thrown away
     c = middle(front([(s, 0) for s in streams])); [solve(c, b) for b in range(len(streams))]
-    for s in streams: s.hist = []
+    for s in streams: s.hist, s.flow = [], None
 if REAL:                                            # the warm-up's blank frame is not a frame of the source
     for s in streams: s.frames, s.N, s.next = {}, 0, 0
     for src in sources.values(): src.start()
@@ -264,7 +296,7 @@ def finish(s):
         new = False
         while k < len(sol) and (sol[k]["done"] <= j / fps + 1e-9 if LIVE else sol[k]["i"] <= j):
             s_ = sol[k]; reset = s_["how"] == "reloc" or not h; h = ([] if reset else h)[-5:] + [(s_["i"], Rot.from_quat(s_["quat"]), np.array(s_["pos"]))]; k += 1; new = True
-            z, r = np.array(s_["pos"]), 0.25 * math.sqrt(200 / max(s_["inl"], 30))
+            z, r = np.array(s_["pos"]), 0.25 * math.sqrt(200 / max(s_["inl"], 30)) * (FLOW_SIG if s_["how"] == "flow" else 1)
             if reset or kx is None: kx, kP, kf = np.stack([z, np.zeros(3), np.zeros(3)]), np.diag([r * r, 100, 1000.]), s_["i"]
             else:
                 dt = (s_["i"] - kf) / fps; A = Fm(dt); x = A @ kx; P = A @ kP @ A.T + Qm(dt); G = P[:, 0] / (P[0, 0] + r * r)
@@ -290,7 +322,7 @@ def finish(s):
     trail = []
     if sol:
         fi = np.array([r["i"] for r in sol]); dn = np.array([r["done"] if LIVE else r["i"] / fps for r in sol]); AP = np.array([r["pos"] for r in sol])
-        wt = np.sqrt(np.minimum([r["inl"] for r in sol], 400) / 200); L, Wf = TRAIL_L * fps, TRAIL_W * fps
+        wt = np.sqrt(np.minimum([r["inl"] for r in sol], 400) / 200) / np.array([FLOW_SIG if r["how"] == "flow" else 1 for r in sol]); L, Wf = TRAIL_L * fps, TRAIL_W * fps
         for j in range(N):
             m = (dn <= (j + L) / fps + 1e-9) & (np.abs(fi - j) <= Wf)
             a, b = np.searchsorted(fi, j, "right") - 1, np.searchsorted(fi, j)
