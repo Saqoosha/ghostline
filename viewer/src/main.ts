@@ -3,6 +3,7 @@
 // can be laid over the frame it was solved from. Frame: x east, y up, z south, metres.
 import * as pc from 'playcanvas'
 import { bakeSky } from './sky'
+import { LiveDraw, type Answer } from './live'
 
 type Pose = { i: number; t: number; pos: number[]; quat: number[]; src: string } | null
 type ScanCam = { name: string; clip: string; t: number; pos: number[]; quat: number[] }
@@ -155,6 +156,19 @@ async function setupFlight() {
   } catch { }
 }
 setupFlight()
+// Live replay: index.json may list answer logs ({"live": [{"file", "label"}]}, rt_track.py's answers with the time
+// each was finished). With "live" on, the dot and the path are what a live page would draw from them at video time t.
+let live: LiveDraw | null = null
+const lv = { on: $<HTMLInputElement>('live'), set: $<HTMLSelectElement>('liveset'), mode: $<HTMLSelectElement>('livemode'), delay: $<HTMLInputElement>('livedelay'), info: $('liveinfo') }
+async function loadLive(file: string) { live = new LiveDraw(await fetch(DATA + file).then(r => r.json()) as Answer[], DVR.fps) }
+fetch(DATA + 'index.json').then(r => r.ok ? r.json() : null).then(ix => {
+  if (!ix?.live?.length) return
+  lv.set.replaceChildren(...ix.live.map((l: { file: string; label: string }) => new Option(l.label, l.file)))
+  $('livebar').hidden = false; loadLive(lv.set.value)
+}).catch(() => { })
+lv.set.onchange = () => loadLive(lv.set.value)
+lv.delay.oninput = () => { $('livedelayv').textContent = lv.delay.value + ' ms' }
+const cLive: Record<string, pc.Color> = { interp: new pc.Color(1, 1, 0.3), extrap: new pc.Color(1, 0.6, 0.15), hold: new pc.Color(0.3, 0.85, 1), lost: new pc.Color(0.55, 0.55, 0.55) }
 
 // --- ui
 const ui = { follow: $<HTMLInputElement>('follow'), compare: $<HTMLInputElement>('compare'), wipe: $<HTMLInputElement>('wipe'),
@@ -448,10 +462,21 @@ const SRC_NAME: Record<string, string> = { kept: 'colmap', lk: 'lk', interp: 'in
 let lastPoses = poses
 app.on('update', () => {
   const i = Math.max(0, Math.min(poses.length - 1, frameOf(video.currentTime)))
-  ui.seek.value = String(i); const p = shown(poses[i])
+  ui.seek.value = String(i); let p = shown(poses[i])
+  if (live) live.fps = DVR.fps                        // dvr_pinhole.mp4.json may land after the answers
+  const L = lv.on.checked && live ? live.dot(video.currentTime, lv.mode.value as 'extrap' | 'delay', Number(lv.delay.value) / 1000) : null
+  if (lv.on.checked && live) {
+    p = L ? { i, t: 0, pos: L.pos, quat: L.quat, src: 'rt' } : null
+    lv.info.textContent = L ? `${L.state}, drawing #${L.frame} (${((i - L.frame) / DVR.fps * 1000).toFixed(0)} ms behind the video)` : 'no answer yet'
+  }
   ui.tlabel.textContent = `${(DVR.t0 + i / DVR.fps).toFixed(3)} s  #${i}  ${p ? SRC_NAME[p.src] ?? p.src : '-'}`
   const lines: pc.Vec3[] = [], cols: pc.Color[] = []
-  if (ui.showPath.checked) {
+  if (ui.showPath.checked && lv.on.checked && live) {   // the live trail, refitted as answers arrive, up to the dot
+    const got = live.arrived(video.currentTime), upto = L ? Math.min(L.frame, got.length ? got[got.length - 1].i : 0) : -1
+    const tr = upto >= 0 ? live.trailAt(video.currentTime, upto) : [], lp: pc.Vec3[] = [], lc: pc.Color[] = []
+    for (let k = 1; k < tr.length; k++) { const a = tr[k - 1], b = tr[k]; if (a && b) { lp.push(new pc.Vec3(a[0], a[1], a[2]), new pc.Vec3(b[0], b[1], b[2])); lc.push(cSrc.rt, cSrc.rt) } }
+    if (lp.length) app.drawLines(lp, lc, true)
+  } else if (ui.showPath.checked) {
     if (lastPoses !== poses) { pathPos.length = 0; pathCol.length = 0; lastPoses = poses
       let prev: Pose = null
       for (const x0 of poses) { const x = shown(x0); if (x && prev) { pathPos.push(new pc.Vec3(prev.pos[0], prev.pos[1], prev.pos[2]), new pc.Vec3(x.pos[0], x.pos[1], x.pos[2])); const c = cSrc[x.src] ?? cPath; pathCol.push(c, c) } prev = x } }
@@ -466,7 +491,7 @@ app.on('update', () => {
     applyPose(cam, p.pos, p.quat); cam.camera!.horizontalFov = false; cam.camera!.fov = 2 * Math.atan(DVR.h / 2 / DVR.fx) * 180 / Math.PI
   } else applyOrbit()
   if (p && ui.compare.checked) { applyPose(cam2, p.pos, p.quat); cam2.camera!.horizontalFov = false; cam2.camera!.fov = 2 * Math.atan(DVR.h / 2 / DVR.fx) * 180 / Math.PI }
-  if (p && !(ui.follow.checked && sc < 0 && !ui.compare.checked)) frustum(p.pos, p.quat, 100, 4 / 3, 3, cNow, lines, cols)
+  if (p && !(ui.follow.checked && sc < 0 && !ui.compare.checked)) frustum(p.pos, p.quat, 100, 4 / 3, 3, L ? cLive[L.state] : cNow, lines, cols)
   // Known landmarks: a short vertical tick each. They are furniture for placing marks, and
   // they stand in front of the capture everywhere, so they come up only with mark mode.
   if (mk.mode.checked) for (const id in marks.landmarks) {
