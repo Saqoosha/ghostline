@@ -32,6 +32,14 @@ dev = os.environ.get("DEV", "cuda"); E = lambda k, d: float(os.environ.get(k, d)
 LIVE, NKF, MIN_INL, LOST = int(E("LIVE", 1)), int(E("NKF", 2)), int(E("MIN_INL", 30)), E("LOST", 0.33)
 RTOPK, RMIN, TOPK, NMAX, BATCH = int(E("RELOC_TOPK", 5)), int(E("RELOC_MIN", 50)), int(E("TOPK", 2048)), int(E("NMAX", 0)), int(E("BATCH", 16))
 MAPK = int(E("MAPK", 0))                            # keypoints per keyframe used from the map (0 = all)
+# NEAR: after a failed attempt, match NEAR_K keyframes around the prediction up to NEAR_ANG degrees off, and add NEAR_K
+# around the last position to the global retrieval's candidates - a fast turn breaks the narrow search before anything else.
+# M1 Max, one pilot: relocalizations 79 -> 31, answers 13.7 -> 16.4 Hz, drawn 1.96 -> 1.61 m p50. Four pilots on the 4090:
+# worse (a failing pilot's extra pairs slow the shared batch for everyone), so off by default
+# REACH (m/s): the global retrieval only looks at keyframes within 5 m + REACH x the time since the last answer of where
+# it was last seen. 0 = everywhere (as at the start)
+REACH = E("REACH", 0)
+NEAR, NEAR_K, NEAR_ANG = int(E("NEAR", 0)), int(E("NEAR_K", 4)), E("NEAR_ANG", 100)
 FLOW, FLOW_EVERY, FLOW_RESEED, FLOW_MIN = int(E("FLOW", 0)), int(E("FLOW_EVERY", 8)), int(E("FLOW_RESEED", 60)), int(E("FLOW_MIN", 30))
 GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30), E("SEND_T0", 0), os.environ.get("FRAME_CODE")
 FRESH, KQ, BLEND, TRAIL_L, TRAIL_W = E("FRESH", 0.1), E("KQ", 1e4), E("BLEND", 0.025), E("TRAIL_L", 0.2), E("TRAIL_W", 0.25)
@@ -86,7 +94,7 @@ class Stream:
         m1, m2 = cv2.fisheye.initUndistortRectifyMap(Kf, np.array(fk["k"]), np.eye(3), Kfull, (W, H), cv2.CV_16SC2)
         osd = np.full((H, W), 255, np.uint8); osd[:82] = 0; osd[632:] = 0
         self.qvalid = T(cv2.resize((cv2.erode(cv2.remap(osd, m1, m2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST)) > 0
-        self.next = 0; self.hist = []; self.recs = []; self.flow = None
+        self.next = 0; self.hist = []; self.recs = []; self.flow = None; self.fails = 0; self.last = None
         if self.live:                               # cell pixel for every pinhole pixel of the map's size: 4:3 fisheye stretched to the cell
             x0, y0, w, h = self.rect; Km = self.K
             mx, my = cv2.fisheye.initUndistortRectifyMap(Kf, np.array(fk["k"]), np.eye(3), Km, (RW, RH), cv2.CV_32FC1)
@@ -105,10 +113,10 @@ class Stream:
         self.frames[n] = cv2.cvtColor(cv2.remap(full, self.mx, self.my, cv2.INTER_LINEAR), cv2.COLOR_BGR2RGB)
         if not self.arrive: self.t_base = t - n / self.fps   # when frame 0 would have arrived, even if it was lost
         self.arrive[n], self.arrive_wall[n] = t, tw; self.frames.pop(n - 8, None); self.N = n + 1
-    def nearest(self, R, p):                        # keyframes near the predicted pose, looking the same way
+    def nearest(self, R, p, n=None, max_ang=45, per_deg=15):   # keyframes near the predicted pose, looking about the same way
         d = np.linalg.norm(self.m["pos"] - p, axis=1); ang = np.degrees(np.arccos(np.clip(self.m["fwd"] @ R.as_matrix()[:, 2], -1, 1)))
-        score = d / 1.5 + ang / 15; score[(d > 12) | (ang > 45)] = np.inf
-        return [int(k) for k in np.argsort(score)[:NKF] if np.isfinite(score[k])]
+        score = d / 1.5 + ang / per_deg; score[(d > 12) | (ang > max_ang)] = np.inf
+        return [int(k) for k in np.argsort(score)[:n or NKF] if np.isfinite(score[k])]
 streams = [Stream(s) for s in sys.argv[1:]]; RW, RH = streams[0].m["size"]
 assert all(s.m["size"] == [RW, RH] for s in streams), "all maps must share the render size"
 # ---- models
@@ -185,12 +193,22 @@ def middle(c):                                      # plan from the answers so f
         if c["fl"][b]:
             plan.append(("flow", None, [], None))  # no XFeat, no matching: the CPU carries last frame's points over with LK
         elif s.hist and (i - s.hist[-1][0]) / s.fps <= LOST:
-            pred = predict(s.hist, i); plan.append(("track", pred, s.nearest(*pred), s.hist[-1][0]))
+            pred = predict(s.hist, i)
+            ks = s.nearest(*pred, NEAR_K, NEAR_ANG, 30) if NEAR and s.fails else s.nearest(*pred)
+            plan.append(("track", pred, ks, s.hist[-1][0]))
         else: plan.append(("reloc", None, None, None)); lost.append(b)
     if lost:
         with torch.no_grad(): g = torch.nn.functional.normalize(dino(((torch.nn.functional.interpolate(x[[c["row"][b] for b in lost]], (168, 224), mode="area") if dev == "cuda" else   # MPS: area only for divisible sizes
                                                                   torch.nn.functional.interpolate(x[[c["row"][b] for b in lost]], (168, 224), mode="bilinear", antialias=True)) - MEAN) / STD), dim=1)
-        for b, gb in zip(lost, g): plan[b] = ("reloc", None, torch.topk(batch[b][0].m["g"] @ gb, RTOPK).indices.tolist(), None)
+        for b, gb in zip(lost, g):
+            s, i = batch[b]; sim = s.m["g"] @ gb
+            if REACH and s.last:                    # only keyframes it could have reached since it was last seen
+                far = np.linalg.norm(s.m["pos"] - s.last[2], axis=1) > 5 + REACH * (i - s.last[0]) / s.fps
+                if (~far).sum() >= RTOPK: sim = sim.masked_fill(torch.from_numpy(far).to(sim.device), -2)
+            ks = torch.topk(sim, RTOPK).indices.tolist()
+            if NEAR and s.last:                     # where it was last seen, looking any way
+                ks += [k for k in s.nearest(s.last[1], s.last[2], NEAR_K, 180, 60) if k not in ks]
+            plan[b] = ("reloc", None, ks, None)
     pairs = [(q[b], batch[b][0], k) for b in range(len(batch)) for k in plan[b][2]]
     res = match_all(pairs); sync(); per, n = [], 0
     for b in range(len(batch)): per.append(res[n:n + len(plan[b][2])]); n += len(plan[b][2])
@@ -229,9 +247,10 @@ def land(c, out, t0, clock0):                       # apply the answers to the s
     for b, ((s, i), (r, how, tf, fs)) in enumerate(zip(c["batch"], out)):
         done = (tf - s.t_base) if s.live else clock0 + (tf - t0)   # live: on the cell's own time line
         s.flow = None if fs == "drop" else fs if fs is not None else s.flow
+        s.fails = 0 if r is not None else s.fails + 1
         if r is not None:
             if how == "reloc": s.hist = []
-            s.hist = (s.hist + [(i, r[0], r[1])])[-6:]
+            s.hist = (s.hist + [(i, r[0], r[1])])[-6:]; s.last = s.hist[-1]
         lat = dict(lat=round((tf - s.arrive[i]) * 1000, 1), e2e=round((time.time() - (time.perf_counter() - tf) - SEND_T0 - i / s.fps) * 1000, 1) if SEND_T0 else None) if s.live else {}
         s.recs.append(dict(i=i, done=done, plan=c["plan"][b][0], **lat, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how) if r else {"how": "none"})))
     s_ = {k: c[k] * 1000 for k in ("feat", "match")}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
@@ -249,7 +268,7 @@ def pick(clock):                                    # the newest arrived frame o
 cycles = []
 for _ in range(3):                                  # warm up the kernels; the state it leaves is thrown away
     c = middle(front([(s, 0) for s in streams])); [solve(c, b) for b in range(len(streams))]
-    for s in streams: s.hist, s.flow = [], None
+    for s in streams: s.hist, s.flow, s.fails, s.last = [], None, 0, None
 if REAL:                                            # the warm-up's blank frame is not a frame of the source
     for s in streams: s.frames, s.N, s.next = {}, 0, 0
     for src in sources.values(): src.start()
