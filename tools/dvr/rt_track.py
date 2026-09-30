@@ -9,47 +9,100 @@ LIVE=1 replays at the videos' rate: frame i arrives at i/fps, a cycle takes the 
 arrived and the ones in between are dropped, as on a capture card. The pose the viewer would draw at each frame comes
 from the answers finished by then - latency and drops included. Scored against the offline poses (truth, e.g.
 poses60_pad.json; frames the offline solve itself only interpolated are left out).
+Live input (GRID=WxH): a 2x2 broadcast grid (the Event VRX over NDI -> OBS -> SRT) instead of files. The video field is
+"<url>|x:y:w:h|<cam.json>": one ffmpeg per url decodes it on a thread, and each frame's cell (the pilot's 4:3 fisheye
+stretched to the cell) is remapped straight to the map's pinhole size. Then the clock is the real one, each cycle takes
+the newest frame of every cell, and each answer records its latency from the frame's arrival (and, with SEND_T0 = the
+sender's wall-clock start, from the moment it was sent - the two machines' clocks must agree).
 usage (mastenv + kornia, ~/xfeat): rt_track.py map.npz,dvr_pinhole.mp4,out_prefix[,truth.json] [more streams ...]
+  GRID=1280x720 GRID_FPS=30 rt_track.py "map.npz,srt://0.0.0.0:9000?mode=listener|0:0:640:360|cam.json,out_prefix" ...
   writes per stream out_prefix.jsonl (per processed frame: pose, how it was found), out_prefix.json (the live dot: the
   drawn pose of every frame, poses60 format, for the viewer) and out_prefix_trail.json (the trail, redrawn TRAIL_L late)
 env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s without an answer before relocalizing),
-     RELOC_TOPK (5), RELOC_MIN (50), TOPK (2048) keypoints on the frame, NMAX (0 = all frames), BATCH (16 pairs per call),
+     RELOC_TOPK (5), RELOC_MIN (50), TOPK (2048) keypoints on the frame, MAPK (0 = all) per keyframe, NMAX (0 = all frames), BATCH (16 pairs per call),
      FRESH (0.1 s: an answer this old or newer is drawn "rt"), KQ (1e4, the drawn position's jerk density (m/s^3)^2 s),
      BLEND (0.025 s; 0 = draw the filter as it jumps), TRAIL_L (0.2 s the trail is drawn late), TRAIL_W (0.25 s either
      side in its fit), PIPE (2: overlap the next cycle's GPU work with this cycle's PnP, below)"""
 import json, sys, os, time, math, numpy as np, torch, cv2
 from concurrent.futures import ThreadPoolExecutor
-sys.path.insert(0, os.path.expanduser("~/xfeat")); from modules.xfeat import XFeat
+sys.path.insert(0, os.path.expanduser(os.environ.get("XFEAT_DIR", "~/xfeat"))); from modules.xfeat import XFeat
 from scipy.spatial.transform import Rotation as Rot, Slerp
-dev = "cuda"; E = lambda k, d: float(os.environ.get(k, d))
+dev = os.environ.get("DEV", "cuda"); E = lambda k, d: float(os.environ.get(k, d))   # DEV=mps runs on Apple silicon
 LIVE, NKF, MIN_INL, LOST = int(E("LIVE", 1)), int(E("NKF", 2)), int(E("MIN_INL", 30)), E("LOST", 0.33)
 RTOPK, RMIN, TOPK, NMAX, BATCH = int(E("RELOC_TOPK", 5)), int(E("RELOC_MIN", 50)), int(E("TOPK", 2048)), int(E("NMAX", 0)), int(E("BATCH", 16))
+MAPK = int(E("MAPK", 0))                            # keypoints per keyframe used from the map (0 = all)
+GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30), E("SEND_T0", 0), os.environ.get("FRAME_CODE")
 FRESH, KQ, BLEND, TRAIL_L, TRAIL_W = E("FRESH", 0.1), E("KQ", 1e4), E("BLEND", 0.025), E("TRAIL_L", 0.2), E("TRAIL_W", 0.25)
 T = lambda a: torch.tensor(a, dtype=torch.float32, device=dev)
-def sync(): torch.cuda.synchronize()
-maps = {}
+def sync(): torch.cuda.synchronize() if dev == "cuda" else torch.mps.synchronize() if dev == "mps" else None
+maps, sources = {}, {}
+import threading, subprocess
+class GridSource:                                   # one decoded live video; its frames fan out to the cells that use it
+    def __init__(self, url):
+        self.url, self.cells, self.ended, self.n = url, [], False, 0
+        self.W, self.H = [int(v) for v in GRID.split("x")]
+    def start(self):
+        # small probe: ffmpeg's default reads ~5 s of the stream before the first frame comes out
+        self.proc = subprocess.Popen(["ffmpeg", "-v", "error", "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "500000", "-analyzeduration", "200000",
+                                      "-i", self.url, "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{self.W}x{self.H}", "-"], stdout=subprocess.PIPE, bufsize=0)
+        threading.Thread(target=self.run, daemon=True).start()
+    def run(self):
+        size = self.W * self.H * 3
+        while True:
+            buf = bytearray()
+            while len(buf) < size:
+                chunk = self.proc.stdout.read(size - len(buf))
+                if not chunk: break
+                buf += chunk
+            if len(buf) < size: break
+            t, tw = time.perf_counter(), time.time(); full = np.frombuffer(bytes(buf), np.uint8).reshape(self.H, self.W, 3)
+            n = self.n
+            if FRAME_CODE:                          # the sender's frame number, 16 black/white blocks (x:y of the first, 36 px apart)
+                x, y = [int(v) for v in FRAME_CODE.split(":")]
+                v = [full[y + 5:y + 35, x + 36 * b + 4:x + 36 * b + 28].mean() for b in range(16)]
+                # a broken frame decodes grey (the empty cell is ~130): every block must read clearly black or white
+                if any(60 <= a <= 190 for a in v): continue
+                n = sum(1 << b for b in range(16) if v[b] > 190)
+                if self.cells and n < self.cells[0].N: continue   # never step back
+            for s in self.cells: s.push(n, full, t, tw)
+            self.n += 1
+        self.ended = True
 class Stream:
     def __init__(self, spec):
         f = spec.split(","); self.map_npz, self.video, self.prefix = f[:3]; self.truth = f[3] if len(f) > 3 else None
+        self.live = "|" in self.video
+        if self.live: url, rect, camj = self.video.split("|"); self.rect = [int(v) for v in rect.split(":")]; self.video = camj[:-5] if camj.endswith(".json") else camj
         if self.map_npz not in maps:
-            m = np.load(self.map_npz)
-            maps[self.map_npz] = dict(K=m["K"], size=[int(x) for x in m["size"]], n=m["n"], kp=T(m["kp"]), desc=torch.tensor(m["desc"], device=dev), X=m["X"],
+            m = np.load(self.map_npz); mk = MAPK or m["kp"].shape[1]   # XFeat returns the strongest first, so the first MAPK are the best
+            maps[self.map_npz] = dict(K=m["K"], size=[int(x) for x in m["size"]], n=np.minimum(m["n"], mk), kp=T(m["kp"][:, :mk]), desc=torch.tensor(m["desc"][:, :mk], device=dev), X=m["X"][:, :mk],
                                       pos=m["pos"], fwd=Rot.from_quat(m["quat"]).as_matrix()[:, :, 2], g=T(m["g"]))
         self.m = maps[self.map_npz]; self.K = self.m["K"]; RW, RH = self.m["size"]
         # frames: the pinhole video, at the map's size, with the OSD and the undistortion border masked (as cpr_track.py)
-        cam = self.cam = json.load(open(self.video + ".json")); W, H = cam["width"], cam["height"]; self.fps = cam.get("fps", 60)
+        cam = self.cam = json.load(open(self.video + ".json")); W, H = cam["width"], cam["height"]; self.fps = GRID_FPS if self.live else cam.get("fps", 60)
         Kfull = np.array([[cam["fx"], 0, cam["cx"]], [0, cam["fy"], cam["cy"]], [0, 0, 1]])
         fk = cam["source_fisheye"]; Kf = np.array([[fk["fx"], 0, fk["cx"]], [0, fk["fy"], fk["cy"]], [0, 0, 1]])
         m1, m2 = cv2.fisheye.initUndistortRectifyMap(Kf, np.array(fk["k"]), np.eye(3), Kfull, (W, H), cv2.CV_16SC2)
         osd = np.full((H, W), 255, np.uint8); osd[:82] = 0; osd[632:] = 0
         self.qvalid = T(cv2.resize((cv2.erode(cv2.remap(osd, m1, m2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST)) > 0
+        self.next = 0; self.hist = []; self.recs = []
+        if self.live:                               # cell pixel for every pinhole pixel of the map's size: 4:3 fisheye stretched to the cell
+            x0, y0, w, h = self.rect; Km = self.K
+            mx, my = cv2.fisheye.initUndistortRectifyMap(Kf, np.array(fk["k"]), np.eye(3), Km, (RW, RH), cv2.CV_32FC1)
+            self.mx, self.my = mx * w / W + x0, my * h / H + y0
+            self.frames, self.arrive, self.arrive_wall = {0: np.zeros((RH, RW, 3), np.uint8)}, {}, {}; self.N = 1   # a blank frame for the warm-up
+            src = sources.setdefault(url, GridSource(url)); src.cells.append(self); self.src = src
+            print(f"{self.prefix}: live cell {rect} of {url}, {len(self.m['pos'])} keyframes", flush=True); return
         cap = cv2.VideoCapture(self.video); self.frames = []
         while True:
             ok, fr = cap.read()
             if not ok or (NMAX and len(self.frames) >= NMAX): break
             self.frames.append(cv2.resize(cv2.cvtColor(fr, cv2.COLOR_BGR2RGB), (RW, RH), interpolation=cv2.INTER_AREA))
-        self.N = len(self.frames); self.next = 0; self.hist = []; self.recs = []
+        self.N = len(self.frames)
         print(f"{self.prefix}: {self.N} frames at {self.fps} fps, {len(self.m['pos'])} keyframes", flush=True)
+    def push(self, n, full, t, tw):                  # reader thread: a new frame of the source
+        self.frames[n] = cv2.cvtColor(cv2.remap(full, self.mx, self.my, cv2.INTER_LINEAR), cv2.COLOR_BGR2RGB)
+        if not self.arrive: self.t_base = t - n / self.fps   # when frame 0 would have arrived, even if it was lost
+        self.arrive[n], self.arrive_wall[n] = t, tw; self.frames.pop(n - 8, None); self.N = n + 1
     def nearest(self, R, p):                        # keyframes near the predicted pose, looking the same way
         d = np.linalg.norm(self.m["pos"] - p, axis=1); ang = np.degrees(np.arccos(np.clip(self.m["fwd"] @ R.as_matrix()[:, 2], -1, 1)))
         score = d / 1.5 + ang / 15; score[(d > 12) | (ang > 45)] = np.inf
@@ -61,6 +114,8 @@ xfeat = XFeat(top_k=TOPK)
 from modules.lighterglue import LighterGlue; LighterGlue.default_conf_xfeat["mp"] = False   # fp16: d05 solved 1,630 -> 761 frames, not faster
 LighterGlue.default_conf_xfeat["width_confidence"] = -1   # point pruning works only one pair at a time; the batch is worth more
 lg = LighterGlue().eval()
+if dev != "cuda":                                   # both pick cuda-or-cpu themselves
+    xfeat.dev = lg.dev = torch.device(dev); xfeat.net.to(dev); lg.net.to(dev)
 dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14").to(dev).eval()
 MEAN, STD = T([0.485, 0.456, 0.406])[None, :, None, None], T([0.229, 0.224, 0.225])[None, :, None, None]
 SIZE = T([[RW, RH]])
@@ -122,7 +177,8 @@ def middle(c):                                      # plan from the answers so f
             pred = predict(s.hist, i); plan.append(("track", pred, s.nearest(*pred), s.hist[-1][0]))
         else: plan.append(("reloc", None, None, None)); lost.append(b)
     if lost:
-        with torch.no_grad(): g = torch.nn.functional.normalize(dino((torch.nn.functional.interpolate(x[lost], (168, 224), mode="area") - MEAN) / STD), dim=1)
+        with torch.no_grad(): g = torch.nn.functional.normalize(dino(((torch.nn.functional.interpolate(x[lost], (168, 224), mode="area") if dev == "cuda" else   # MPS: area only for divisible sizes
+                                                                  torch.nn.functional.interpolate(x[lost], (168, 224), mode="bilinear", antialias=True)) - MEAN) / STD), dim=1)
         for b, gb in zip(lost, g): plan[b] = ("reloc", None, torch.topk(batch[b][0].m["g"] @ gb, RTOPK).indices.tolist(), None)
     pairs = [(q[b], batch[b][0], k) for b in range(len(batch)) for k in plan[b][2]]
     res = match_all(pairs); sync(); per, n = [], 0
@@ -140,13 +196,19 @@ def solve(c, b):                                    # CPU: PnP for one stream; r
     return (best, "reloc", time.perf_counter()) if best and best[2] >= RMIN else (None, None, time.perf_counter())
 def land(c, out, t0, clock0):                       # apply the answers to the streams and record them
     for (s, i), (r, how, tf) in zip(c["batch"], out):
-        done = clock0 + (tf - t0)
+        done = (tf - s.t_base) if s.live else clock0 + (tf - t0)   # live: on the cell's own time line
         if r is not None:
             if how == "reloc": s.hist = []
             s.hist = (s.hist + [(i, r[0], r[1])])[-6:]
-        s.recs.append(dict(i=i, done=done, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how) if r else {"how": "none"})))
+        lat = dict(lat=round((tf - s.arrive[i]) * 1000, 1), e2e=round((time.time() - (time.perf_counter() - tf) - SEND_T0 - i / s.fps) * 1000, 1) if SEND_T0 else None) if s.live else {}
+        s.recs.append(dict(i=i, done=done, **lat, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how) if r else {"how": "none"})))
     s_ = {k: c[k] * 1000 for k in ("feat", "match")}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
+REAL = any(s.live for s in streams)
 def pick(clock):                                    # the newest arrived frame of each stream not already in flight
+    if REAL:
+        batch = [(s, s.N - 1) for s in streams if s.N - 1 >= s.next]
+        for s, i in batch: s.next = i + 1
+        return batch, [s for s in streams if not s.src.ended or s.next < s.N]
     live = [s for s in streams if s.next < s.N]
     if LIVE: ready = [s for s in live if s.next / s.fps <= clock + 1e-9]; batch = [(s, max(s.next, min(s.N - 1, int(math.floor(clock * s.fps + 1e-9))))) for s in ready]
     else: batch = [(s, s.next) for s in live]
@@ -156,6 +218,10 @@ cycles = []
 for _ in range(3):                                  # warm up the kernels; the state it leaves is thrown away
     c = middle(front([(s, 0) for s in streams])); [solve(c, b) for b in range(len(streams))]
     for s in streams: s.hist = []
+if REAL:                                            # the warm-up's blank frame is not a frame of the source
+    for s in streams: s.frames, s.N, s.next = {}, 0, 0
+    for src in sources.values(): src.start()
+    print("listening", flush=True)
 cycles.clear(); clock, t_all, pending, steps = 0.0, time.time(), None, []
 while True:
     t0, clock0 = time.perf_counter(), clock
@@ -163,6 +229,7 @@ while True:
     batch, live = pick(clock)
     if not batch and not futs:
         if not live: break
+        if REAL: time.sleep(0.001); continue
         clock = min(s.next / s.fps for s in live); continue
     nxt = None
     if PIPE == 0 and futs is None and batch:        # one after another: this batch's whole cycle now
@@ -242,6 +309,11 @@ def finish(s):
     if LIVE and sol:
         lat = np.array([r["done"] - r["i"] / fps for r in sol]) * 1000; print(f"latency ms (frame arrives -> pose): p50 {pc(lat, 50):.1f} p90 {pc(lat, 90):.1f}")
     print(f"first drawn frame #{first}")
+    if s.live:
+        lat = [r["lat"] for r in s.recs]; e2e = [r["e2e"] for r in s.recs if r.get("e2e") is not None]
+        net = [(s.arrive_wall[i] - SEND_T0 - i / fps) * 1000 for i in s.arrive_wall] if SEND_T0 else []
+        print(f"live: {N} frames arrived; arrival -> pose ms p50 {pc(lat, 50):.1f} p90 {pc(lat, 90):.1f}" +
+              (f"; sent -> arrived ms p50 {pc(net, 50):.1f} p90 {pc(net, 90):.1f}; sent -> pose ms p50 {pc(e2e, 50):.1f} p90 {pc(e2e, 90):.1f}" if SEND_T0 else ""))
     if s.truth:
         tr = {p["i"]: p for p in json.load(open(s.truth))["poses"] if p.get("src") in ("ba", "ba-fill", "takeoff", "ground")}
         def errs(pairs):
