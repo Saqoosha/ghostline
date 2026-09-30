@@ -32,7 +32,7 @@ PnP の間に走らせる（`PIPE=2`、次の周の予測は 1 周古い答え�
 # 地図：d05 を試すなら d05 以外の飛行から（2,300 枚前後を約 20 秒）
 ~/mastenv/bin/python rt_map.py /mnt/c/Users/saqoosha/VDGS/scenes/FDF-2026-R6b-spirula-web-dvr2.ply \
   ../fdf-r6b-d05/dvr_pinhole.mp4.json map_fdf-r6b-d05.npz fdf-r6b-d07.json fdf-r6b-e02.json race-sf-knt.json race-sf-saqoosha.json race-sf-sena.json scan_cameras.json
-# 追跡：1 本なら 1 組、レースなら人数分を並べる（map,video,出力,正解）
+# 追跡：1 本なら 1 組、レースなら人数分を並べる（map,video,出力,参照＝オフラインの経路。同じ映像から作った姿勢で、独立した真値ではない）
 ~/mastenv/bin/python rt_track.py map_fdf-r6b-d05.npz,../fdf-r6b-d05/dvr_pinhole.mp4,p2_d05,truth-d05.json \
   map_race-sf-knt.npz,../race-sf-knt/dvr_pinhole.mp4,p4_knt,race-sf-knt.json ...
 ```

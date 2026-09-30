@@ -160,7 +160,11 @@ setupFlight()
 // each was finished). With "live" on, the dot and the path are what a live page would draw from them at video time t.
 let live: LiveDraw | null = null
 const lv = { on: $<HTMLInputElement>('live'), set: $<HTMLSelectElement>('liveset'), mode: $<HTMLSelectElement>('livemode'), delay: $<HTMLInputElement>('livedelay'), info: $('liveinfo') }
-async function loadLive(file: string) { live = new LiveDraw(await fetch(DATA + file).then(r => r.json()) as Answer[], DVR.fps) }
+async function loadLive(file: string) {             // a JSON array of solved answers, or rt_track.py's .jsonl as it is
+  const text = await fetch(DATA + file).then(r => r.text())
+  const rows = (text.trimStart().startsWith('[') ? JSON.parse(text) : text.split('\n').filter(l => l.trim()).map(l => JSON.parse(l))) as Answer[]
+  live = new LiveDraw(rows.filter(a => a.how !== 'none'), DVR.fps)
+}
 fetch(DATA + 'index.json').then(r => r.ok ? r.json() : null).then(ix => {
   if (!ix?.live?.length) return
   lv.set.replaceChildren(...ix.live.map((l: { file: string; label: string }) => new Option(l.label, l.file)))
