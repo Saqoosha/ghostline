@@ -52,6 +52,15 @@ class GridSource:                                   # one decoded live video; it
         self.url, self.cells, self.ended, self.n = url, [], False, 0
         self.W, self.H = [int(v) for v in GRID.split("x")]
     def start(self):
+        # GRID_GST: receive RTP over SRT with GStreamer instead (rt_send.py GST=1). Mac-local, send -> decoded: ffmpeg + mpegts
+        # ~200 ms, GStreamer + mpegts 164 ms, GStreamer + RTP 125 ms (all with SRT latency 80 ms); mpegts itself holds ~35 ms.
+        # The url's port and latency are reused; the url field still names the source the cells share.
+        if os.environ.get("GRID_GST"):
+            port = self.url.split("//")[1].split("?")[0].split(":")[-1]; lat = int(self.url.split("latency=")[1].split("&")[0]) // 1000 if "latency=" in self.url else 80
+            cmd = (f"gst-launch-1.0 -q srtsrc uri=srt://:{port}?mode=listener latency={lat} ! application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000"
+                   f" ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! videoscale ! video/x-raw,format=BGR,width={self.W},height={self.H} ! fdsink fd=1 sync=false")
+            self.proc = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE, bufsize=0)
+            threading.Thread(target=self.run, daemon=True).start(); return
         # small probe: ffmpeg's default reads ~5 s of the stream before the first frame comes out
         self.proc = subprocess.Popen(["ffmpeg", "-v", "error", "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "500000", "-analyzeduration", "200000",
                                       "-i", self.url, "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{self.W}x{self.H}", "-"], stdout=subprocess.PIPE, bufsize=0)

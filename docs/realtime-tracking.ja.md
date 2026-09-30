@@ -92,12 +92,25 @@ WSL の Tailscale の住所は `100.68.63.104`（wsl4090）。WSL の ffmpeg は
 3 人とも 25 Hz、答えの位置 p50 0.36・0.36・0.56 m（ファイルから読んだときは 0.29〜0.46 m）。**送ってから姿勢が出るまで p50 278 ms**
 （エンコードとデコード約 120 ms、SRT 80 ms、回線約 20 ms、tracker 約 58 ms）。
 
+**GStreamer で RTP を SRT に載せると 78 ms 短い**（`rt_send.py GST=1 SIZE=854x480` → `rt_track.py GRID_GST=1`）：Mac → オフィスで送ってから届くまで
+p50 142 ms（ffmpeg＋mpegts は 220）、送ってから答えまで 200 ms（278）、精度は同じ。Mac の中だけで測ると、送ってからデコードまで ffmpeg＋mpegts over SRT 約 200 ms、
+GStreamer＋mpegts over SRT 164 ms、**GStreamer＋RTP over SRT 125 ms**、RTP over 素の UDP 47 ms（再送が無いのでインターネットには向かない）。mpegts そのものが約 35 ms、
+ffmpeg の受信側が約 30 ms 溜めていた。SRT はパケットの区切りを保つので、RTP を `mtu=1316` で割ればそのまま載る。WSL には GStreamer を root で apt で入れた
+（`wsl -d Ubuntu-24.04 -u root`。saqoosha の sudo はパスワードが要る）。会場の送り手は OBS の代わりに GStreamer の 1 行で書ける見込み
+（`ndisrc ! ndisrcdemux ! videoconvert ! videoscale ! x264enc tune=zerolatency ! rtph264pay mtu=1316 ! srtsink`。`ndisrc` は Mac の Homebrew 版にある。本物の NDI では未確認）。
+**解像度は遅延にも効かない**（x264 で 1280×720〜640×360 が 115〜117 ms）。
+
 遅延で効いたこと（Mac の中だけで組んで部品ごとに測った。送ってからデコードまで）：
 - **受信側 ffmpeg の先読みを絞る**（`-probesize 500000 -analyzeduration 200000`）。既定だと最初の約 5 秒のフレームが消えた
 - **Mac のハードウェアエンコーダは遅い**：VideoToolbox は H.264 も HEVC も約 285 ms、x264 / x265 の `-tune zerolatency` は 121 / 137 ms。
   会場の PC も OBS のソフトウェアエンコード（x264 か x265、zerolatency）にする
 - **SRT の待ちは設定どおりに足される**（120 → 20 ms で 100 ms 減った）。回線の往復は約 40 ms。切れやすい回線なら待ちを伸ばす
 - 効かなかった：デコーダのスレッド（1 本・スライス並列）、送り手のフレームレート調整。コーデック込みの下限約 120 ms の中身は未解明
+
+**解像度は効かず、ビットレートだけが効く**（d05、30 fps、HEVC NVENC、表示は 100 ms 遅らせた内挿で採点）。同じビットレートなら 320×240・480×360・640×480 が
+ほぼ同じ：1 人 2 Mbps で表示の p50 0.31 m・p90 1.04〜1.18 m、1 Mbps で 0.35 m・1.36〜1.42 m。640×480 の 4 Mbps で p90 0.85 m。4 人なら 8 Mbps が目安
+（回線が細ければ 4 Mbps）。縮めても帯域は減らず、会場のエンコードが軽くなるだけ。理由は未確認（画が動きブレと圧縮でもともとぼけている、XFeat は
+8 分の 1 の格子で特徴を探す、の推測）。tracker 自体を小さい画で回せば速くなるかは未試行。
 
 1080p の 2×2 なら 1 マスは 4:3 に戻して 720×540 で、tracker の 640×480 より大きい。OBS の出力を 1704×960 に縮めれば 1 マスがちょうど
 640×480 になり、tracker には何も失わない（画素は 79%）。未計測。
