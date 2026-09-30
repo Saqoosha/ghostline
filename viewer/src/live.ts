@@ -1,17 +1,18 @@
 // What a live page would draw from the tracker's answers as they arrive (rt_track.py's answer log, replayed at the
-// time each answer was finished). The drawing is done here, not in the tracker: live, the page receives raw answers
-// over a socket and decides how to show them.
+// time each answer was finished). The drawing is done here, not in the tracker: live, the page is meant to receive
+// raw answers over a socket (not built yet) and decide how to show them.
 //   dot   'extrap': a quadratic over the newest answers, carried to the present frame (no added delay)
 //         'delay' : the frame `delay` seconds ago, fitted between the answers on both sides of it; when no answer after
-//                   it has arrived yet the dot holds still, and after `lostAfter` seconds it is shown as lost
+//                   it has arrived yet, or the answers around it are too far apart (tracking was lost), the dot
+//                   holds at the answer before it, and after `lostAfter` seconds it is shown as lost
 //   trail every frame's position refitted from all answers that have arrived, so a guess is corrected as soon as the
 //         next answer lands; frames older than `settle` seconds are left as they are
 export type Answer = { i: number; done: number; pos: number[]; quat: number[]; inl: number; how: string }
 export type Dot = { pos: number[]; quat: number[]; state: 'interp' | 'extrap' | 'hold' | 'lost'; frame: number }
 
-const W = 15                                          // frames either side in a fit (0.25 s at 60 fps)
+const WS = 0.25                                       // seconds either side in a fit
 
-function fit(ans: Answer[], j: number): number[] | null {   // weighted quadratic through the answers near frame j, at j
+function fit(ans: Answer[], j: number, W: number): number[] | null {   // weighted quadratic through the answers within W frames of j, at j
   let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0; const b0 = [0, 0, 0], b1 = [0, 0, 0], b2 = [0, 0, 0]; let n = 0
   for (const a of ans) {
     const x = a.i - j; if (Math.abs(x) > W) continue
@@ -42,28 +43,30 @@ export class LiveDraw {
   }
   dot(t: number, mode: 'extrap' | 'delay', delay: number, lostAfter = 0.3): Dot | null {
     const got = this.arrived(t); if (!got.length) return null
+    const W = WS * this.fps
     const now = Math.floor(t * this.fps + 1e-3), last = got[got.length - 1]
     if (mode === 'extrap') {
       const recent = got.filter(a => a.i > now - 2 * W)
-      const pos = (recent.length >= 4 ? fit(recent, now) : null) ?? last.pos
+      const pos = (recent.length >= 4 ? fit(recent, now, W) : null) ?? last.pos
       return { pos, quat: last.quat, state: now - last.i > lostAfter * this.fps ? 'lost' : 'extrap', frame: now }
     }
     const j = Math.floor((t - delay) * this.fps + 1e-3)
     let before: Answer | null = null, after: Answer | null = null
     for (const a of got) { if (a.i <= j) before = a; if (a.i >= j && !after) after = a }
     if (before && after && after.i - before.i <= 2 * W) {
-      const pos = fit(got, j) ?? before.pos, u = after.i === before.i ? 0 : (j - before.i) / (after.i - before.i)
+      const pos = fit(got, j, W) ?? before.pos, u = after.i === before.i ? 0 : (j - before.i) / (after.i - before.i)
       return { pos, quat: slerp(before.quat, after.quat, u), state: 'interp', frame: j }
     }
-    // nothing after frame j yet: hold at the newest answer (the page never draws a guess ahead of it)
-    return { pos: last.pos, quat: last.quat, state: (j - last.i) / this.fps > lostAfter ? 'lost' : 'hold', frame: last.i }
+    // no answer after frame j yet, or a gap around it: hold at the answer before j (never at one ahead of it)
+    if (!before) return null                          // before the first answer
+    return { pos: before.pos, quat: before.quat, state: (after || (j - before.i) / this.fps > lostAfter) ? 'lost' : 'hold', frame: before.i }
   }
   trailAt(t: number, upto: number, settle = 0.5): (number[] | null)[] {
     if (t < this.trailT) this.trail = []              // seeked back: start again
     this.trailT = t
-    const got = this.arrived(t), from = Math.max(0, upto - Math.ceil(settle * this.fps))
-    for (let k = this.trail.length; k < from; k++) this.trail[k] = fit(got.filter(a => Math.abs(a.i - k) <= W), k)
-    for (let k = from; k <= upto; k++) this.trail[k] = fit(got.filter(a => Math.abs(a.i - k) <= W), k)
+    const got = this.arrived(t), from = Math.max(0, upto - Math.ceil(settle * this.fps)), W = WS * this.fps
+    for (let k = this.trail.length; k < from; k++) this.trail[k] = fit(got.filter(a => Math.abs(a.i - k) <= W), k, W)
+    for (let k = from; k <= upto; k++) this.trail[k] = fit(got.filter(a => Math.abs(a.i - k) <= W), k, W)
     this.trail.length = upto + 1
     return this.trail
   }

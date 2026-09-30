@@ -6,21 +6,21 @@ Several pilots at once: every cycle takes the newest arrived frame of each strea
 batch and every (frame, keyframe) pair - relocalization candidates included - through LighterGlue in one batch, and the
 PnPs in threads. Batching is the point: 8 pairs in one LighterGlue call take ~19 ms, one pair alone ~14 ms (4090).
 LIVE=1 replays at the videos' rate: frame i arrives at i/fps, a cycle takes the newest frame of each stream that has
-arrived and the ones in between are dropped, as on a capture card. The pose the viewer would draw at each frame comes
-from the answers finished by then - latency and drops included. Scored against the offline poses (truth, e.g.
-poses60_pad.json; frames the offline solve itself only interpolated are left out).
+arrived and the ones in between are dropped, as on a capture card. Scored against the offline poses (truth, e.g.
+poses60_pad.json; src ba / ba-fill / takeoff / ground). The page draws its own dot from the answers (viewer/src/live.ts,
+100 ms behind); the .json / _trail.json here are the extrapolated dot and trail, kept for scoring the replay.
 Live input (GRID=WxH): a 2x2 broadcast grid (the Event VRX over NDI -> OBS -> SRT) instead of files. The video field is
 "<url>|x:y:w:h|<cam.json>": one ffmpeg per url decodes it on a thread, and each frame's cell (the pilot's 4:3 fisheye
 stretched to the cell) is remapped straight to the map's pinhole size. Then the clock is the real one, each cycle takes
 the newest frame of every cell, and each answer records its latency from the frame's arrival (and, with SEND_T0 = the
-sender's wall-clock start, from the moment it was sent - the two machines' clocks must agree).
+sender's wall-clock start and FRAME_CODE, from the moment it was sent - the two machines' clocks must agree).
 usage (mastenv + kornia, ~/xfeat): rt_track.py map.npz,dvr_pinhole.mp4,out_prefix[,truth.json] [more streams ...]
   GRID=1280x720 GRID_FPS=30 rt_track.py "map.npz,srt://0.0.0.0:9000?mode=listener|0:0:640:360|cam.json,out_prefix" ...
-  writes per stream out_prefix.jsonl (per processed frame: pose, how it was found), out_prefix.json (the live dot: the
-  drawn pose of every frame, poses60 format, for the viewer) and out_prefix_trail.json (the trail, redrawn TRAIL_L late)
+  writes per stream out_prefix.jsonl (per processed frame: pose, how it was found; the viewer's live replay loads its
+  solved rows as a JSON array), out_prefix.json (the extrapolated dot, poses60 format) and out_prefix_trail.json
 env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s without an answer before relocalizing),
      RELOC_TOPK (5), RELOC_MIN (50), TOPK (2048) keypoints on the frame, MAPK (0 = all) per keyframe, NMAX (0 = all frames), BATCH (16 pairs per call),
-     FRESH (0.1 s: an answer this old or newer is drawn "rt"), KQ (1e4, the drawn position's jerk density (m/s^3)^2 s),
+     FRESH (0.1 s: an answer this old or newer is labelled "rt", older "rt-carry"), KQ (1e4, the drawn position's jerk density (m/s^3)^2 s),
      BLEND (0.025 s; 0 = draw the filter as it jumps), TRAIL_L (0.2 s the trail is drawn late), TRAIL_W (0.25 s either
      side in its fit), PIPE (2: overlap the next cycle's GPU work with this cycle's PnP, below),
      FLOW (0; 1 = carry points to the next frame with LK instead of matching, below), FLOW_EVERY (8), FLOW_RESEED (60), FLOW_MIN (30)"""
@@ -65,7 +65,12 @@ class GridSource:                                   # one decoded live video; it
         self.proc = subprocess.Popen(["ffmpeg", "-v", "error", "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "500000", "-analyzeduration", "200000",
                                       "-i", self.url, "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{self.W}x{self.H}", "-"], stdout=subprocess.PIPE, bufsize=0)
         threading.Thread(target=self.run, daemon=True).start()
-    def run(self):
+    def run(self):                                  # a failure here must end the run, not leave the loop waiting forever
+        try: self.read()
+        finally:
+            self.ended = True; rc = self.proc.poll()
+            if rc: print(f"{self.url}: decoder exited with {rc}", flush=True)
+    def read(self):
         size = self.W * self.H * 3
         while True:
             buf = bytearray()
@@ -85,7 +90,6 @@ class GridSource:                                   # one decoded live video; it
                 if self.cells and n < self.cells[0].N: continue   # never step back
             for s in self.cells: s.push(n, full, t, tw)
             self.n += 1
-        self.ended = True
 class Stream:
     def __init__(self, spec):
         f = spec.split(","); self.map_npz, self.video, self.prefix = f[:3]; self.truth = f[3] if len(f) > 3 else None
@@ -121,7 +125,8 @@ class Stream:
     def push(self, n, full, t, tw):                  # reader thread: a new frame of the source
         self.frames[n] = cv2.cvtColor(cv2.remap(full, self.mx, self.my, cv2.INTER_LINEAR), cv2.COLOR_BGR2RGB)
         if not self.arrive: self.t_base = t - n / self.fps   # when frame 0 would have arrived, even if it was lost
-        self.arrive[n], self.arrive_wall[n] = t, tw; self.frames.pop(n - 8, None); self.N = n + 1
+        self.arrive[n], self.arrive_wall[n] = t, tw; self.N = n + 1
+        for k in [k for k in self.frames if k < n - 30]: del self.frames[k]   # codes skip on drops; 30 outlasts a slow cycle
     def nearest(self, R, p, n=None, max_ang=45, per_deg=15):   # keyframes near the predicted pose, looking about the same way
         d = np.linalg.norm(self.m["pos"] - p, axis=1); ang = np.degrees(np.arccos(np.clip(self.m["fwd"] @ R.as_matrix()[:, 2], -1, 1)))
         score = d / 1.5 + ang / per_deg; score[(d > 12) | (ang > max_ang)] = np.inf
@@ -283,30 +288,34 @@ if REAL:                                            # the warm-up's blank frame 
     for src in sources.values(): src.start()
     print("listening", flush=True)
 cycles.clear(); clock, t_all, pending, steps = 0.0, time.time(), None, []
-while True:
-    t0, clock0 = time.perf_counter(), clock
-    futs = [pool.submit(solve, pending, b) for b in range(len(pending["batch"]))] if pending else None
-    batch, live = pick(clock)
-    if not batch and not futs:
-        if not live: break
-        if REAL: time.sleep(0.001); continue
-        clock = min(s.next / s.fps for s in live); continue
-    nxt = None
-    if PIPE == 0 and futs is None and batch:        # one after another: this batch's whole cycle now
-        nxt = middle(front(batch)); futs = [pool.submit(solve, nxt, b) for b in range(len(batch))]; pending, nxt = nxt, None
-    elif batch:
-        nxt = front(batch)
-        if PIPE >= 2: nxt = middle(nxt)
-    if futs is not None:
-        tw = time.perf_counter(); out = [f.result() for f in futs]; wait = time.perf_counter() - tw
-        land(pending, out, t0, clock0); cycles[-1]["wait"] = wait * 1000
-    if nxt is not None and PIPE == 1: nxt = middle(nxt)
-    pending = nxt; clock = clock0 + (time.perf_counter() - t0); steps.append((time.perf_counter() - t0) * 1000)
-    if len(steps) % 500 == 0: print(f"{len(steps)} steps, {(time.time() - t_all) / len(steps) * 1000:.1f} ms each", flush=True)
+def loop():
+  global clock, pending
+  while True:
+      t0, clock0 = time.perf_counter(), clock
+      futs = [pool.submit(solve, pending, b) for b in range(len(pending["batch"]))] if pending else None
+      batch, live = pick(clock)
+      if not batch and not futs:
+          if not live: break
+          if REAL: time.sleep(0.001); continue
+          clock = min(s.next / s.fps for s in live); continue
+      nxt = None
+      if PIPE == 0 and futs is None and batch:        # one after another: this batch's whole cycle now
+          nxt = middle(front(batch)); futs = [pool.submit(solve, nxt, b) for b in range(len(batch))]; pending, nxt = nxt, None
+      elif batch:
+          nxt = front(batch)
+          if PIPE >= 2: nxt = middle(nxt)
+      if futs is not None:
+          tw = time.perf_counter(); out = [f.result() for f in futs]; wait = time.perf_counter() - tw
+          land(pending, out, t0, clock0); cycles[-1]["wait"] = wait * 1000
+      if nxt is not None and PIPE == 1: nxt = middle(nxt)
+      pending = nxt; clock = clock0 + (time.perf_counter() - t0); steps.append((time.perf_counter() - t0) * 1000)
+      if len(steps) % 500 == 0: print(f"{len(steps)} steps, {(time.time() - t_all) / len(steps) * 1000:.1f} ms each", flush=True)
+try: loop()
+except KeyboardInterrupt: print("stopped", flush=True)   # a live feed never ends by itself; keep what was measured
 pc = lambda a, q: float(np.percentile(a, q)) if len(a) else float("nan")
 print(f"PIPE {PIPE}: steps {len(steps)}, ms p50 {pc(steps, 50):.1f} p90 {pc(steps, 90):.1f}; streams per cycle p50 {pc([c['n'] for c in cycles], 50):.0f}, pairs p50 {pc([c['pairs'] for c in cycles], 50):.0f}; " +
       ", ".join(f"{k} p50 {pc([c[k] for c in cycles if k in c], 50):.1f}" for k in ("feat", "match", "wait")) + " (wait: for the PnP threads after the GPU work)")
-# ---- per stream: what the viewer draws at frame j, from the answers finished by j/fps. Rotation: the newest answer
+# ---- per stream: the extrapolated dot at frame j, from the answers finished by j/fps (scoring only; the page draws its own). Rotation: the newest answer
 # carried at constant angular velocity. Position: a constant-acceleration Kalman filter over the answers (measurement
 # sigma 0.25 m at 200 inliers, larger with fewer), then a new answer's jump is spread over BLEND instead of drawn at once.
 # The answers are what wobbles (0.25 m each at ~20 Hz), not the extrapolation: capping the carried speed at the recent
@@ -317,6 +326,7 @@ def Qm(dt): return KQ * np.array([[dt**5 / 20, dt**4 / 8, dt**3 / 6], [dt**4 / 8
 FRAME = "web: x east, y up, z south, metres; quat (x,y,z,w) world-from-camera, COLMAP camera axes"
 def finish(s):
     N, fps, cam = s.N, s.fps, s.cam
+    if not N: print(f"== {s.prefix}: no frames arrived"); return
     with open(s.prefix + ".jsonl", "w") as f:
         for r in s.recs: f.write(json.dumps(r) + "\n")
     sol = [r for r in s.recs if r["how"] != "none"]; drawn, k, h = [], 0, []; kx = kP = kf = None; off, last = np.zeros(3), None
@@ -352,9 +362,11 @@ def finish(s):
         fi = np.array([r["i"] for r in sol]); dn = np.array([r["done"] if LIVE else r["i"] / fps for r in sol]); AP = np.array([r["pos"] for r in sol])
         wt = np.sqrt(np.minimum([r["inl"] for r in sol], 400) / 200) / np.array([FLOW_SIG if r["how"] == "flow" else 1 for r in sol]); L, Wf = TRAIL_L * fps, TRAIL_W * fps
         for j in range(N):
-            m = (dn <= (j + L) / fps + 1e-9) & (np.abs(fi - j) <= Wf)
-            a, b = np.searchsorted(fi, j, "right") - 1, np.searchsorted(fi, j)
-            if m.sum() < 4 or a < 0 or b >= len(fi) or fi[b] - fi[a] > 2 * Wf: trail.append(None); continue
+            got = dn <= (j + L) / fps + 1e-9; m = got & (np.abs(fi - j) <= Wf)
+            ga = np.nonzero(got & (fi <= j))[0]; gb = np.nonzero(got & (fi >= j))[0]   # only answers that have arrived by then
+            if m.sum() < 4 or not len(ga) or not len(gb): trail.append(None); continue
+            a, b = ga[-1], gb[0]
+            if fi[b] - fi[a] > 2 * Wf: trail.append(None); continue
             p = np.polyfit(fi[m] - j, AP[m], 2, w=wt[m])[-1]
             R = Rot.from_quat(sol[a]["quat"]) if a == b else Slerp([fi[a], fi[b]], Rot.from_quat([sol[a]["quat"], sol[b]["quat"]]))([j])[0]
             trail.append((R, p))
