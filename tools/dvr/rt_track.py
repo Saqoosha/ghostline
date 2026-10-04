@@ -24,8 +24,13 @@ env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s w
      BLEND (0.025 s; 0 = draw the filter as it jumps), TRAIL_L (0.2 s the trail is drawn late), TRAIL_W (0.25 s either
      side in its fit), PIPE (2: overlap the next cycle's GPU work with this cycle's PnP, below),
      FLOW (0; 1 = carry points to the next frame with LK instead of matching, below), FLOW_EVERY (8), FLOW_RESEED (60), FLOW_MIN (30),
-     PUSH (0; a port: answers out as server-sent events while it runs, for viewer/live.html)"""
-import json, sys, os, time, math, numpy as np, torch, cv2
+     PUSH (0; a port: answers out as server-sent events while it runs, for viewer/live.html),
+     INFO (0; 1 = rows carry H), BA (0; seconds of answers solved again together after every answer, below)"""
+import os
+# One BLAS thread. numpy's matrices here are small (the BA's 150 x 150 system at most), and OpenBLAS otherwise starts a
+# thread per core for them: on a 32-core machine that took the tracker from 54 to 33 Hz with BA on, the solve itself 0.2 ms.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+import json, sys, time, math, numpy as np, torch, cv2
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.expanduser(os.environ.get("XFEAT_DIR", "~/xfeat"))); from modules.xfeat import XFeat
 from scipy.spatial.transform import Rotation as Rot, Slerp
@@ -45,6 +50,15 @@ FLOW, FLOW_EVERY, FLOW_RESEED, FLOW_MIN = int(E("FLOW", 0)), int(E("FLOW_EVERY",
 GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30), E("SEND_T0", 0), os.environ.get("FRAME_CODE")
 # PUSH (port): every answer goes out the moment it is solved, as server-sent events (one JSON object per event: the
 # .jsonl row plus "stream" and "fps"), for the live page (viewer/live.html). 0 = off.
+INFO = int(E("INFO", 0))                           # 1: every answer row carries "H", its 6x6 information (upper triangle, 21 numbers)
+# BA (s): after every answer, the answers of the last BA seconds are solved again together - each one a 6-dof measurement
+# with its own information, tied by priors on linear and angular acceleration - and the row carries the revised poses
+# ("win": [frame, x, y, z, qx, qy, qz, qw] per answer in the window). The answer itself (pos, quat) stays the raw one.
+# Against the page's quadratic through raw positions (the Whoop clip, drawn 0.1 s late): wobble 3.0 -> 2.2 cm, error
+# p90 24 -> 21.5 cm, p99 80 -> 51 cm, rotation p90 3.55 -> 2.83 deg; at 0.2 s and more the two draw the same line.
+# BA_PX is the pixel noise the information is read at, BA_ACC m/s^2 and BA_ALPHA rad/s^2 the priors (a Tiny Whoop
+# indoors; only their ratio to BA_PX matters: 8 / 3 / 10 and 16 / 6 / 20 solve the same).
+BA, BA_PX, BA_ACC, BA_ALPHA = E("BA", 0), E("BA_PX", 8), E("BA_ACC", 3), E("BA_ALPHA", 10)
 PUSH = int(E("PUSH", 0)); subs = []
 if PUSH:
     import http.server, queue, threading
@@ -198,7 +212,45 @@ def pnp(K, uv, X):
     ok, rv, tv, inl = cv2.solvePnPRansac(X.astype(np.float64), uv.astype(np.float64), K, None, iterationsCount=500, reprojectionError=3.0, flags=cv2.USAC_MAGSAC)
     if not ok or inl is None or len(inl) < 12: return None
     rv, tv = cv2.solvePnPRefineLM(X[inl[:, 0]].astype(np.float64), uv[inl[:, 0]].astype(np.float64), K, None, rv, tv)
-    Rw = cv2.Rodrigues(rv)[0]; return Rot.from_matrix(Rw.T), -Rw.T @ tv[:, 0], len(inl), inl[:, 0]
+    Rw = cv2.Rodrigues(rv)[0]; c = -Rw.T @ tv[:, 0]
+    return Rot.from_matrix(Rw.T), c, len(inl), inl[:, 0], (info(K, Rw, c, X[inl[:, 0]]) if INFO or BA else None)
+def info(K, Rw, c, X):
+    # What this answer's own points say about its pose: the 6x6 information J^T J of the reprojection at the solution, for
+    # 1 px of noise, over (rotation about the camera's own axes, position in the world) - cpr_ba.py's frame_terms. A
+    # smoother over several answers needs it: an answer is tight across some directions and loose along others, and its
+    # rotation and position errors go together.
+    d = (X - c) @ Rw.T; z = d[:, 2]; fx, fy = K[0, 0], K[1, 1]
+    Ju = np.zeros((len(d), 2, 3)); Ju[:, 0, 0] = fx / z; Ju[:, 0, 2] = -fx * d[:, 0] / z**2; Ju[:, 1, 1] = fy / z; Ju[:, 1, 2] = -fy * d[:, 1] / z**2
+    dx = np.zeros((len(d), 3, 3)); dx[:, 0, 1], dx[:, 0, 2], dx[:, 1, 0], dx[:, 1, 2], dx[:, 2, 0], dx[:, 2, 1] = -d[:, 2], d[:, 1], d[:, 2], -d[:, 0], -d[:, 1], d[:, 0]
+    J = np.concatenate([Ju @ dx, Ju @ (-Rw)[None]], axis=2)
+    return np.einsum("mki,mkj->ij", J, J)
+def smooth(win):
+    # win: [(t, frame, Rot, pos, H)] in time order -> revised (quat, pos) per entry. Unknown per answer: a small turn about
+    # its own camera axes and its position; every answer's reprojection is the quadratic its H gives around its own
+    # solution, so the system is linear. Answers more than 0.3 s apart are not tied (tracking was lost between them).
+    # Built with whole-array operations: looped per answer it took the main thread ~10 ms on a 25-answer window and
+    # the tracker fell from 54 to 34 Hz on a 60 fps flight.
+    n = len(win); N = 6 * n; t = np.array([w[0] for w in win]); Rm = np.stack([w[5] for w in win]); Pm = np.stack([w[3] for w in win])
+    Hs = np.stack([w[4] for w in win]) / BA_PX ** 2
+    M = np.zeros((N, N)); Mv = M.reshape(n, 6, n, 6); k = np.arange(n); Mv[k, :, k, :] = Hs
+    rhs = np.zeros((n, 6)); rhs[:] = np.einsum("nij,nj->ni", Hs[:, :, 3:], Pm)
+    if n >= 3:
+        h1, h2 = t[1:-1] - t[:-2], t[2:] - t[1:-1]; hm = (h1 + h2) / 2; ok = (h1 > 0) & (h2 > 0) & (h1 <= 0.3) & (h2 <= 0.3)
+        c = np.stack([1 / h1, -1 / h1 - 1 / h2, 1 / h2], 1) / hm[:, None] * ok[:, None]            # (n-2, 3): second difference over uneven steps
+        Rrel = np.einsum("nji,njk->nik", Rm[:-1], Rm[1:])                                          # R_k^T R_{k+1}
+        w = Rot.from_matrix(Rrel).as_rotvec() / (t[1:] - t[:-1])[:, None]
+        e = (w[1:] - w[:-1]) / hm[:, None] / BA_ALPHA * ok[:, None]                                # angular acceleration in answer k's axes
+        ne = np.linalg.norm(e, axis=1); sw = np.where(ne > 3.0, np.sqrt(3.0 / np.maximum(ne, 1e-12)), 1.0)   # Huber at 3 sigma
+        m = n - 2; J = np.zeros((m, 6, n, 6)); r = np.zeros((m, 6)); j = np.arange(m); I3 = np.eye(3)
+        ca = c / BA_ALPHA * sw[:, None]
+        J[j, :3, j, :3] = ca[:, 0, None, None] * np.transpose(Rrel[:-1], (0, 2, 1))                # R_k^T R_{k-1}
+        J[j, :3, j + 1, :3] = ca[:, 1, None, None] * I3
+        J[j, :3, j + 2, :3] = ca[:, 2, None, None] * Rrel[1:]
+        r[:, :3] = e * sw[:, None]
+        for a in range(3): J[j, 3:, j + a, 3:] = (c[:, a] / BA_ACC)[:, None, None] * I3            # linear acceleration (residual 0 at the unknowns)
+        Jm = J.reshape(6 * m, N); M += Jm.T @ Jm; rhs -= (Jm.T @ r.reshape(-1)).reshape(n, 6)
+    x = np.linalg.solve(M + 1e-9 * np.eye(N), rhs.reshape(-1)).reshape(n, 6)
+    return (Rot.from_matrix(Rm) * Rot.from_rotvec(x[:, :3])).as_quat(), x[:, 3:]
 def predict(hist, i):                               # constant velocity from the last few solved frames (frame, Rot, pos)
     if len(hist) < 2: return hist[-1][1], hist[-1][2]
     fi = np.array([h[0] for h in hist], float); vel = np.polyfit(fi, np.array([h[2] for h in hist]), 1)[0]
@@ -289,7 +341,13 @@ def land(c, out, t0, clock0):                       # apply the answers to the s
             if how == "reloc": s.hist = []
             s.hist = (s.hist + [(i, r[0], r[1])])[-6:]; s.last = s.hist[-1]
         lat = dict(lat=round((tf - s.arrive[i]) * 1000, 1), e2e=round((time.time() - (time.perf_counter() - tf) - SEND_T0 - i / s.fps) * 1000, 1) if SEND_T0 else None) if s.live else {}
-        s.recs.append(dict(i=i, done=done, plan=c["plan"][b][0], **lat, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how) if r else {"how": "none"})))
+        win = {}
+        if BA and r is not None and r[4] is not None:
+            t = (s.arrive[i] - s.t_base) if s.live else i / s.fps   # when the frame was taken, as near as this side knows
+            s.win = [w for w in getattr(s, "win", []) if w[0] > t - BA and w[1] < i] + [(t, i, r[0], r[1], r[4], r[0].as_matrix())]
+            if len(s.win) >= 3:
+                qs, ps = smooth(s.win); win = {"win": [[w[1], *p_, *q_] for w, p_, q_ in zip(s.win, np.round(ps, 4).tolist(), np.round(qs, 5).tolist())]}
+        s.recs.append(dict(i=i, done=done, plan=c["plan"][b][0], **lat, **win, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how, **({"H": [float(f"{v:.6g}") for v in r[4][np.triu_indices(6)]]} if len(r) > 4 and r[4] is not None else {})) if r else {"how": "none"})))
         if subs:
             m = json.dumps(dict(stream=os.path.basename(s.prefix), fps=s.fps, **s.recs[-1]))
             for q in list(subs): q.put(m)

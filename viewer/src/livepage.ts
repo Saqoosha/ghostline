@@ -160,13 +160,24 @@ function drawSegments(pts: pc.Vec3[], col: pc.Color, eye: pc.Vec3, pxWorld: numb
   frMat.emissive = col; frMat.update()
 }
 
+// --- the tracker's revisions (rt_track.py BA): with every answer it sends the poses of the last half second solved again
+// together ("win": [frame, x, y, z, qx, qy, qz, qw]). An answer is drawn at the newest revision that has arrived; the raw
+// answer is kept so the box can be unticked to compare.
+type Stored = Answer & { raw: { pos: number[]; quat: number[] }; src: number }
+const byFrame = new Map<number, Stored>()             // the tracker's frame number -> the answer
+const baIn = $<HTMLInputElement>('ba'); if (stored.ba === false) baIn.checked = false
+const revise = (win: number[][] | undefined) => { if (win && baIn.checked) for (const w of win) { const a = byFrame.get(w[0]); if (a) { a.pos = w.slice(1, 4); a.quat = w.slice(4, 8) } } }
+const toRaw = () => { for (const a of byFrame.values()) { a.pos = a.raw.pos; a.quat = a.raw.quat } }
+let events: { due: number; win: number[][] }[] = [], evK = 0, lastRt = 0   // replay: the revisions, in the order they came
+
 // --- the feed
 let trailFrom = 0
 let live: LiveDraw | null = null, offset = Infinity, fps = 60, lastMsg = 0, lastLat = 0, lastInl = 0, base = 0
 const got: number[] = []                              // arrival times of solved answers, for the rate
 const nowS = () => performance.now() / 1000
 let lastTau = 0; const offs: number[][] = []
-function reset() { live = null; offset = Infinity; got.length = 0; offs.length = 0; base = 0; trailFrom = 0 }
+function reset() { live = null; offset = Infinity; got.length = 0; offs.length = 0; base = 0; trailFrom = 0; byFrame.clear() }
+baIn.onchange = () => { store({ ba: baIn.checked }); toRaw(); evK = 0; lastRt = 0; resmooth = true }   // live: revisions start again with the next answer
 $('clear').onclick = () => { if (live) { base = live.byDone.length ? live.byDone[live.byDone.length - 1].i : 0; live = new LiveDraw([], fps); live.taper = true; resmooth = true } }
 function connect() {
   const es = new EventSource(FEED)
@@ -186,8 +197,9 @@ function connect() {
     offs.push([t, t - tau]); while (offs[0][0] < t - 5) offs.shift()
     offset = Math.min(...offs.map(o => o[1]))
     if (m.how === 'none') return
-    while (live.byDone.length && live.byDone[0].i < fi - 70 * fps) live.byDone.shift()   // older than any trail the slider allows
-    live.byDone.push({ i: fi, done: t - offset, pos: m.pos, quat: m.quat, inl: m.inl, how: m.how } as Answer)
+    while (live.byDone.length && live.byDone[0].i < fi - 70 * fps) byFrame.delete((live.byDone.shift() as Stored).src)   // older than any trail the slider allows
+    const a = { i: fi, done: t - offset, pos: m.pos, quat: m.quat, inl: m.inl, how: m.how, raw: { pos: m.pos, quat: m.quat }, src: m.i } as Stored
+    live.byDone.push(a); byFrame.set(m.i, a); revise(m.win)
     got.push(t); lastLat = m.lat ?? 0; lastInl = m.inl
   }
 }
@@ -200,7 +212,11 @@ async function loadReplay(name: string) {
   const a = rows[0], b = rows[rows.length - 1], tau = (m: any) => m.done - (m.lat ?? 0) / 1000
   fps = (b.i - a.i) / (tau(b) - tau(a)); rEnd = (b.i - a.i) / fps
   // frames from the recording's first row (a recording made with the video starts at the tracker's frame 0 anyway)
-  const ans = rows.filter(m => m.how !== 'none').map(m => ({ i: m.i - a.i, done: (m.i - a.i) / fps + (m.lat ?? 0) / 1000, pos: m.pos, quat: m.quat, inl: m.inl, how: m.how, lat: m.lat }))
+  const ans = rows.filter(m => m.how !== 'none').map(m => ({ i: m.i - a.i, done: (m.i - a.i) / fps + (m.lat ?? 0) / 1000, pos: m.pos, quat: m.quat, inl: m.inl, how: m.how, lat: m.lat,
+    raw: { pos: m.pos, quat: m.quat }, src: m.i }))
+  for (const x of ans) byFrame.set(x.src, x as unknown as Stored)
+  events = rows.filter(m => m.win).map(m => ({ due: (m.i - a.i) / fps + (m.lat ?? 0) / 1000, win: m.win as number[][] })).sort((x, y) => x.due - y.due)
+  baIn.parentElement!.hidden = !events.length          // a recording made without BA has nothing to switch
   live = new LiveDraw(ans as Answer[], fps); live.taper = true; due = live.byDone.map(x => x.done)
   rFrom = Math.min(rEnd, Number(QS.get('from') ?? Math.max(0, (ans[0]?.i ?? 0) / fps - 1))); rTo = Math.min(rEnd, Number(QS.get('to') ?? rEnd))
   rt = rFrom; seek.min = String(QS.has('from') ? rFrom : 0); seek.max = String(rTo); $('replaybar').hidden = false
@@ -225,6 +241,9 @@ app.on('update', (dt: number) => {
   if (REPLAY) {
     if (hasVideo) rt = video.currentTime; else if (playing) rt += dt
     if (rt >= rTo || (hasVideo && video.ended)) jump(rFrom)   // the played part loops
+    if (rt < lastRt) { toRaw(); evK = 0 }             // went back: the revisions are applied again from the start
+    while (evK < events.length && events[evK].due <= rt) revise(events[evK++].win)
+    lastRt = rt
     if (document.activeElement !== seek) seek.value = String(rt)
     $('clock').textContent = `${rt.toFixed(1).padStart(6)} / ${rTo.toFixed(0)} s`
     const n = upTo(rt), last = n ? (live.byDone[n - 1] as any) : null

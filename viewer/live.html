@@ -25,7 +25,7 @@
     <canvas id="c"></canvas>
     <div id="panel">
       <div class="row"><span id="state">CONNECTING</span><span id="info"></span></div>
-      <div class="row"><label>trail <input id="dur" type="range" min="0.5" max="60" step="0.5" value="3" /><span id="durv"></span></label><label>smooth <input id="ws" type="range" min="0.1" max="1" step="0.05" value="0.4" /><span id="wsv"></span></label><label>delay <input id="delay" type="range" min="0" max="500" step="10" value="100" /><span id="delayv"></span></label><button id="clear">clear</button><button id="resetview">reset view</button></div>
+      <div class="row"><label>trail <input id="dur" type="range" min="0.5" max="60" step="0.5" value="3" /><span id="durv"></span></label><label>smooth <input id="ws" type="range" min="0.1" max="1" step="0.05" value="0.4" /><span id="wsv"></span></label><label>delay <input id="delay" type="range" min="0" max="500" step="10" value="100" /><span id="delayv"></span></label><label title="draw the tracker's revised poses (BA) instead of its raw answers"><input id="ba" type="checkbox" checked /> BA</label><button id="clear">clear</button><button id="resetview">reset view</button></div>
       <div class="row" id="replaybar" hidden><button id="play">pause</button><input id="seek" type="range" min="0" max="1" step="0.01" value="0" style="width: 420px" /><span id="clock"></span></div>
     </div>
     <div id="dvr"><video id="video" muted playsinline></video><span id="dvrinfo"></span></div>
