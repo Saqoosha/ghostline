@@ -2,6 +2,8 @@
 
 ## 要点
 
+> この報告は外部資料の検証結果で、外部の速度の数字は SuperPoint＋LightGlue などの測定。その後の ghostline での実測（[docs/realtime-tracking.ja.md](../docs/realtime-tracking.ja.md)）では、照合の TensorRT 化に加えて、走行中の PnP（MAGSAC、1 回 11 ms）を PoseLib に替えたことがいちばん効いた。
+
 今回の検証を通った主張で見るかぎり、ghostline の速度を確実に上げられる手段は、照合器を ONNX 経由で TensorRT（fp16）に載せることだけである。根拠は LightGlue を TensorRT に載せると torch.compile 比で最大約 4 倍速くなるという測定である。ただし LighterGlue と XFeat は LightGlue-ONNX の対応表に無いので、書き出しは自前で行う必要がある。
 
 3DGS ネイティブの位置推定のうち、地図の Gaussian に特徴を埋め込む方式（STDLoc、GSplatLoc）は、検証済みの資料の範囲では FPS が確認できない。そのため毎フレームの追跡に使う手段ではなく、DINOv2 による再局在化と合成グリッド地図を置き換える候補として扱う。

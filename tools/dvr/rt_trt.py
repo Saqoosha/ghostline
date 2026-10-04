@@ -144,6 +144,7 @@ def engine(module, args, ins, outs, shapes, path):  # shapes: per input (min, op
     for n in ins: prof.set_shape(n, *shapes[n])
     cfg.add_optimization_profile(prof); t = time.time()
     blob = b.build_serialized_network(net, cfg)       # before opening the file: a failed build must not empty the old engine
+    if blob is None: raise RuntimeError(f"{path}: TensorRT build failed (see its log above)")
     open(path + ".engine", "wb").write(blob)
     print(f"{os.path.basename(path)}: built in {time.time() - t:.0f} s", flush=True)
 
