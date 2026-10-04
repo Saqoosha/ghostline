@@ -1,11 +1,11 @@
 """LighterGlue and XFeat as TensorRT engines for rt_track.py (GLUE=<engine>, XFEAT=<engine>).
 
 The tracker runs both with fixed sizes except the batch - XFeat on 640 x 480 frames keeping TOPK (2048) points, the
-matcher on both sides padded to TOPK - which is what TensorRT wants.
+matcher on TOPK points per side - which is what TensorRT wants.
 
 glue   the whole matcher: keypoint normalization, the 6 transformer layers, the last layer's assignment and the
        mutual-nearest / threshold test -> per query point the matched map point (-1 = none) and its score. The same as
-       kornia's LightGlue with width_confidence -1 (no pruning) and depth_confidence -1 (no early stop), as rt_track.py runs it.
+       kornia's LightGlue with width_confidence -1 (no pruning) and depth_confidence -1 (no early stop, XFeat's default), as rt_track.py runs it.
 xfeat  the network and detectAndCompute's sparse keypoints: NMS, reliability score, top TOPK, bicubic descriptors. Its
        variable-length steps (nonzero over the NMS mask, argsort over the candidates) become a score for every pixel,
        -1 where NMS or the threshold drops it, then topk: the same points, ties perhaps in another order. Points past the
@@ -90,7 +90,7 @@ class Glue(nn.Module):
         return torch.where(mutual & (sc > TH), i0, torch.full_like(i0, -1)).int(), sc
 
 
-class InstanceNorm(nn.Module):                      # nn.InstanceNorm2d(affine=False) written out: its ONNX export makes its constants on the CPU and fails on cuda
+class InstanceNorm(nn.Module):                      # nn.InstanceNorm2d(affine=False) written out (same math)
     def forward(self, x):
         m = x.mean((2, 3), keepdim=True); return (x - m) / torch.sqrt(((x - m) ** 2).mean((2, 3), keepdim=True) + 1e-5)
 
@@ -138,11 +138,13 @@ def engine(module, args, ins, outs, shapes, path):  # shapes: per input (min, op
                       dynamic_axes={n: {0: "B"} for n in ins + outs})
     log = trt.Logger(trt.Logger.WARNING); b = trt.Builder(log)
     net = b.create_network(1 << int(trt.NetworkDefinitionCreationFlag.STRONGLY_TYPED)); p = trt.OnnxParser(net, log)
-    assert p.parse_from_file(path + ".onnx"), [p.get_error(i).desc() for i in range(p.num_errors)]
+    parsed = p.parse_from_file(path + ".onnx")
+    assert parsed, [p.get_error(i).desc() for i in range(p.num_errors)]
     cfg = b.create_builder_config(); prof = b.create_optimization_profile()
     for n in ins: prof.set_shape(n, *shapes[n])
     cfg.add_optimization_profile(prof); t = time.time()
-    open(path + ".engine", "wb").write(b.build_serialized_network(net, cfg))
+    blob = b.build_serialized_network(net, cfg)       # before opening the file: a failed build must not empty the old engine
+    open(path + ".engine", "wb").write(blob)
     print(f"{os.path.basename(path)}: built in {time.time() - t:.0f} s", flush=True)
 
 
@@ -179,7 +181,8 @@ class Trt:
         out = [torch.empty(tuple(self.ctx.get_tensor_shape(n)), dtype=self.dt[n], device="cuda") for n in self.outs]
         for n, o in zip(self.outs, out): self.ctx.set_tensor_address(n, o.data_ptr())
         cur = torch.cuda.current_stream(); self.stream.wait_stream(cur)
-        assert self.ctx.execute_async_v3(self.stream.cuda_stream)
+        ok = self.ctx.execute_async_v3(self.stream.cuda_stream)   # outside the assert: python -O would skip the call
+        assert ok
         cur.wait_stream(self.stream)
         return out
 
@@ -191,7 +194,7 @@ def bench_glue(map_npz, engines):
     rng = np.random.default_rng(0); a = rng.integers(0, len(kp) - 3, 64); pairs = [(int(i), int(i) + int(rng.integers(1, 4))) for i in a]
     lg = load_lighterglue()
 
-    def ref(i0, i1):                                # rt_track.py's call
+    def ref(i0, i1):                                # rt_track.py's matcher call
         B = len(i0)
         with torch.no_grad():
             o = lg.net({"image0": {"keypoints": kp[i0], "descriptors": desc[i0], "image_size": size.expand(B, 2)},
@@ -216,7 +219,7 @@ def bench_glue(map_npz, engines):
     for e in engines:
         g = Trt(e); T = []
         for c in range(0, len(pairs), 8): T += trt_run(g, [p[0] for p in pairs[c:c + 8]], [p[1] for p in pairs[c:c + 8]])
-        RT = [(r, t) for r, t in zip(R, T) if len(r)]   # keyframes with no points match nothing either way
+        RT = [(r, t) for r, t in zip(R, T) if len(r)]   # pairs PyTorch matched nothing in are skipped (IoU / ratio undefined)
         same = [len(set(map(tuple, r)) & set(map(tuple, t))) / len(set(map(tuple, r)) | set(map(tuple, t))) for r, t in RT]
         ratio = [len(t) / len(r) for r, t in RT]
         print(f"{os.path.basename(e)}: matches p50 {np.median([len(t) for t in T]):.0f} (x{np.median(ratio):.3f} of PyTorch, min x{min(ratio):.3f});"
@@ -231,10 +234,10 @@ def bench_xfeat(video, engines, n=96):
         ok, f = cap.read()
         if not ok: break
         fr.append(cv2.resize(cv2.cvtColor(f, cv2.COLOR_BGR2RGB), (640, 480), interpolation=cv2.INTER_AREA))   # as rt_track.py reads a file
-    X = torch.from_numpy(np.stack(fr[::max(1, len(fr) // n)])).cuda().permute(0, 3, 1, 2).float() / 255
+    X = torch.from_numpy(np.stack(fr)).cuda().permute(0, 3, 1, 2).float() / 255
     xf = load_xfeat()
 
-    def ref(x):                                     # rt_track.py's call
+    def ref(x):                                     # rt_track.py's XFeat call
         with torch.no_grad(): fs = xf.detectAndCompute(x, top_k=TOPK)
         return [(f["keypoints"].cpu().numpy(), f["descriptors"]) for f in fs]
 

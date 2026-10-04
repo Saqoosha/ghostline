@@ -4,7 +4,7 @@ keyframes nearest to the prediction, XFeat on the frame + LighterGlue against th
 2D-3D matches. No answer for LOST seconds (or at the start): DINOv2 retrieval over all keyframes.
 Several pilots at once: every cycle takes the newest arrived frame of each stream, runs XFeat on all of them in one
 batch and every (frame, keyframe) pair - relocalization candidates included - through LighterGlue in one batch, and the
-PnPs in threads. Batching is the point: 8 pairs in one LighterGlue call take ~19 ms, one pair alone ~14 ms (4090).
+PnPs in threads. Batching is the point: 8 pairs in one LighterGlue call take ~19 ms, one pair alone ~14 ms (4090, PyTorch).
 LIVE=1 replays at the videos' rate: frame i arrives at i/fps, a cycle takes the newest frame of each stream that has
 arrived and the ones in between are dropped, as on a capture card. Scored against the offline poses (truth, e.g.
 poses60_pad.json; src ba / ba-fill / takeoff / ground). The page draws its own dot from the answers (viewer/src/live.ts,
@@ -14,7 +14,7 @@ Live input (GRID=WxH): a 2x2 broadcast grid (the Event VRX over NDI -> OBS -> SR
 stretched to the cell) is remapped straight to the map's pinhole size. Then the clock is the real one, each cycle takes
 the newest frame of every cell, and each answer records its latency from the frame's arrival (and, with SEND_T0 = the
 sender's wall-clock start and FRAME_CODE, from the moment it was sent - the two machines' clocks must agree).
-usage (mastenv + kornia, ~/xfeat): rt_track.py map.npz,dvr_pinhole.mp4,out_prefix[,truth.json] [more streams ...]
+usage (mastenv + kornia + poselib, ~/xfeat; tensorrt for GLUE / XFEAT): rt_track.py map.npz,dvr_pinhole.mp4,out_prefix[,truth.json] [more streams ...]
   GRID=1280x720 GRID_FPS=30 rt_track.py "map.npz,srt://0.0.0.0:9000?mode=listener|0:0:640:360|cam.json,out_prefix" ...
   writes per stream out_prefix.jsonl (per processed frame: pose, how it was found; the viewer's live replay loads its
   solved rows as a JSON array), out_prefix.json (the extrapolated dot, poses60 format) and out_prefix_trail.json
@@ -177,12 +177,12 @@ streams = [Stream(s) for s in sys.argv[1:]]; RW, RH = streams[0].m["size"]
 assert all(s.m["size"] == [RW, RH] for s in streams), "all maps must share the render size"
 # ---- models
 xfeat = XFeat(top_k=TOPK)
-from modules.lighterglue import LighterGlue; LighterGlue.default_conf_xfeat["mp"] = False   # fp16: d05 solved 1,630 -> 761 frames, not faster
+from modules.lighterglue import LighterGlue; LighterGlue.default_conf_xfeat["mp"] = False   # autocast fp16: d05 solved 1,630 -> 761 frames, not faster
 LighterGlue.default_conf_xfeat["width_confidence"] = -1   # point pruning works only one pair at a time; the batch is worth more
 lg = LighterGlue().eval()
 glue = xf = None                                    # LighterGlue / XFeat as TensorRT engines (rt_trt.py)
 if os.environ.get("GLUE"):                          # both sides must be TOPK points
-    assert dev == "cuda" and streams[0].m["kp"].shape[1] == TOPK, "GLUE needs cuda and MAPK = TOPK"
+    assert dev == "cuda" and streams[0].m["kp"].shape[1] == TOPK, "GLUE needs cuda and TOPK points per map keyframe"
     from rt_trt import Trt; glue = Trt(os.environ["GLUE"])
 if os.environ.get("XFEAT"):
     assert dev == "cuda", "XFEAT needs cuda"
@@ -194,7 +194,7 @@ MEAN, STD = T([0.485, 0.456, 0.406])[None, :, None, None], T([0.229, 0.224, 0.22
 SIZE = T([[RW, RH]])
 def features(batch):                                # [(stream, frame)] -> per frame (keypoints, descriptors[, mask]), and the tensor
     x = torch.stack([torch.from_numpy(s.frames[i]) for s, i in batch]).to(dev).permute(0, 3, 1, 2).float() / 255
-    if xf:                                          # the engine's fixed TOPK points with a mask (a point, off the OSD / border): no per-frame cut, no wait
+    if xf:                                          # the engine's fixed TOPK points; mask = a real point (score > 0) off the OSD / border: no per-frame cut, no wait
         kp, d, sc = xf(x); ix = kp.long(); qv = torch.stack([s.qvalid for s, _ in batch])
         ok = (sc > 0) & qv[torch.arange(len(batch), device=dev)[:, None], ix[..., 1], ix[..., 0]]
         return [(kp[b], d[b], ok[b]) for b in range(len(batch))], x
@@ -211,7 +211,7 @@ def match_all(pairs):                               # [(query, stream, keyframe)
         if len(chunk[0][0]) == 3:                   # fixed TOPK with a mask: masked points zeroed (the matcher does not care about order), their matches dropped
             ok0 = torch.stack([q[2] for q, _, _ in chunk]); kp0 = torch.stack([q[0] for q, _, _ in chunk]) * ok0[..., None]
             d0 = torch.stack([q[1] for q, _, _ in chunk]) * ok0[..., None]
-        else:                                       # pad every side to TOPK points; matches onto padding are dropped
+        else:                                       # pad the query to TOPK points; matches onto padding are dropped
             kp0 = torch.zeros(B, TOPK, 2, device=dev); d0 = torch.zeros(B, TOPK, 64, device=dev); n0 = []
             for b, ((uv, d), s, k) in enumerate(chunk): kp0[b, :len(uv)] = uv; d0[b, :len(uv)] = d; n0.append(len(uv))
             ok0 = torch.arange(TOPK, device=dev)[None] < torch.tensor(n0, device=dev)[:, None]
@@ -231,8 +231,8 @@ def match_all(pairs):                               # [(query, stream, keyframe)
     return res
 def pnp(K, uv, X):
     # PoseLib, not OpenCV: on the tracker's own matches (d05, ~900 from two keyframes, 33% inliers) MAGSAC takes 11 ms
-    # (its scoring, not its 500 iterations: 200 is as slow) and PoseLib 4 ms, and the answers come out closer to the
-    # offline path (p50 0.24 -> 0.19 m). MAGSAC in turn beat SQPnP in a plain RANSAC (12 ms, none kept at 30% inliers).
+    # (its scoring, not its 500 iterations: 200 is as slow) and PoseLib 2.8 ms (PL_DYN 1), and the answers come out closer to the
+    # offline path (p50 0.24 -> 0.19 m). MAGSAC in turn beat SQPnP in a plain RANSAC (12 ms, none kept at 30% inliers, synthetic).
     # Narrowing the matches around the predicted pose first did not help.
     if len(uv) < 12: return None
     if PNP == "poselib":                            # P3P + LO-RANSAC in C++; it lets go of the GIL, so the PnP threads run side by side
@@ -299,7 +299,7 @@ pool = ThreadPoolExecutor(max(4, len(streams)))
 # LOST is time, not attempts: a faster tracker makes more attempts in the same gap, and giving up sooner sends it to the
 # slow global retrieval, which drops frames and loses it again
 # d05 alone: PIPE 0 28 Hz, 1 43 Hz, 2 56 Hz, the drawn position no worse (0.61 / 0.58 / 0.55 m p50); 4 streams at once
-# (3 race flights at 30 fps + d05): 2 gives 25-32 Hz each with the GPU busy all the time (XFeat 8 + LighterGlue 19 ms)
+# (3 race flights at 30 fps + d05): 2 gives 25-32 Hz each with the GPU busy all the time (XFeat 8 + LighterGlue 19 ms; PyTorch + MAGSAC)
 PIPE = int(E("PIPE", 2))
 def flowing(s):                                     # carry this stream's points with LK instead of matching (FLOW, below)
     return bool(FLOW and s.hist and s.flow is not None and len(s.flow["X"]) >= FLOW_RESEED and s.flow["age"] < FLOW_EVERY)
