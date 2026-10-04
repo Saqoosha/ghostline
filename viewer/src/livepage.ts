@@ -267,7 +267,7 @@ app.on('update', (dt: number) => {
     if (base > trailFrom) trailFrom = base
     const from = Math.max(trailFrom, d.frame - Math.round(Number(dur.value) * fps))
     if (resmooth) { live.trail = new Array(Math.max(0, from)).fill(null); live.trailT = -1; resmooth = false }   // only what is drawn is fitted again
-    const tr = live.trailAt(ts, d.frame, Math.max(0.5, 2 * ws) + 0.6)   // a point settles once the answers after it, and their revisions, are all in
+    const tr = live.trailAt(ts, d.frame, Math.max(0.5, 2 * ws))   // a point settles once the answers after it are all in
     // a new dither pattern every frame, so the thinned-out end shimmers into a fade instead of showing fixed dots (the
     // engine only moves the pattern for a jittered camera, i.e. with TAA)
     trailMat.setParameter('blueNoiseJitter', [Math.random(), Math.random(), Math.random(), Math.random()])

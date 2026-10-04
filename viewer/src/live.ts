@@ -56,7 +56,7 @@ export class LiveDraw {
     const j = Math.floor((t - delay) * this.fps + 1e-3)
     let before: Answer | null = null, after: Answer | null = null
     for (const a of got) { if (a.i <= j) before = a; if (a.i >= j && !after) after = a }
-    if (before && after && after.i - before.i <= 0.5 * this.fps) {   // half a second apart at most, whatever the fit window
+    if (before && after && after.i - before.i <= 2 * W) {
       const pos = fit(got, j, W, this.taper) ?? before.pos, u = after.i === before.i ? 0 : (j - before.i) / (after.i - before.i)
       return { pos, quat: slerp(before.quat, after.quat, u), state: 'interp', frame: j }
     }
