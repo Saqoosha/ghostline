@@ -9,7 +9,7 @@ FPS = int(os.environ.get("FPS", 60))
 K = np.array([[396.72252152857959, 0, 480], [0, 395.59635839540539, 360], [0, 0, 1]])
 D = np.array([0.079083628685813145, -0.0031366574031255509, 0.012172993244533522, -0.019683516074227709])
 if os.environ.get("LENS"):
-    L = json.load(open(os.environ["LENS"])); K = np.array([[L["fx"], 0, L["cx"]], [0, L["fy"], L["cy"]], [0, 0, 1]]); D = np.array(L["k"], float)
+    L = json.load(open(os.environ["LENS"])); K = np.array([[L["fx"], 0, L["cx"]], [0, L["fy"], L["cy"]], [0, 0, 1]], float); D = np.array(L["k"], float)
 fx = (W / 2) / np.tan(np.radians(hfov / 2)); Kn = np.array([[fx, 0, W / 2], [0, fx, H / 2], [0, 0, 1]])
 m1, m2 = cv2.fisheye.initUndistortRectifyMap(K, D, np.eye(3), Kn, (W, H), cv2.CV_16SC2)
 json.dump({"width": W, "height": H, "fx": fx, "fy": fx, "cx": W / 2, "cy": H / 2, "hfov_deg": hfov, "t0": t0, "fps": FPS,

@@ -105,6 +105,7 @@ const splat = new pc.Entity('scene')
 // (In compare the free half of the canvas gets the ceiling too: PlayCanvas' unified splat renderer did not draw two
 // splat layers per camera, so the part cannot be shown to one camera only.)
 const top = new pc.Entity('scene-top'); top.enabled = false; app.root.addChild(top)
+let topOf = ''                                       // the scan the part was cut from: another scan in the menu has no such part
 function loadTop(name: string) {
   const a = new pc.Asset(name, 'gsplat', { url: `${DATA}scene/${name}.sog` })
   app.assets.add(a); a.on('load', () => top.addComponent('gsplat', { asset: a })); app.assets.load(a)
@@ -124,7 +125,7 @@ function loadScene(name: string) {
   a.on('error', (err: string) => { if (asset === a) status.textContent = 'scene failed: ' + err })
   app.assets.load(a)
 }
-sceneSel.onchange = () => loadScene(sceneSel.value)
+sceneSel.onchange = () => { loadScene(sceneSel.value); layout() }
 loadScene(sceneSel.value)
 
 // --- data
@@ -152,7 +153,7 @@ async function setupFlight() {
     }
     // "orbit": {"target": [x, y, z], "dist", "yaw", "pitch"}: where the free camera starts. The page's own start is a
     // racecourse seen from 90 m; a room needs a few metres.
-    if (ix.top) loadTop(ix.top)
+    if (ix.top) { topOf = ix.scene; loadTop(ix.top) }
     if (ix.orbit) { const o = ix.orbit; if (o.target) orbit.target.set(o.target[0], o.target[1], o.target[2]); orbit.dist = o.dist ?? orbit.dist; orbit.yaw = o.yaw ?? orbit.yaw; orbit.pitch = o.pitch ?? orbit.pitch }
   } catch { }
   pickFromUrl(pose, 'poses')
@@ -416,7 +417,7 @@ function layout() {
   const cell = view.getBoundingClientRect()
   const fromCamera = ui.follow.checked || Number(ui.scancam.value) >= 0
   cam2.enabled = ui.compare.checked
-  top.enabled = fromCamera || ui.compare.checked
+  top.enabled = (fromCamera || ui.compare.checked) && sceneSel.value === topOf
   if (ui.compare.checked) {
     // the canvas covers the whole row; the free camera takes the left half, the matched camera a
     // centred 4:3 box in the right half, and the video is laid exactly over that box

@@ -14,6 +14,6 @@ for i in range(N):
     j = min(max(i, ks[0]), ks[-1])
     poses.append({"i": i, "t": round(cam["t0"] + i / cam["fps"], 4), "pos": np.round([np.interp(j, ks, Pk[:, a]) for a in range(3)], 3).tolist(),
                   "quat": np.round(sl([j]).as_quat()[0], 6).tolist(), "src": "track" if i in rec else "interp"})
-json.dump({"frame": "office 7F plan: x along the window wall, y up, z into the room, metres; quat (x,y,z,w) world-from-camera, COLMAP camera axes",
+json.dump({"frame": "the scan's frame, y up, metres; quat (x,y,z,w) world-from-camera, COLMAP camera axes",
            "t0": cam["t0"], "fps": cam["fps"], "poses": poses}, open("track/track_init.json", "w"))
 print(f"merged {len(rec)} of {N} frames")
