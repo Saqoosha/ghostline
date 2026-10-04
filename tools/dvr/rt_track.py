@@ -42,7 +42,7 @@ LIVE, NKF, MIN_INL, LOST = int(E("LIVE", 1)), int(E("NKF", 2)), int(E("MIN_INL",
 RTOPK, RMIN, TOPK, NMAX, BATCH = int(E("RELOC_TOPK", 5)), int(E("RELOC_MIN", 50)), int(E("TOPK", 2048)), int(E("NMAX", 0)), int(E("BATCH", 16))
 PNP = os.environ.get("PNP", "poselib")           # poselib (PoseLib's LO-RANSAC) or magsac (OpenCV USAC_MAGSAC)
 if PNP == "poselib": import poselib
-RENDER, SCENE, RNEAR = int(E("RENDER", 0)), os.environ.get("SCENE"), E("RNEAR", 1.0)   # rt_render.py: match a render at the prediction, not keyframes
+RENDER, SCENE, RNEAR, RFALL = int(E("RENDER", 0)), os.environ.get("SCENE"), E("RNEAR", 1.0), int(E("RFALL", 1))   # rt_render.py: match a render at the prediction, not keyframes
 PL_DYN = E("PL_DYN", 1.0)                           # PoseLib: trials x this over what success_prob 0.99 needs
 MAPK = int(E("MAPK", 0))                            # keypoints per keyframe used from the map (0 = all)
 # NEAR: after a failed attempt, match NEAR_K keyframes around the prediction up to NEAR_ANG degrees off, and add NEAR_K
@@ -201,8 +201,8 @@ dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14").to(dev).eval()
 scene = None
 if RENDER:
     assert dev == "cuda" and SCENE, "RENDER needs cuda and SCENE=<the map's .ply>"
-    from rt_render import Scene; scene = Scene(SCENE, streams[0].K, RW, RH, RNEAR, TOPK, detect)
-    scene.views([(Rot.identity(), np.zeros(3))] * len(streams))   # the first render compiles kernels: not on a tracked frame
+    from rt_render import Scene; scene = Scene(SCENE, RW, RH, RNEAR, TOPK, detect)
+    scene.views([(Rot.identity(), np.zeros(3))] * len(streams), [s.K for s in streams])   # the first render compiles kernels: not on a tracked frame
 MEAN, STD = T([0.485, 0.456, 0.406])[None, :, None, None], T([0.229, 0.224, 0.225])[None, :, None, None]
 SIZE = T([[RW, RH]])
 def features(batch):                                # [(stream, frame)] -> per frame (keypoints, descriptors[, mask]), and the tensor
@@ -331,13 +331,15 @@ def middle(c):                                      # plan from the answers so f
             plan.append(("flow", None, [], None))  # no XFeat, no matching: the CPU carries last frame's points over with LK
         elif s.hist and (i - s.hist[-1][0]) / s.fps <= LOST:
             pred = predict(s.hist, i)
-            ks = [] if scene else s.nearest(*pred, NEAR_K, NEAR_ANG, 30) if NEAR and s.fails else s.nearest(*pred)
+            # with RENDER the render at the prediction replaces the keyframes, except right after a failed try: a bad
+            # prediction renders a view that barely overlaps the frame, and the keyframes' wider pick (45 deg, 12 m) still finds it
+            ks = [] if scene and not (s.fails and RFALL) else s.nearest(*pred, NEAR_K, NEAR_ANG, 30) if NEAR and s.fails else s.nearest(*pred)
             plan.append(("track", pred, ks, s.hist[-1][0]))
         else: plan.append(("reloc", None, None, None)); lost.append(b)
     tr = [b for b, p in enumerate(plan) if p[0] == "track"] if scene else []
     if tr:                                          # one render per tracked stream, at its prediction
         tv = time.perf_counter()
-        for b, v in zip(tr, scene.views([plan[b][1] for b in tr])): plan[b][2].append(v)
+        for b, v in zip(tr, scene.views([plan[b][1] for b in tr], [batch[b][0].K for b in tr])): plan[b][2].append(v)
         c["rend"] = time.perf_counter() - tv
     if lost:
         with torch.no_grad(): g = torch.nn.functional.normalize(dino(((torch.nn.functional.interpolate(x[[c["row"][b] for b in lost]], (168, 224), mode="area") if dev == "cuda" else   # MPS: area only for divisible sizes
