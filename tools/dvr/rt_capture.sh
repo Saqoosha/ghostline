@@ -8,7 +8,7 @@
 # bursts (arrival gaps p90 51 ms, 22% over 30 ms; without the wait 22 ms and 4%), and the tracker, which takes only
 # the newest frame, then ran at the bursts' rate.
 # The sender starts again by itself when the capture drops out (a browser opening the same device did that once);
-# touch <rec dir>/stop to end. The tracker numbers frames from the connection, and so does the file, as long as the
+# to end, touch <rec dir>/stop (no restart) and interrupt gst-launch. The tracker numbers frames from the connection, and so does the file, as long as the
 # tracker is already listening when the sender starts.
 set -u
 REC="${1:?rec dir}"; SRT="${2:-100.68.63.104:9000}"; FEED="${3:-http://100.68.63.104:8765}"
@@ -19,7 +19,7 @@ until [ -f "$REC/stop" ]; do
   gst-launch-1.0 -q -e avfvideosrc device-index=0 ! video/x-raw,width=1280,height=720,framerate=60/1 ! queue max-size-buffers=2 leaky=downstream \
     ! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bitrate=8000 key-int-max=60 ! tee name=t \
     t. ! queue ! rtph264pay config-interval=1 pt=96 mtu=1316 ! srtsink uri="srt://$SRT?mode=caller" latency=80 wait-for-connection=false sync=false \
-    t. ! queue ! h264parse ! matroskamux ! filesink location="$REC/$ts.mkv" 2>&1 | grep -E "ERROR|stopped" | head -3
+    t. ! queue ! h264parse ! matroskamux ! filesink location="$REC/$ts.mkv" 2>&1 | grep -E "ERROR|erroneous|stopped"
   kill $log 2>/dev/null
   sleep 2
 done

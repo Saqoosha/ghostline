@@ -1,6 +1,6 @@
 // What a live page would draw from the tracker's answers as they arrive (rt_track.py's answer log, replayed at the
-// time each answer was finished). The drawing is done here, not in the tracker: live, the page is meant to receive
-// raw answers over a socket (not built yet) and decide how to show them.
+// time each answer was finished). The drawing is done here, not in the tracker: live, the page receives the answers
+// as they are solved (livepage.ts) and decides how to show them.
 //   dot   'extrap': a quadratic over the newest answers, carried to the present frame (no added delay)
 //         'delay' : the frame `delay` seconds ago, fitted between the answers on both sides of it; when no answer after
 //                   it has arrived yet, or the answers around it are too far apart (tracking was lost), the dot
@@ -56,7 +56,7 @@ export class LiveDraw {
     const j = Math.floor((t - delay) * this.fps + 1e-3)
     let before: Answer | null = null, after: Answer | null = null
     for (const a of got) { if (a.i <= j) before = a; if (a.i >= j && !after) after = a }
-    if (before && after && after.i - before.i <= 2 * W) {
+    if (before && after && after.i - before.i <= 0.5 * this.fps) {   // half a second apart at most, whatever the fit window
       const pos = fit(got, j, W, this.taper) ?? before.pos, u = after.i === before.i ? 0 : (j - before.i) / (after.i - before.i)
       return { pos, quat: slerp(before.quat, after.quat, u), state: 'interp', frame: j }
     }

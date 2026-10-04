@@ -27,7 +27,7 @@ env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s w
      PUSH (0; a port: answers out as server-sent events while it runs, for viewer/live.html),
      INFO (0; 1 = rows carry H), BA (0; seconds of answers solved again together after every answer, below)"""
 import os
-# One BLAS thread. numpy's matrices here are small (the BA's 150 x 150 system at most), and OpenBLAS otherwise starts a
+# One BLAS thread. numpy's matrices here are small (the BA's system is about 150 x 150), and OpenBLAS otherwise starts a
 # thread per core for them: on a 32-core machine that took the tracker from 54 to 33 Hz with BA on, the solve itself 0.2 ms.
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 import json, sys, time, math, numpy as np, torch, cv2
@@ -57,7 +57,7 @@ INFO = int(E("INFO", 0))                           # 1: every answer row carries
 # Against the page's quadratic through raw positions (the Whoop clip, drawn 0.1 s late): wobble 3.0 -> 2.2 cm, error
 # p90 24 -> 21.5 cm, p99 80 -> 51 cm, rotation p90 3.55 -> 2.83 deg; at 0.2 s and more the two draw the same line.
 # BA_PX is the pixel noise the information is read at, BA_ACC m/s^2 and BA_ALPHA rad/s^2 the priors (a Tiny Whoop
-# indoors; only their ratio to BA_PX matters: 8 / 3 / 10 and 16 / 6 / 20 solve the same).
+# indoors; while the angular term stays under its Huber threshold only their ratio to BA_PX matters).
 BA, BA_PX, BA_ACC, BA_ALPHA = E("BA", 0), E("BA_PX", 8), E("BA_ACC", 3), E("BA_ALPHA", 10)
 PUSH = int(E("PUSH", 0)); subs = []
 if PUSH:
@@ -66,7 +66,7 @@ if PUSH:
         def do_GET(self):
             self.send_response(200)
             for k, v in (("Content-Type", "text/event-stream"), ("Cache-Control", "no-cache"), ("Access-Control-Allow-Origin", "*")): self.send_header(k, v)
-            self.end_headers(); q = queue.Queue(); subs.append(q)
+            self.end_headers(); q = queue.Queue(2000); subs.append(q)   # a reader that stalls loses rows instead of growing the queue
             try:
                 while True: self.wfile.write(f"data: {q.get()}\n\n".encode()); self.wfile.flush()
             except OSError: pass
@@ -90,7 +90,7 @@ class GridSource:                                   # one decoded live video; it
             port = self.url.split("//")[1].split("?")[0].split(":")[-1]; lat = int(self.url.split("latency=")[1].split("&")[0]) // 1000 if "latency=" in self.url else 80
             # GRID_CROP (left:top:right:bottom px): cut the decoded frame before it is scaled to GRID and piped here. One pilot on
             # a 1280x720 capture with the 4:3 picture in the middle: GRID_CROP=160:0:160:0 GRID=640x480, cell 0:0:640:480 -
-            # the pipe then carries 0.9 MB a frame instead of 2.8 (at 60 fps Python was reading 166 MB/s to use a ninth of it).
+            # the pipe then carries 0.9 MB a frame instead of 2.8 (at 60 fps Python was reading 166 MB/s to use a third of it).
             c = os.environ.get("GRID_CROP"); crop = "videocrop left={} top={} right={} bottom={} ! ".format(*c.split(":")) if c else ""
             cmd = (f"gst-launch-1.0 -q srtsrc uri=srt://:{port}?mode=listener latency={lat} ! application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000"
                    f" ! rtph264depay ! h264parse ! avdec_h264 ! {crop}videoconvert ! videoscale ! video/x-raw,format=BGR,width={self.W},height={self.H} ! fdsink fd=1 sync=false")
@@ -225,7 +225,7 @@ def info(K, Rw, c, X):
     J = np.concatenate([Ju @ dx, Ju @ (-Rw)[None]], axis=2)
     return np.einsum("mki,mkj->ij", J, J)
 def smooth(win):
-    # win: [(t, frame, Rot, pos, H)] in time order -> revised (quat, pos) per entry. Unknown per answer: a small turn about
+    # win: [(t, frame, Rot, pos, H, R matrix)] in time order -> revised (quat, pos) per entry. Unknown per answer: a small turn about
     # its own camera axes and its position; every answer's reprojection is the quadratic its H gives around its own
     # solution, so the system is linear. Answers more than 0.3 s apart are not tied (tracking was lost between them).
     # Built with whole-array operations: looped per answer it took the main thread ~10 ms on a 25-answer window and
@@ -347,10 +347,11 @@ def land(c, out, t0, clock0):                       # apply the answers to the s
             s.win = [w for w in getattr(s, "win", []) if w[0] > t - BA and w[1] < i] + [(t, i, r[0], r[1], r[4], r[0].as_matrix())]
             if len(s.win) >= 3:
                 qs, ps = smooth(s.win); win = {"win": [[w[1], *p_, *q_] for w, p_, q_ in zip(s.win, np.round(ps, 4).tolist(), np.round(qs, 5).tolist())]}
-        s.recs.append(dict(i=i, done=done, plan=c["plan"][b][0], **lat, **win, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how, **({"H": [float(f"{v:.6g}") for v in r[4][np.triu_indices(6)]]} if len(r) > 4 and r[4] is not None else {})) if r else {"how": "none"})))
+        s.recs.append(dict(i=i, done=done, plan=c["plan"][b][0], **lat, **win, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how, **({"H": [float(f"{v:.6g}") for v in r[4][np.triu_indices(6)]]} if INFO and r[4] is not None else {})) if r else {"how": "none"})))
         if subs:
             m = json.dumps(dict(stream=os.path.basename(s.prefix), fps=s.fps, **s.recs[-1]))
-            for q in list(subs): q.put(m)
+            for q in list(subs):
+                if not q.full(): q.put_nowait(m)
     s_ = {k: c[k] * 1000 for k in ("feat", "match")}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
 REAL = any(s.live for s in streams)
 def pick(clock):                                    # the newest arrived frame of each stream not already in flight

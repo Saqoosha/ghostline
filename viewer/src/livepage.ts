@@ -6,9 +6,9 @@
 //                           and <name>.mp4 if it is there (what the sender sent). Each answer shows up when it did live
 //                           (its frame's time plus the tracker's latency), so the sliders can be tried on the same flight.
 //   ?from=30&to=175         the part of the recording that is played (seconds); it loops
-// The camera view and the trail length are remembered in this browser (localStorage), so the view left is the view found.
+// The camera view and the sliders are remembered in this browser (localStorage), so the view left is the view found.
 // The dot and the trail are live.ts': the dot 100 ms late, fitted between the answers around it; the trail refitted as
-// answers arrive. The clock is the tracker's (when each frame reached it), and "now" is the newest time on it that an
+// answers arrive (the dot's delay is the slider's, 100 ms to start with). The clock is the tracker's (when each frame reached it), and "now" is the newest time on it that an
 // answer could have arrived for, taken from the fastest recent answer (so a slow answer shows as lag, not as time).
 import * as pc from 'playcanvas'
 import { LiveDraw, type Answer } from './live'
@@ -90,7 +90,7 @@ const trailMat = new pc.StandardMaterial()
 function drawTrail(pts: (number[] | null)[], c: pc.Color, eye: pc.Vec3, pxWorld: number) {
   const pos: number[] = [], col: number[] = [], nrm: number[] = [], idx: number[] = [], n = pts.length
   const tan = new pc.Vec3(), view = new pc.Vec3(), side = new pc.Vec3(), a = new pc.Vec3(), b = new pc.Vec3(), q = new pc.Vec3()
-  let run = 0                                         // vertices pairs in the current unbroken run
+  let run = 0                                         // vertex pairs in the current unbroken run
   for (let k = 0; k < n; k++) {
     const p = pts[k]; if (!p) { run = 0; continue }
     const pa = pts[k - 1] ?? p, pb = pts[k + 1] ?? p
@@ -160,7 +160,7 @@ function drawSegments(pts: pc.Vec3[], col: pc.Color, eye: pc.Vec3, pxWorld: numb
   frMat.emissive = col; frMat.update()
 }
 
-// --- the tracker's revisions (rt_track.py BA): with every answer it sends the poses of the last half second solved again
+// --- the tracker's revisions (rt_track.py BA): with every answer it sends the poses of its BA window solved again
 // together ("win": [frame, x, y, z, qx, qy, qz, qw]). An answer is drawn at the newest revision that has arrived; the raw
 // answer is kept so the box can be unticked to compare.
 type Stored = Answer & { raw: { pos: number[]; quat: number[] }; src: number }
@@ -176,9 +176,10 @@ let live: LiveDraw | null = null, offset = Infinity, fps = 60, lastMsg = 0, last
 const got: number[] = []                              // arrival times of solved answers, for the rate
 const nowS = () => performance.now() / 1000
 let lastTau = 0; const offs: number[][] = []
-function reset() { live = null; offset = Infinity; got.length = 0; offs.length = 0; base = 0; trailFrom = 0; byFrame.clear() }
+let tsLive = -Infinity
+function reset() { live = null; offset = Infinity; tsLive = -Infinity; got.length = 0; offs.length = 0; base = 0; trailFrom = 0; byFrame.clear() }
 baIn.onchange = () => { store({ ba: baIn.checked }); toRaw(); evK = 0; lastRt = 0; resmooth = true }   // live: revisions start again with the next answer
-$('clear').onclick = () => { if (live) { base = live.byDone.length ? live.byDone[live.byDone.length - 1].i : 0; live = new LiveDraw([], fps); live.taper = true; resmooth = true } }
+$('clear').onclick = () => { byFrame.clear(); if (live) { base = live.byDone.length ? live.byDone[live.byDone.length - 1].i : 0; live = new LiveDraw([], fps); live.taper = true; resmooth = true } }
 function connect() {
   const es = new EventSource(FEED)
   es.onopen = () => { reset(); stateEl.textContent = 'WAITING'; stateEl.className = 'hold' }
@@ -230,7 +231,7 @@ async function loadReplay(name: string) {
 }
 let jump = (_: number) => {}
 const upTo = (v: number) => { let lo = 0, hi = due.length; while (lo < hi) { const m = (lo + hi) >> 1; if (due[m] <= v) lo = m + 1; else hi = m } return lo }   // answers due by v
-if (REPLAY) loadReplay(REPLAY); else connect()
+if (REPLAY) loadReplay(REPLAY).catch(() => { stateEl.textContent = 'NO RECORDING'; stateEl.className = '' }); else connect()
 
 app.on('update', (dt: number) => {
   const r = new pc.Quat().setFromEulerAngles(orbit.pitch, orbit.yaw, 0)
@@ -250,7 +251,10 @@ app.on('update', (dt: number) => {
     rate = (n - upTo(rt - 2)) / 2; lastLat = last?.lat ?? 0; lastInl = last?.inl ?? 0; lastMsg = t
   }
   const ws = Number(wsIn.value); live.ws = ws
-  const ts = REPLAY ? rt : t - offset, d = live.dot(ts, 'delay', Number(delayIn.value) / 1000)
+  // live, "now" never steps back: when the fastest recent answer leaves the window the offset grows, and a clock that
+  // went back made the trail refit itself from frame 0
+  if (!REPLAY) tsLive = Math.max(tsLive, t - offset)
+  const ts = REPLAY ? rt : tsLive, d = live.dot(ts, 'delay', Number(delayIn.value) / 1000)
   const lines: pc.Vec3[] = [], cols: pc.Color[] = []
   if (!d) { dotE.enabled = false; emptyTrail(); emptyFr(); if (REPLAY) { stateEl.textContent = 'NO ANSWER YET'; stateEl.className = ''; info.textContent = '' } }
   if (d) {
@@ -262,7 +266,7 @@ app.on('update', (dt: number) => {
     if (base > trailFrom) trailFrom = base
     const from = Math.max(trailFrom, d.frame - Math.round(Number(dur.value) * fps))
     if (resmooth) { live.trail = new Array(Math.max(0, from)).fill(null); live.trailT = -1; resmooth = false }   // only what is drawn is fitted again
-    const tr = live.trailAt(ts, d.frame, Math.max(0.5, 2 * ws))   // a point settles once the answers after it are all in
+    const tr = live.trailAt(ts, d.frame, Math.max(0.5, 2 * ws) + 0.6)   // a point settles once the answers after it, and their revisions, are all in
     // a new dither pattern every frame, so the thinned-out end shimmers into a fade instead of showing fixed dots (the
     // engine only moves the pattern for a jittered camera, i.e. with TAA)
     trailMat.setParameter('blueNoiseJitter', [Math.random(), Math.random(), Math.random(), Math.random()])
