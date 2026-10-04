@@ -199,7 +199,8 @@ function connect() {
     offset = Math.min(...offs.map(o => o[1]))
     if (m.how === 'none') return
     while (live.byDone.length && live.byDone[0].i < fi - 70 * fps) byFrame.delete((live.byDone.shift() as Stored).src)   // older than any trail the slider allows
-    const a = { i: fi, done: t - offset, pos: m.pos, quat: m.quat, inl: m.inl, how: m.how, raw: { pos: m.pos, quat: m.quat }, src: m.i } as Stored
+    const prev = live.byDone.length ? live.byDone[live.byDone.length - 1].done : -Infinity   // byDone is searched by done: keep it in order when the offset grows
+    const a = { i: fi, done: Math.max(t - offset, prev), pos: m.pos, quat: m.quat, inl: m.inl, how: m.how, raw: { pos: m.pos, quat: m.quat }, src: m.i } as Stored
     live.byDone.push(a); byFrame.set(m.i, a); revise(m.win)
     got.push(t); lastLat = m.lat ?? 0; lastInl = m.inl
   }
