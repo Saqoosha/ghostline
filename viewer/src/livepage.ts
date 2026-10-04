@@ -70,17 +70,22 @@ function frustum(pos: number[], quat: number[], col: pc.Color, lines: pc.Vec3[],
   for (let k = 0; k < 4; k++) { lines.push(o, c[k], c[k], c[(k + 1) % 4]); cols.push(col, col, col, col) }
 }
 
-// --- the trail: a band a few pixels wide that faces the camera and fades towards its old end (WebGL lines are 1 px).
-// As race.ts' ribbon, but broken wherever a frame has no position.
+// --- the trail: a band a few pixels wide that faces the camera and thins out towards its old end (WebGL lines are 1 px).
+// As race.ts' ribbon, but broken wherever a frame has no position, and drawn with depth: it is opaque, goes into the
+// World layer's opaque pass (before the splats) and writes depth, so splats in front of it blend over it and the ones
+// behind it are rejected - the trail passes behind desks and shelves instead of lying on top of the picture.
 const TRAIL_PX = 5
 const trailMesh = new pc.Mesh(app.graphicsDevice)
 function emptyTrail() { trailMesh.setPositions([0, 0, 0, 0, 0, 0, 0, 0, 0]); trailMesh.setNormals([0, 1, 0, 0, 1, 0, 0, 1, 0]); trailMesh.setColors(new Array(12).fill(0)); trailMesh.setIndices([0, 1, 2]); trailMesh.update(pc.PRIMITIVE_TRIANGLES) }
 trailMesh.clear(true, false); emptyTrail()               // every stream from the start: the shader is built from the first mesh
+const trailMat = new pc.StandardMaterial()
 {
-  const m = new pc.StandardMaterial(); m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.cull = pc.CULLFACE_NONE
-  m.emissiveVertexColor = true; m.emissive = new pc.Color(1, 1, 1); m.opacityVertexColor = true; m.opacityVertexColorChannel = 'a'
-  m.blendType = pc.BLEND_NORMAL; m.depthWrite = false; m.depthTest = false; m.update()
-  const e = new pc.Entity('trail'); e.addComponent('render', { meshInstances: [new pc.MeshInstance(trailMesh, m)], layers: [pc.LAYERID_IMMEDIATE] }); app.root.addChild(e)
+  const m = trailMat; m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.cull = pc.CULLFACE_NONE
+  m.emissiveVertexColor = true; m.emissive = new pc.Color(1, 1, 1); m.blendType = pc.BLEND_NONE; m.depthWrite = true; m.depthTest = true
+  // the fade towards the old end is dithered, not blended: a blended band drawn before the splats would mix with the
+  // empty background and still hide the splats behind it
+  m.opacityVertexColor = true; m.opacityVertexColorChannel = 'a'; m.opacityDither = pc.DITHER_BLUENOISE; m.update()
+  const e = new pc.Entity('trail'); e.addComponent('render', { meshInstances: [new pc.MeshInstance(trailMesh, m)] }); app.root.addChild(e)
 }
 function drawTrail(pts: (number[] | null)[], c: pc.Color, eye: pc.Vec3, pxWorld: number) {
   const pos: number[] = [], col: number[] = [], nrm: number[] = [], idx: number[] = [], n = pts.length
@@ -91,8 +96,8 @@ function drawTrail(pts: (number[] | null)[], c: pc.Color, eye: pc.Vec3, pxWorld:
     const pa = pts[k - 1] ?? p, pb = pts[k + 1] ?? p
     q.set(p[0], p[1], p[2]); a.set(pa[0], pa[1], pa[2]); b.set(pb[0], pb[1], pb[2])
     tan.sub2(a, b); if (tan.lengthSq() < 1e-12) tan.set(1, 0, 0); tan.normalize(); view.sub2(eye, q)
+    const al = k / Math.max(1, n - 1)                // 0 at the old end, 1 at the drone
     const w = TRAIL_PX / 2 * pxWorld * view.length(); side.cross(tan, view.normalize()); if (side.lengthSq() < 1e-12) side.set(0, 1, 0); side.normalize().mulScalar(w)
-    const al = 0.1 + 0.9 * (k / Math.max(1, n - 1))
     pos.push(q.x + side.x, q.y + side.y, q.z + side.z, q.x - side.x, q.y - side.y, q.z - side.z); col.push(c.r, c.g, c.b, al, c.r, c.g, c.b, al); nrm.push(0, 1, 0, 0, 1, 0)
     if (run) { const i = pos.length / 3 - 2; idx.push(i - 2, i - 1, i, i - 1, i + 1, i) }
     run++
@@ -130,6 +135,30 @@ async function startVideo() {
   } catch (e) { note.textContent = 'no live image: ' + (e as Error).message }
 }
 if (!REPLAY) startVideo()
+
+// --- the camera's frustum, drawn as the trail is: bands (app.drawLines comes after the splats and cannot be hidden by
+// them), opaque, in the pass before the splats, writing depth
+const FRUSTUM_PX = 2
+const frMesh = new pc.Mesh(app.graphicsDevice), frMat = new pc.StandardMaterial()
+function emptyFr() { frMesh.setPositions([0, 0, 0, 0, 0, 0, 0, 0, 0]); frMesh.setNormals([0, 1, 0, 0, 1, 0, 0, 1, 0]); frMesh.setIndices([0, 1, 2]); frMesh.update(pc.PRIMITIVE_TRIANGLES) }
+frMesh.clear(true, false); emptyFr()
+frMat.useLighting = false; frMat.diffuse = new pc.Color(0, 0, 0); frMat.cull = pc.CULLFACE_NONE; frMat.depthWrite = true; frMat.depthTest = true; frMat.update()
+{ const e = new pc.Entity('frustum'); e.addComponent('render', { meshInstances: [new pc.MeshInstance(frMesh, frMat)] }); app.root.addChild(e) }
+function drawSegments(pts: pc.Vec3[], col: pc.Color, eye: pc.Vec3, pxWorld: number) {   // pts: pairs of segment ends
+  const pos: number[] = [], nrm: number[] = [], idx: number[] = [], dir = new pc.Vec3(), view = new pc.Vec3(), side = new pc.Vec3()
+  for (let k = 0; k + 1 < pts.length; k += 2) {
+    dir.sub2(pts[k + 1], pts[k]); if (dir.lengthSq() < 1e-12) continue
+    for (const q of [pts[k], pts[k + 1]]) {
+      view.sub2(eye, q); const w = FRUSTUM_PX / 2 * pxWorld * view.length()
+      side.cross(dir, view); if (side.lengthSq() < 1e-12) side.set(0, 1, 0); side.normalize().mulScalar(w)
+      pos.push(q.x + side.x, q.y + side.y, q.z + side.z, q.x - side.x, q.y - side.y, q.z - side.z); nrm.push(0, 1, 0, 0, 1, 0)
+    }
+    const i = pos.length / 3 - 4; idx.push(i, i + 1, i + 2, i + 1, i + 3, i + 2)
+  }
+  if (!idx.length) { emptyFr(); return }
+  frMesh.setPositions(pos); frMesh.setNormals(nrm); frMesh.setIndices(idx); frMesh.update(pc.PRIMITIVE_TRIANGLES)
+  frMat.emissive = col; frMat.update()
+}
 
 // --- the feed
 let trailFrom = 0
@@ -204,7 +233,7 @@ app.on('update', (dt: number) => {
   const ws = Number(wsIn.value); live.ws = ws
   const ts = REPLAY ? rt : t - offset, d = live.dot(ts, 'delay', Number(delayIn.value) / 1000)
   const lines: pc.Vec3[] = [], cols: pc.Color[] = []
-  if (!d) { dotE.enabled = false; emptyTrail(); if (REPLAY) { stateEl.textContent = 'NO ANSWER YET'; stateEl.className = ''; info.textContent = '' } }
+  if (!d) { dotE.enabled = false; emptyTrail(); emptyFr(); if (REPLAY) { stateEl.textContent = 'NO ANSWER YET'; stateEl.className = ''; info.textContent = '' } }
   if (d) {
     const stale = t - lastMsg > 1, col = stale || d.state === 'lost' ? cLost : d.state === 'hold' ? cHold : cLive
     dotE.enabled = true; dotE.setPosition(d.pos[0], d.pos[1], d.pos[2]); mat.emissive = col; mat.update()
@@ -215,9 +244,12 @@ app.on('update', (dt: number) => {
     const from = Math.max(trailFrom, d.frame - Math.round(Number(dur.value) * fps))
     if (resmooth) { live.trail = new Array(Math.max(0, from)).fill(null); live.trailT = -1; resmooth = false }   // only what is drawn is fitted again
     const tr = live.trailAt(ts, d.frame, Math.max(0.5, 2 * ws))   // a point settles once the answers after it are all in
+    // a new dither pattern every frame, so the thinned-out end shimmers into a fade instead of showing fixed dots (the
+    // engine only moves the pattern for a jittered camera, i.e. with TAA)
+    trailMat.setParameter('blueNoiseJitter', [Math.random(), Math.random(), Math.random(), Math.random()])
     drawTrail(tr.slice(from), cTrail, cam.getPosition(), 2 * Math.tan(30 * Math.PI / 180) / canvas.clientHeight)   // world size of a pixel at unit distance (fov 60)
     info.textContent = `${rate.toFixed(0).padStart(2)} Hz  ${lastLat.toFixed(0).padStart(3)} ms  ${String(lastInl).padStart(4)} inl  h ${d.pos[1].toFixed(2)} m`
   }
-  if (lines.length) app.drawLines(lines, cols, false)
+  if (lines.length) drawSegments(lines, cols[0], cam.getPosition(), 2 * Math.tan(30 * Math.PI / 180) / canvas.clientHeight)
 })
 app.start()
