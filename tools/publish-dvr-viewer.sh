@@ -58,8 +58,9 @@ if [ -n "$MULTI" ]; then
     for f in index.json dvr_pinhole.mp4 dvr_pinhole.mp4.json scan_cameras.json $PS; do
       cp -L "$SRC/$f" "$DST/$f"; done
     [ -e "$SRC/sky.jpg" ] && cp -L "$SRC/sky.jpg" "$DST/sky.jpg"
-    SCN="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["scene"])' "$SRC/index.json")"
-    cp -L "$SRC/scene/$SCN.sog" "$DST/scene/"
+    # the scan it opens, the other scans its menu offers and the cut-off part (index.json scene / scenes / top)
+    SCN="$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(" ".join([d["scene"],*d.get("scenes",[]),*([d["top"]] if d.get("top") else [])]))' "$SRC/index.json")"
+    for s in $SCN; do cp -L "$SRC/scene/$s.sog" "$DST/scene/"; done
   done
   # a race: race.json, each pilot's DVR clip, the race audio, the sky and the scene it names
   for RC in $RACES; do
