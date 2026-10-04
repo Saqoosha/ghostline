@@ -13,7 +13,7 @@
 | 段 | 道具 | 中身 |
 |---|---|---|
 | 地図（事前、1 回） | `tools/dvr/rt_map.py` | 他の飛行の `poses60_pad.json` と scan cameras の姿勢で 3DGS を 640×480 に描き、XFeat 2048 点を描画の深度で 3D に上げる。DINOv2 の全体記述子も。1 m・20° 以内に既にあるものは間引く |
-| 追跡（毎フレーム） | `tools/dvr/rt_track.py` | 前の答えから等速で予測 → 近いキーフレーム 2 枚と LighterGlue → PnP（MAGSAC）。答えが 0.33 s 無ければ DINOv2 で探し直す |
+| 追跡（毎フレーム） | `tools/dvr/rt_track.py` | 前の答えから等速で予測 → 近いキーフレーム 2 枚と LighterGlue → PnP（PoseLib）。答えが 0.33 s 無ければ DINOv2 で探し直す |
 | 描く点 | ページ（`viewer/src/live.ts`） | **100 ms 遅らせ、そのフレームの前後に届いた答えに 2 次式を当てて描く**（外挿しない）。後ろの答えがまだ無ければ最新の答えで止め、0.3 s 超は「見失い」。tracker は生の答えを送るだけで、描き方はページが決める |
 | 軌跡 | 同上 | 答えが届くたびに直近 0.5 s を描き直す（前後 0.25 s の答えに 2 次式）。外れた点も次の答えで直る |
 
@@ -26,7 +26,7 @@ PnP の間に走らせる（`PIPE=2`、次の周の予測は 1 周古い答え�
 
 ## 使い方（win4090 の WSL、mastenv）
 
-作業場所は `C:\Users\saqoosha\VDGS\dvr\rt`。XFeat は `~/xfeat`（git clone、重みは同梱）、kornia は mastenv に入れた。
+作業場所は `C:\Users\saqoosha\VDGS\dvr\rt`。XFeat は `~/xfeat`（git clone、重みは同梱）、kornia・`poselib`・`tensorrt-cu12`（11.3）・`onnx`・`onnxscript` は mastenv に入れた。
 地図の入力の姿勢（`<flight>.json` は各飛行の `poses60_pad.json`）と `scan_cameras.json` をここに置く。
 
 ```bash
@@ -34,9 +34,15 @@ PnP の間に走らせる（`PIPE=2`、次の周の予測は 1 周古い答え�
 ~/mastenv/bin/python rt_map.py /mnt/c/Users/saqoosha/VDGS/scenes/FDF-2026-R6b-spirula-web-dvr2.ply \
   ../fdf-r6b-d05/dvr_pinhole.mp4.json map_fdf-r6b-d05.npz fdf-r6b-d07.json fdf-r6b-e02.json race-sf-knt.json race-sf-saqoosha.json race-sf-sena.json scan_cameras.json
 # 追跡：1 本なら 1 組、レースなら人数分を並べる（map,video,出力,参照＝オフラインの経路。同じ映像から作った姿勢で、独立した真値ではない）
-~/mastenv/bin/python rt_track.py map_fdf-r6b-d05.npz,../fdf-r6b-d05/dvr_pinhole.mp4,p2_d05,truth-d05.json \
+GLUE=eng/glue_mix.engine XFEAT=eng/xfeat_fp32.engine ~/mastenv/bin/python rt_track.py map_fdf-r6b-d05.npz,../fdf-r6b-d05/dvr_pinhole.mp4,p2_d05,truth-d05.json \
   map_race-sf-knt.npz,../race-sf-knt/dvr_pinhole.mp4,p4_knt,race-sf-knt.json ...
+# TensorRT のエンジン（GPU・TensorRT を替えたら作り直す。640×480・2048 点固定）。GLUE / XFEAT を付けなければ PyTorch で回る
+~/mastenv/bin/python rt_trt.py build eng glue_mix xfeat_fp32
+~/mastenv/bin/python rt_trt.py bench-glue map_fdf-r6b-d05.npz eng/glue_mix.engine           # PyTorch との一致と時間
+~/mastenv/bin/python rt_trt.py bench-xfeat ../fdf-r6b-d05/dvr_pinhole.mp4 eng/xfeat_fp32.engine
 ```
+
+Git Bash（win4090 のログインシェル）から `wsl ... bash -l /mnt/c/...` を打つと、パスが `C:/Program Files/Git/mnt/c/...` に書き換わる。`MSYS_NO_PATHCONV=1 wsl ...` で止める。
 
 出力は `<出力>.json`（ライブの点、viewer の姿勢集合の形）と `<出力>_trail.json`（軌跡）と `<出力>.jsonl`（答えの記録）。
 viewer では `poses60_rt.json` / `poses60_rt_trail.json` として飛行のフォルダに置き、`index.json` に載せる。色は
@@ -50,18 +56,23 @@ ssh 越しに `$p` のような変数を使うループは引用で消える。�
 `_trail.json` は再生での採点用に残してある。ビューアの `live` は `index.json` の `live` に挙げた答えの記録（`rt_track.py` の `.jsonl` から `how` が none 以外）を、
 答えの出た時刻どおりに流して描く
 
-## 基準値（RTX 4090、2026-09-29）
+## 基準値（RTX 4090、TensorRT＋PoseLib、2026-10-05）
 
-この節の「描く点」は `rt_track.py` の外挿した点（`.json`）。ページの 100 ms 遅らせた内挿は上の段落の数字。
+この節の「描く点」は `rt_track.py` の外挿した点（`.json`）。ページの 100 ms 遅らせた内挿は上の段落の数字。遅延はフレームが届いてから姿勢が出るまで。
 
-d05 だけ（60 fps）：**56 Hz**、1 周 16 ms、遅延 p50 37 ms。解けた答え位置 p50 0.25 m・向き 0.5°、描く点 p50 0.55 m / p90 1.39 m・向き 2.3°、
-軌跡 p50 0.28 m / p90 0.68 m（揺れ 1.8 cm、束調整の経路と同程度）。
+| | PyTorch＋MAGSAC（`GLUE` / `XFEAT` なし、`PNP=magsac`） | TensorRT＋PoseLib（推奨） |
+|---|---|---|
+| d05 1 本：処理 / 1 周 p50 / 遅延 p50 | 56 Hz / 15.6 ms / 36 ms | **60 Hz（全フレーム）/ 6.7 ms / 11 ms** |
+| d05 1 本：答えの位置 p50 / p90・向き p50 | 0.24 / 0.77 m・0.5° | 0.19 / 0.72 m・0.4° |
+| d05 1 本：描く点 p50 / p90・向き p90 | 0.54 / 1.38 m・9.3° | 0.50 / 1.24 m・3.1° |
+| 4 本同時：1 周 p50 / 遅延 p50 | 28 ms / 52〜63 ms | **8.7 ms / 18〜23 ms** |
+| 4 本同時：処理 | レース 25 Hz・d05 33 Hz | 全員が全フレーム（レース 30 Hz・d05 59 Hz） |
+| 4 本同時：描く点 p90（KNT / SENA / SAQ / d05） | 9.9 / 4.0 / 2.0 / 1.77 m | 3.4 / 2.4 / 2.3 / 1.18 m |
 
-4 本同時（レース 3 本は中継の 4 分割から切った 30 fps・半分の解像度、＋ d05）：1 周 p50 28 ms（XFeat 4 枚 8 ms ＋ 照合 8 組 19 ms。
-GPU が休まない）、1 人 25〜32 Hz、合計約 107 Hz。描く点 p50 は d05 0.72・SENA 0.85・SAQOOSHA 0.56・KNT 1.25 m、
-軌跡 p50 は 0.28〜0.46 m。レースの 3 本は 30 fps なので 25 Hz がほぼ上限。本番のライブは 60 fps・フル解像度なので、d05 に近いはず（未確認）。
+4 本同時はレース 3 本（中継の 4 分割から切った 30 fps・半分の解像度）＋ d05。4 本同時の描く点の p90 は同じ設定でも回ごとに 1〜2 m ぶれるので、確かなのは Hz と遅延。
+軌跡（200 ms 遅れ）は d05 1 本で p50 0.27 m / p90 0.65 m（揺れ 1.8 cm、束調整の経路と同程度）。本番のライブは 60 fps・フル解像度なので、d05 に近いはず（未確認）。
 
-**MacBook Pro（M1 Max、GPU 32 コア）**：`DEV=mps XFEAT_DIR=<clone>` で動く（XFeat と LighterGlue は CUDA が無いと CPU に置かれるので MPS へ移す。
+**MacBook Pro（M1 Max、GPU 32 コア）**：`DEV=mps XFEAT_DIR=<clone>` で動く（`poselib` が要る。`GLUE` / `XFEAT` は CUDA 専用。PoseLib は Mac では未計測）（XFeat と LighterGlue は CUDA が無いと CPU に置かれるので MPS へ移す。
 MPS の `interpolate(mode="area")` は割り切れない大きさで落ちるので、再局在化の縮小は bilinear＋antialias）。d05 1 人で、2048 点・キーフレーム 2 枚
 は 10 Hz（照合 64 ms）、**1024 点・1 枚（`TOPK=1024 MAPK=1024 NKF=1`）で 17 Hz**、答えの位置は変わらず p50 0.35 m。けど 17 Hz でも約 70 回見失い
 （4090 では 5〜8 回）、描く点は p50 2 m。512 点は対応が足りず見失いが増えて逆に遅い。MPS では照合のバッチがほとんど効かず（1 組約 22 ms、4090 は 2.2 ms）、
@@ -133,7 +144,7 @@ d05 を NVENC の低遅延設定（`-preset p4 -tune ll -rc cbr -bf 0`、VBV 0.5
 | H.264 60 fps 4 Mbps | 0.60 / 1.75 m | 74% | 0.31 / 0.84 m |
 
 **30 fps・HEVC・4 Mbps で品質を保てる（4 人で 16 Mbps）。** 60 fps は 8 Mbps でも届かない。30 fps で落ちるのは描く向きだけ
-（2.3° → 3.3°、答えが半分になるため）。4 人同時ではどのみち 1 人 25〜32 Hz しか処理しないので、30 fps で送っても捨てるものは無い。
+（2.3° → 3.3°、答えが半分になるため）。TensorRT＋PoseLib の tracker は 4 人でも 60 fps を全部処理できるが、送る帯域では 30 fps が得。
 H.264 は同じ精度に約 2 倍のビットレートが要り、1 Mbps 以下で崩れる（0.5 Mbps で描く点の p90 が 7〜16 m）。
 確かでないこと：d05 の 1 本だけ、会場の PC のエンコーダ（VideoToolbox / QSV）は NVENC より多く要るかもしれない、元が既に再エンコード、回線は未計測。
 作り直しと採点は win4090 の `rt/bitrate*.sh` と `rt/score.py`（出力は `rt/br/`）。
@@ -208,6 +219,8 @@ bash tools/dvr/rt_replay.sh build/dvr/office-whoop-1/rec [名前]      # 録っ�
 **基準値（RTX 4090、アナログ Whoop、1 人）**
 - クリップ（25 fps、束調整の経路が真値、自分を含まない地図）：答えの位置 p50 0.09 m・p90 0.30 m、向き 1.2°、解けたのは飛行中の 93%
 - ライブの飛行（60 fps）：処理 32 Hz（塊で届いていたとき）、解けた割合 92〜93%、inlier p10 / p50 / p90 79 / 236 / 432、0.3 秒超の見失いは 145 秒に 3 回・1.8 秒
+- 録画（`office/f2/sent.mp4`）を WSL の中から SRT で流したとき（`wslsend.sh`、受け方は `run_live2.sh` と同じ）：PyTorch＋MAGSAC は処理 50 Hz・届いてから姿勢まで
+  p50 43 ms、TensorRT＋PoseLib は 60 Hz・15 ms（クリップの答えの精度は同じ）
 - 答えの揺れ（前後 0.25 秒の 2 次式からのずれ）は inlier で決まる：60 未満 22 cm、120〜250 で 9 cm、400 以上で 4 cm。回転の速さとは弱く（順位相関 +0.31）、
   速度とは無関係。この Whoop は回転 p50 72 °/s・p99 265 °/s で、レース機の「400 °/s 超で崩れる」領域に入らない
 
@@ -242,9 +255,23 @@ bash tools/dvr/rt_replay.sh build/dvr/office-whoop-1/rec [名前]      # 録っ�
   バッチには点の刈り込み（`width_confidence`）を切る必要がある（B > 1 で `The size of tensor a (2048) must match the size of tensor b` で落ちる）。
   点数は TOPK にゼロ埋めし、埋めた点への対応は捨てる
 - **GPU と CPU を重ねる**（`PIPE`）：d05 だけで 0 → 28 Hz、1 → 43 Hz、2 → 56 Hz。予測が 1 周古くなっても描く点は悪くならなかった（0.61 → 0.55 m）
-- **PnP は `cv2.USAC_MAGSAC`。** SQPnP の RANSAC は 1 回 12 ms で、外れ 70% の合成データでは 0 本しか返さない。MAGSAC は 3 ms で 99/101 本拾う。
-  見失いも減った（新しい答えの無いフレーム 1,063 → 657）
-- **LighterGlue の fp16（`mp`）は使わない。** 解けるフレームが 1,630 → 761 に減り、速くもならない
+- **PnP は PoseLib**（`PNP=poselib`、既定）。走行中の実際の入力（d05、キーフレーム 2 枚分の対応 p50 903 点、inlier 33%）で MAGSAC は 1 回 11 ms だった
+  （前に測った 3 ms は 400 点の合成データ）。時間は MAGSAC の採点に掛かっていて、反復を 500 → 200 にしても 10.8 ms。PoseLib（P3P＋LO-RANSAC）は 2.8 ms で、
+  答えも参照に近い（d05 p50 0.24 → 0.19 m）。GIL を手放すので 4 本のスレッドで 3.8 倍に並ぶ。**PoseLib は既定で成功確率の要る回数の 3 倍を回す**
+  （`dyn_num_trials_mult` 3.0）ので 1 倍に落としてある（`PL_DYN=1`。3.8 → 2.8 ms、精度は同じ）。効かなかった：照合のスコアの順に標本を取る PROSAC（反復が減らず外れが増えた。
+  LighterGlue のスコアの高さと inlier かどうかが結びついていない）、OpenCV の USAC_FAST（5 ms）。2 枚のキーフレームで同じ画素に対応した重複点（24%）を外すと 3.1 ms だが、
+  答えが動くので入れていない（真値では未確認）。その前は SQPnP の RANSAC（12 ms、外れ 70% の合成データで 0/101）から MAGSAC（99/101）に替えて見失いが減った
+- **照合と XFeat は TensorRT のエンジンで回す**（`GLUE=eng/glue_mix.engine XFEAT=eng/xfeat_fp32.engine`、`tools/dvr/rt_trt.py`）。tracker の形は 640×480・2048 点で
+  固定なので、バッチだけ可変のエンジンにできる。TensorRT 11 は ONNX の型どおりに組む（FP16 のフラグが無い）ので、精度は書き出す型で決める。
+  照合の `glue_mix`（6 層は fp16、割り当ての log-softmax と相互判定は fp32）は 8 組 19 → 10 ms、1 組 9〜13 → 3.5 ms、PyTorch との対応の一致（IoU）p50 0.92 で通しの精度は同じ。
+  全部 fp16 も同じ。**fp32 のエンジンはバッチで PyTorch より遅い**（8 組 24 ms）：PyTorch 版も attention は fp16（kornia の flash の経路が `.half()` する）。
+  XFeat は detectAndCompute の可変長の段（NMS の `nonzero`、候補の `argsort`）を「全画素の点数（落ちた画素は -1）から topk」にして固定した（点の一致 IoU 0.99、記述子のコサイン 1.000）。
+  本体の短縮は 4 枚 4.3 → 2.7 ms と小さく、効くのは点を 2048 の固定長のまま有効マスクつきで照合へ渡すこと：フレームごとの切り出し（1 枚ごとに GPU を待つ）と
+  照合前の詰め直しが消える（照合は点の順序に依存しないので、マスクした点をゼロにして対応を捨てれば同じ）。照合の結果も組ごとでなく 1 回で CPU に移す。
+  XFeat の fp16 は速くならない（チャンネルの少ない畳み込み）。書き出しで直したもの：kornia の `unflatten(-1, (heads, -1, 3))`（TensorRT が読めない）と `repeat_interleave`
+  （形を証明できない）は posenc と attention を定数の形で書き直し、XFeat の `BatchNorm2d(affine=False)` は 1 と 0 の重みを明示（書き出しが CPU に重みを作って
+  `Expected all tensors to be on the same device` で落ちる）。比較の記録は win4090 の `rt/trt/`（出力 `rt/trt/out/`、`rt/trt/office/`）
+- **LighterGlue の PyTorch の fp16（`mp`）は使わない。** 解けるフレームが 1,630 → 761 に減り、速くもならない。悪いのは autocast のほうで、TensorRT の fp16 は上のとおり問題ない
 - **見失いは時間で数える。** 試した回数で数えると、速くするほど短い時間で諦め、重い再局在化（約 100 ms、その間フレームが落ちる）
   に入ってまた見失う。fp16 と重なって、原因を取り違えかけた
 - **描く点のギザギザは答えそのものの揺れ**（1 つ 0.25 m）。外挿の速さを最近の速さで抑えても変わらなかった。カルマン＋段差を溶かすと
@@ -276,6 +303,8 @@ bash tools/dvr/rt_replay.sh build/dvr/office-whoop-1/rec [名前]      # 録っ�
 - **結果を公開のページに出す**：`PUSH` とライブページは LAN / Tailscale の中だけ。ghostline.saqoo.sh へは未着手
 - **race ページで 4 人の「軌跡＋ライブの点」を重ねる**。いまの viewer は 1 飛行の姿勢集合を 1 つ出すだけ。配信は LAN の WebSocket で足りる見込み（調査）
 - **台の上で見つからない**：最初の答えは d05 で #177〜#195（離陸前の約 3 秒は点が出ない）
-- **KNT の描く点の p90 が 5.5 m**。速い旋回で見失う区間を調べる
-- さらに速くするなら TensorRT か CUDA Graphs で照合を固める（いまは要らない）
+- **KNT の描く点の p90 が 3.4〜3.8 m**（TensorRT＋PoseLib。前は 5.5 m）。速い旋回で見失う区間を調べる
+- **オフィスのライブ（`run_live2.sh`）はまだ PyTorch＋MAGSAC の旧版**。新しい `rt_track.py` と `rt_trt.py` を `rt/` に、エンジンを `rt/eng/` に置き、
+  `office/live.env` に `GLUE=eng/glue_mix.engine` と `XFEAT=eng/xfeat_fp32.engine` を足す（いまのエンジンは `rt/trt/eng/` にある）。録画の再送では確かめた（上）
+- PnP の 2.8 ms の大半は inlier 33% の RANSAC そのもの。外れを減らすなら重複点を外す（真値で確かめる）
 - 地図は FDF R6b の 6 本から作っている。コースが変わったら、変わった所は他の飛行の視点が無い

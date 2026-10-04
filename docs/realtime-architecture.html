@@ -106,13 +106,13 @@ ul.tight li { margin: 3px 0; }
   <h1>ライブ位置推定のしくみ</h1>
   <p class="lead">HDZero のライブ映像（60 fps）だけから、レース中の各パイロットの機体位置を 3DGS スキャン上に出す。オフラインの通しは 1 フレーム約 1 秒で、束調整が未来のフレームも使う。ライブはそれと別の設計で、<b>過去のフレームだけで 1 フレーム十数 ms</b> に収めている。4 人分を 1 プロセスで、RTX 4090 1 枚で回す。</p>
   <div class="stats">
-    <div class="stat"><div class="v">56<small>Hz</small></div><div class="k">1 人だけ（d05、60 fps）の答えの頻度。1 周 16 ms</div></div>
-    <div class="stat"><div class="v">25–32<small>Hz/人</small></div><div class="k">4 人同時。1 周 p50 28 ms、合計 約 107 Hz</div></div>
-    <div class="stat"><div class="v">0.25<small>m</small></div><div class="k">解けた答えの位置誤差 p50（向き 0.5°）。p90 0.77 m</div></div>
-    <div class="stat"><div class="v">37<small>ms</small></div><div class="k">フレーム到着から姿勢まで p50（1 人）。4 人同時は 54 ms</div></div>
+    <div class="stat"><div class="v">60<small>fps</small></div><div class="k">1 人（d05）は全フレームを処理。1 周 p50 6.7 ms（TensorRT＋PoseLib）</div></div>
+    <div class="stat"><div class="v">8.7<small>ms</small></div><div class="k">4 人同時の 1 周 p50。全員が全フレームを処理（PyTorch の版は 28 ms）</div></div>
+    <div class="stat"><div class="v">0.19<small>m</small></div><div class="k">解けた答えの位置誤差 p50（向き 0.4°）。p90 0.72 m</div></div>
+    <div class="stat"><div class="v">11<small>ms</small></div><div class="k">フレーム到着から姿勢まで p50（1 人）。4 人同時は 18〜23 ms</div></div>
     <div class="stat"><div class="v">≈300<small>ms</small></div><div class="k">会場で送ってから画面に点が出るまで（表示の 100 ms 遅らせを含む）</div></div>
   </div>
-  <p class="note">点線の下線の語はカーソルを乗せると説明が出る。まとめは末尾の<a href="#s12">用語集</a>。<br>誤差の参照はオフラインの通しの経路 <code>poses60_pad.json</code>。同じ映像から作った姿勢で、独立した真値ではない。数値は RTX 4090、2026-09-29〜30 の計測。09・10 は 2026-10-04、屋内のアナログ機。</p>
+  <p class="note">点線の下線の語はカーソルを乗せると説明が出る。まとめは末尾の<a href="#s12">用語集</a>。<br>誤差の参照はオフラインの通しの経路 <code>poses60_pad.json</code>。同じ映像から作った姿勢で、独立した真値ではない。数値は RTX 4090、2026-09-29〜30 の計測。09・10 は 2026-10-04、屋内のアナログ機。冒頭の数字と 04 の「照合・特徴・PnP を速くする」の表は 2026-10-05（照合と XFeat を TensorRT、PnP を PoseLib）。図と 3D の答えは PyTorch＋MAGSAC の版のまま。</p>
   <nav class="toc">
     <a href="#s1">1 全体の流れ</a><a href="#s2">2 キーフレーム地図</a><a href="#s3">3 毎フレームの処理</a><a href="#s4">4 1 周の時間割</a>
     <a href="#s5">5 4 人をまとめる</a><a href="#s6">6 精度</a><a href="#s7">7 描き方</a><a href="#s8">8 回線とビットレート</a><a href="#s9">9 USB キャプチャから</a><a href="#s10">10 ライブの束調整</a><a href="#s11">11 効いたこと・残り</a><a href="#s12">12 用語集</a>
@@ -194,7 +194,7 @@ ul.tight li { margin: 3px 0; }
 <div class="card">
   <div class="legend"><span><i style="background:var(--gpu)"></i>GPU（XFeat・LighterGlue）</span><span><i style="background:var(--cpu)"></i>CPU（PnP）</span><span><i style="background:#c9c7bf"></i>フレームの取り込み</span></div>
   <svg class="chart" viewBox="0 0 1060 290" id="pipeTl"></svg>
-  <p class="note">d05 1 人の実測は XFeat 約 5 ms・照合 約 10 ms（2 組）・PnP 約 3 ms。図の幅はそれに合わせた模式。</p>
+  <p class="note">PyTorch＋MAGSAC の版の模式。XFeat 約 5 ms・照合 約 10 ms（2 組）・PnP 約 3 ms で描いたが、PnP の 3 ms は 400 点の合成データの値で、走行中の実データ（約 900 点）では 11 ms だった（下の表）。</p>
 </div>
 <div class="grid2">
   <div class="card">
@@ -202,7 +202,7 @@ ul.tight li { margin: 3px 0; }
     <svg class="chart" viewBox="0 0 500 190" id="pipeHz"></svg>
   </div>
   <div class="card">
-    <h4>18 Hz から 56 Hz まで</h4>
+    <h4>18 Hz から 56 Hz まで（PyTorch の版）</h4>
     <p class="sub">最初の版は XFeat 11 ms・照合 24 ms・PnP 17 ms が直列</p>
     <table>
       <tr><th>手</th><th>効き</th></tr>
@@ -215,6 +215,19 @@ ul.tight li { margin: 3px 0; }
   </div>
 </div>
 
+<div class="card">
+  <h4>照合・特徴・PnP を速くする（2026-10-05、同じ回で比べた）</h4>
+  <p class="sub">d05 1 本と 4 本同時（レース 3 本＋d05）。精度はオフラインの経路との差</p>
+  <table>
+    <tr><th></th><th class="num">1 本：1 周 / 遅延 p50</th><th class="num">1 本：答え p50 / p90</th><th class="num">4 本：1 周 / 遅延 p50</th></tr>
+    <tr><td>PyTorch＋MAGSAC</td><td class="num">15.6 / 36 ms</td><td class="num">0.24 / 0.77 m</td><td class="num">28 / 52〜63 ms</td></tr>
+    <tr><td>＋照合を TensorRT（<code>GLUE</code>、6 層 fp16・割り当て fp32）</td><td class="num">11.6 / 32 ms</td><td class="num">0.24 / 0.77 m</td><td class="num">17.8 / 41〜45 ms</td></tr>
+    <tr><td>＋XFeat を TensorRT（<code>XFEAT</code>）、点を固定長のまま照合へ</td><td class="num">10.1 / 29 ms</td><td class="num">0.24 / 0.75 m</td><td class="num">16.7 / 39〜42 ms</td></tr>
+    <tr><td>＋PnP を PoseLib（<code>PNP=poselib</code>、<code>PL_DYN=1</code>）</td><td class="num"><b>6.7 / 11 ms</b></td><td class="num"><b>0.19 / 0.72 m</b></td><td class="num"><b>8.7 / 18〜23 ms</b></td></tr>
+  </table>
+  <p class="note">いちばん効いたのは PnP。走行中の対応は約 900 点・inlier 33% で、MAGSAC は 1 回 11 ms（採点が重く、反復を減らしても変わらない）。PoseLib は 2.8 ms で、GIL を手放すので人数分のスレッドで並ぶ。TensorRT の fp16 は PyTorch の autocast と違って解けるフレームを減らさない。fp32 のエンジンはバッチで PyTorch より遅い（PyTorch 版も attention は fp16）。PROSAC は効かなかった。</p>
+</div>
+
 <!-- ============================================================ 5 -->
 <h2 id="s5"><span class="n">05</span>4 人をまとめる</h2>
 <p>毎周、各パイロットの<b>一番新しく届いたフレーム</b>を取る（間のフレームは捨てる。キャプチャカードと同じ）。XFeat は全員分を 1 回、照合は全組（見失った人の探し直しの候補も含む）を 1 回のバッチで、PnP は人数分のスレッドで解く。LighterGlue は計算より命令の回数で時間が決まっていて、1 組 14 ms、8 組まとめて 19 ms。</p>
@@ -225,9 +238,9 @@ ul.tight li { margin: 3px 0; }
     <p class="note">1 組ずつは 14 ms × 8 の計算値。バッチは点数を 2,048 にゼロ埋めして、LighterGlue の点の刈り込み（<code>width_confidence</code>）を切る必要がある（B &gt; 1 で形が合わず落ちる）。</p>
   </div>
   <div class="card">
-    <h4>4 人同時の 1 周（p50 28 ms）</h4>
+    <h4>4 人同時の 1 周（PyTorch の版、p50 28 ms）</h4>
     <svg class="chart" viewBox="0 0 500 170" id="cyc4Svg"></svg>
-    <p class="note">GPU が休まない。レースの 3 本は中継の 4 分割から切った 30 fps・半分の解像度なので 25 Hz がほぼ上限。d05 は 60 fps なので 32 Hz。</p>
+    <p class="note">GPU が休まない。レースの 3 本は中継の 4 分割から切った 30 fps・半分の解像度なので 25 Hz がほぼ上限。d05 は 60 fps なので 32 Hz。TensorRT＋PoseLib では 1 周 8.7 ms で、全員が全フレームを処理する（レース 30 Hz・d05 59 Hz）。</p>
   </div>
 </div>
 
@@ -478,7 +491,8 @@ ul.tight li { margin: 3px 0; }
       <li>本物のライブ入力で束調整と <code>sync=false</code> を通す（どちらも録画を流し直して測った）。4 人ぶんのライブ入力も未確認</li>
       <li>公開のページ（ghostline.saqoo.sh）へ答えを流す。いまは LAN / Tailscale の中だけ</li>
       <li>台の上で見つからない：d05 の最初の答えは #177〜#195（離陸前の約 3 秒は点が出ない）</li>
-      <li>KNT の描く点の p90 5.5 m：速い旋回で見失う区間</li>
+      <li>KNT の描く点の p90 3.4〜3.8 m（TensorRT＋PoseLib。前は 5.5 m）：速い旋回で見失う区間</li>
+      <li>オフィスのライブ（<code>run_live2.sh</code>）はまだ PyTorch＋MAGSAC。録画の再送では TensorRT＋PoseLib で届いてから姿勢まで 43 → 15 ms</li>
       <li>コースが変わったとき：スキャンのカメラだけの地図、合成の視点 14,400 枚（1 m / 2.5 m の高さ × 12 方位 × 下向き 10°/35°）を作って試している途中</li>
       <li>Apple M1 Max：1 人 25 Hz まで（1,024 点・1 枚・FLOW など）、描く点 p50 1.44 m。4 人は無理 → 会場で処理するなら NVIDIA のノート</li>
     </ul>
@@ -501,6 +515,8 @@ ul.tight li { margin: 3px 0; }
     <tr><td><code>PUSH</code></td><td class="num">0</td><td>ポート番号。答えを 1 行ずつ server-sent events で流す</td></tr>
     <tr><td><code>BA</code></td><td class="num">0</td><td>秒。答えのたびに直近の答えをまとめて解き直す（<code>BA_PX</code> 8 / <code>BA_ACC</code> 3 / <code>BA_ALPHA</code> 10）</td></tr>
     <tr><td><code>INFO</code></td><td class="num">0</td><td>1 で各行に 6×6 の情報行列を書く</td></tr>
+    <tr><td><code>GLUE</code> / <code>XFEAT</code></td><td class="num">– / –</td><td><code>rt_trt.py</code> で作った TensorRT のエンジン（CUDA 専用、640×480・2048 点固定）。無ければ PyTorch</td></tr>
+    <tr><td><code>PNP</code> / <code>PL_DYN</code></td><td class="num">poselib / 1</td><td>PnP の RANSAC（<code>magsac</code> で OpenCV）/ PoseLib の反復回数の倍率</td></tr>
     <tr><td><code>DEV</code></td><td class="num">cuda</td><td><code>mps</code> で Apple silicon</td></tr>
   </table>
 </div>
@@ -582,8 +598,8 @@ function axes(svg, { x0, x1, y0, y1, W, H, L = 48, R = 12, T = 12, B = 28, xt, y
     { x: 455, y: 58, w: 175, h: 50, t: '受信スレッド', d: 'gst → デコード 1280×720', c: '#c9c7bf' },
     { x: 455, y: 118, w: 175, h: 50, t: 'マスごとに remap 1 回', d: '4:3 に戻す・魚眼補正・640×480', c: '#c9c7bf' },
     { x: 645, y: 58, w: 180, h: 50, t: 'GPU（メインスレッド）', d: 'XFeat 全員分 1 回', c: C.gpu },
-    { x: 645, y: 118, w: 180, h: 50, t: 'GPU', d: 'LighterGlue 全組 1 回', c: C.gpu },
-    { x: 645, y: 178, w: 180, h: 50, t: 'CPU スレッド × 人数', d: 'PnP（MAGSAC）＋関門', c: C.cpu },
+    { x: 645, y: 118, w: 180, h: 50, t: 'GPU（TensorRT）', d: 'LighterGlue 全組 1 回', c: C.gpu },
+    { x: 645, y: 178, w: 180, h: 50, t: 'CPU スレッド × 人数', d: 'PnP（PoseLib）＋関門', c: C.cpu },
     { x: 455, y: 178, w: 175, h: 50, t: 'キーフレーム地図', d: '約 2,300 枚、GPU に 0.7 GB', c: C.s4 },
     { x: 455, y: 244, w: 370, h: 50, t: '答えの記録 .jsonl（i, pos, quat, inl, how, lat）', d: '→ WebSocket でページへ（未実装）', c: '#c9c7bf' },
   ]
@@ -634,7 +650,7 @@ function axes(svg, { x0, x1, y0, y1, W, H, L = 48, R = 12, T = 12, B = 28, xt, y
     el('line', { x1: sx(v), x2: sx(v), y1: 30, y2: 76, stroke: C.ink, 'stroke-width': v ? 1 : 0 }, s)
     el('text', { x: Math.min(sx(v), W - 4), y: 22, 'text-anchor': v === 0 ? 'start' : v === 300 ? 'end' : 'middle', 'font-size': 11.5, fill: C.ink, class: 'mono' }, s, t + (v ? ' ms' : ''))
   }
-  el('text', { x: L, y: 135, 'font-size': 11.5, fill: C.ink3 }, s, 'tracker の 58 ms の中身：取り込み待ち＋1 周（4 人で p50 28 ms）＋PnP。1 人だけのファイル再生ではフレーム到着から答えまで p50 37 ms')
+  el('text', { x: L, y: 135, 'font-size': 11.5, fill: C.ink3 }, s, 'tracker の 58 ms は PyTorch＋MAGSAC の版（4 人で 1 周 28 ms）。TensorRT＋PoseLib では 4 人で到着から答えまで p50 18〜23 ms、1 人 11 ms')
 })()
 
 // ---------------------------------------------------------------- 2b. keyframe sources
@@ -668,8 +684,8 @@ function axes(svg, { x0, x1, y0, y1, W, H, L = 48, R = 12, T = 12, B = 28, xt, y
   box(10, y, w, h, '① 予測', ['直近 ≤6 個の答えから', '等速＋等角速度', '（PIPE=2 では 1 周古い答え）'], C.ink3)
   box(220, y, w, h, '② キーフレーム 2 枚', ['距離/1.5 m ＋ 角度/15° が', '小さい順', '12 m・45° を超えるものは除く'], C.s4)
   box(430, y, w, h, '③ XFeat', ['フレーム 640×480 から', '特徴点 2,048 個', 'OSD と補正の縁は除く'], C.gpu)
-  box(640, y, w, h, '④ LighterGlue', ['フレーム × キーフレーム', '→ 2D-3D の対応', 'fp32、点の刈り込みなし'], C.gpu)
-  box(850, y, 200, h, '⑤ PnP', ['USAC_MAGSAC（再投影 3 px）', '＋ LM で仕上げ', 'world-from-camera'], C.cpu)
+  box(640, y, w, h, '④ LighterGlue', ['フレーム × キーフレーム', '→ 2D-3D の対応', 'TensorRT、6 層 fp16、刈り込みなし'], C.gpu)
+  box(850, y, 200, h, '⑤ PnP', ['PoseLib（再投影 3 px）', '＋ LM で仕上げ', 'world-from-camera'], C.cpu)
   ar(`M${200},${y + 56}H${216}`); ar(`M${410},${y + 56}H${426}`); ar(`M${620},${y + 56}H${636}`); ar(`M${830},${y + 56}H${846}`)
   // gate
   const gy = 200
@@ -991,7 +1007,9 @@ const GLOSS = [
     ['照合', null, 'フレームとキーフレームの特徴点を対応づけること。キーフレームの点は 3D 位置を持つので、画像の点と 3D 点の組（2D-3D の対応）が得られる。'],
     ['PnP', 'Perspective-n-Point', '画像上の点とその 3D 位置の組から、カメラの位置と向きを求める計算。'],
     ['RANSAC', null, '間違った対応が混ざっていても、少数の組で仮の答えを作っては多くの組が賛成する答えを選ぶ方法。'],
-    ['MAGSAC', null, 'RANSAC の改良版。外れ値の多いデータでも速く正しい答えを拾う。OpenCV の USAC_MAGSAC。'],
+    ['MAGSAC', null, 'RANSAC の改良版。OpenCV の USAC_MAGSAC。走行中の約 900 点では 1 回 11 ms かかり、PoseLib に替えた（PNP=magsac で戻せる）。'],
+    ['PoseLib', null, 'カメラ姿勢を解く C++ のライブラリ。P3P＋LO-RANSAC。約 900 点で 1 回 2.8 ms、GIL を手放すのでスレッドで並ぶ。'],
+    ['TensorRT', null, 'NVIDIA の推論エンジン。形を固定したネットワークを GPU 向けに組み直して速くする。LighterGlue と XFeat に使う（rt_trt.py）。'],
     ['inlier', null, '求めた姿勢と整合する対応。多いほど答えが確か。合わないものは外れ値（outlier）。'],
     ['姿勢', null, 'カメラ（機体）の位置と向きの組。quat は向きを表す 4 つの数（クォータニオン）。'],
     ['再局在化', '探し直し', '直前の答えを当てにせず、地図全体から今いる場所を探し直すこと。見失ったときと最初に使う。'],
@@ -1002,12 +1020,12 @@ const GLOSS = [
     ['束調整', null, 'オフラインの通しで、全フレームの姿勢をまとめて最適化する処理。未来のフレームも使うのでライブでは使えない。'],
     ['カルマン', null, 'カルマンフィルタ。ぶれのある測定から、動きの前提を使って現在の状態を推定する方法。'],
     ['バッチ', null, '複数の仕事を GPU への 1 回の命令にまとめること。GPU は命令 1 回ごとの手間が大きいので、まとめるほど 1 件あたりが速い。'],
-    ['fp16', null, '数を 16 ビットで持つこと（fp32 は 32 ビット）。速く軽いが粗い。LighterGlue では解けるフレームが半分に減った。'],
+    ['fp16', null, '数を 16 ビットで持つこと（fp32 は 32 ビット）。速く軽いが粗い。PyTorch の autocast では LighterGlue の解けるフレームが半分に減ったが、TensorRT の fp16 では減らない。'],
     ['CUDA', null, 'NVIDIA の GPU で計算するしくみ。MPS は Apple silicon の GPU で計算するしくみ。'],
   ]],
   ['数字の読み方', [
     ['p50', null, '中央値。半分がこれ以下。p90 は 90% がこれ以下に収まる値で、悪いほうの目安。'],
-    ['Hz', null, '1 秒あたりの回数。56 Hz なら 1 秒に 56 個の答え。'],
+    ['Hz', null, '1 秒あたりの回数。60 Hz なら 1 秒に 60 個の答え。'],
     ['外挿', null, '最新の答えの動きを延ばして、まだ答えの無い今の位置を推すこと。速い旋回で外れる。'],
     ['内挿', null, '前後 2 つ以上の答えの間を埋めること。答えを待つ分だけ遅れるが外れにくい。'],
     ['遅延', null, 'ある時点から結果が出るまでの時間。ここでは主に「会場で送ってから点が出るまで」。'],

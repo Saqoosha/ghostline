@@ -25,7 +25,9 @@ env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s w
      side in its fit), PIPE (2: overlap the next cycle's GPU work with this cycle's PnP, below),
      FLOW (0; 1 = carry points to the next frame with LK instead of matching, below), FLOW_EVERY (8), FLOW_RESEED (60), FLOW_MIN (30),
      PUSH (0; a port: answers out as server-sent events while it runs, for viewer/live.html),
-     INFO (0; 1 = rows carry H), BA (0; seconds of answers solved again together after every answer, below)"""
+     INFO (0; 1 = rows carry H), BA (0; seconds of answers solved again together after every answer, below),
+     GLUE / XFEAT (unset; TensorRT engines from rt_trt.py to match / find features with instead of PyTorch),
+     PNP (poselib; magsac = OpenCV's USAC_MAGSAC, below)"""
 import os
 # One BLAS thread. numpy's matrices here are small (the BA's system is about 150 x 150), and OpenBLAS otherwise starts a
 # thread per core for them: on a 32-core machine that took the tracker from 54 to 33 Hz with BA on, the solve itself 0.2 ms.
@@ -37,6 +39,9 @@ from scipy.spatial.transform import Rotation as Rot, Slerp
 dev = os.environ.get("DEV", "cuda"); E = lambda k, d: float(os.environ.get(k, d))   # DEV=mps runs on Apple silicon
 LIVE, NKF, MIN_INL, LOST = int(E("LIVE", 1)), int(E("NKF", 2)), int(E("MIN_INL", 30)), E("LOST", 0.33)
 RTOPK, RMIN, TOPK, NMAX, BATCH = int(E("RELOC_TOPK", 5)), int(E("RELOC_MIN", 50)), int(E("TOPK", 2048)), int(E("NMAX", 0)), int(E("BATCH", 16))
+PNP = os.environ.get("PNP", "poselib")           # poselib (PoseLib's LO-RANSAC) or magsac (OpenCV USAC_MAGSAC)
+if PNP == "poselib": import poselib
+PL_DYN = E("PL_DYN", 1.0)                           # PoseLib: trials x this over what success_prob 0.99 needs
 MAPK = int(E("MAPK", 0))                            # keypoints per keyframe used from the map (0 = all)
 # NEAR: after a failed attempt, match NEAR_K keyframes around the prediction up to NEAR_ANG degrees off, and add NEAR_K
 # around the last position to the global retrieval's candidates - a fast turn breaks the narrow search before anything else.
@@ -175,42 +180,71 @@ xfeat = XFeat(top_k=TOPK)
 from modules.lighterglue import LighterGlue; LighterGlue.default_conf_xfeat["mp"] = False   # fp16: d05 solved 1,630 -> 761 frames, not faster
 LighterGlue.default_conf_xfeat["width_confidence"] = -1   # point pruning works only one pair at a time; the batch is worth more
 lg = LighterGlue().eval()
+glue = xf = None                                    # LighterGlue / XFeat as TensorRT engines (rt_trt.py)
+if os.environ.get("GLUE"):                          # both sides must be TOPK points
+    assert dev == "cuda" and streams[0].m["kp"].shape[1] == TOPK, "GLUE needs cuda and MAPK = TOPK"
+    from rt_trt import Trt; glue = Trt(os.environ["GLUE"])
+if os.environ.get("XFEAT"):
+    assert dev == "cuda", "XFEAT needs cuda"
+    from rt_trt import Trt; xf = Trt(os.environ["XFEAT"])
 if dev != "cuda":                                   # both pick cuda-or-cpu themselves
     xfeat.dev = lg.dev = torch.device(dev); xfeat.net.to(dev); lg.net.to(dev)
 dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14").to(dev).eval()
 MEAN, STD = T([0.485, 0.456, 0.406])[None, :, None, None], T([0.229, 0.224, 0.225])[None, :, None, None]
 SIZE = T([[RW, RH]])
-def features(batch):                                # [(stream, frame)] -> per frame (keypoints off the OSD / border, descriptors), and the tensor
+def features(batch):                                # [(stream, frame)] -> per frame (keypoints, descriptors[, mask]), and the tensor
     x = torch.stack([torch.from_numpy(s.frames[i]) for s, i in batch]).to(dev).permute(0, 3, 1, 2).float() / 255
+    if xf:                                          # the engine's fixed TOPK points with a mask (a point, off the OSD / border): no per-frame cut, no wait
+        kp, d, sc = xf(x); ix = kp.long(); qv = torch.stack([s.qvalid for s, _ in batch])
+        ok = (sc > 0) & qv[torch.arange(len(batch), device=dev)[:, None], ix[..., 1], ix[..., 0]]
+        return [(kp[b], d[b], ok[b]) for b in range(len(batch))], x
     with torch.no_grad(): fs = xfeat.detectAndCompute(x, top_k=TOPK)
     out = []
-    for (s, _), f in zip(batch, fs):
+    for (s, _), f in zip(batch, fs):                # keypoints off the OSD / border
         uv = f["keypoints"]; ix = uv.round().long(); ok = s.qvalid[ix[:, 1].clamp(0, RH - 1), ix[:, 0].clamp(0, RW - 1)]
         out.append((uv[ok], f["descriptors"][ok]))
     return out, x
-def match_all(pairs):                               # [(query (uv, desc), stream, keyframe)] -> per pair (uv on the frame, X in the world)
+def match_all(pairs):                               # [(query, stream, keyframe)] -> per pair (uv on the frame, X in the world)
     res = []
-    for c in range(0, len(pairs), BATCH):           # pad every side to TOPK points; matches onto padding are dropped
+    for c in range(0, len(pairs), BATCH):
         chunk = pairs[c:c + BATCH]; B = len(chunk)
-        kp0 = torch.zeros(B, TOPK, 2, device=dev); d0 = torch.zeros(B, TOPK, 64, device=dev); n0 = []
-        for b, ((uv, d), s, k) in enumerate(chunk): kp0[b, :len(uv)] = uv; d0[b, :len(uv)] = d; n0.append(len(uv))
+        if len(chunk[0][0]) == 3:                   # fixed TOPK with a mask: masked points zeroed (the matcher does not care about order), their matches dropped
+            ok0 = torch.stack([q[2] for q, _, _ in chunk]); kp0 = torch.stack([q[0] for q, _, _ in chunk]) * ok0[..., None]
+            d0 = torch.stack([q[1] for q, _, _ in chunk]) * ok0[..., None]
+        else:                                       # pad every side to TOPK points; matches onto padding are dropped
+            kp0 = torch.zeros(B, TOPK, 2, device=dev); d0 = torch.zeros(B, TOPK, 64, device=dev); n0 = []
+            for b, ((uv, d), s, k) in enumerate(chunk): kp0[b, :len(uv)] = uv; d0[b, :len(uv)] = d; n0.append(len(uv))
+            ok0 = torch.arange(TOPK, device=dev)[None] < torch.tensor(n0, device=dev)[:, None]
         ks = torch.tensor([k for _, _, k in chunk], device=dev); mp = chunk[0][1].m
         same = all(s.m is mp for _, s, _ in chunk)
         kp1 = mp["kp"][ks] if same else torch.stack([s.m["kp"][k] for _, s, k in chunk])
         d1 = (mp["desc"][ks] if same else torch.stack([s.m["desc"][k] for _, s, k in chunk])).float()
-        with torch.no_grad():
-            o = lg.net({"image0": {"keypoints": kp0, "descriptors": d0, "image_size": SIZE.expand(B, 2)},
-                        "image1": {"keypoints": kp1, "descriptors": d1, "image_size": SIZE.expand(B, 2)}})
+        if glue: m0 = glue(kp0, d0, kp1, d1)[0]
+        else:
+            with torch.no_grad():
+                m0 = lg.net({"image0": {"keypoints": kp0, "descriptors": d0, "image_size": SIZE.expand(B, 2)},
+                             "image1": {"keypoints": kp1, "descriptors": d1, "image_size": SIZE.expand(B, 2)}})["matches0"]
+        m0, ok0, kp0 = m0.cpu().numpy(), ok0.cpu().numpy(), kp0.cpu().numpy()   # one copy each for the chunk, not one per pair
         for b, (q, s, k) in enumerate(chunk):
-            idx = o["matches"][b].cpu().numpy(); idx = idx[(idx[:, 0] < n0[b]) & (idx[:, 1] < s.m["n"][k])]
-            res.append((q[0][idx[:, 0]].cpu().numpy(), s.m["X"][k][idx[:, 1]]))
+            i = np.nonzero((m0[b] >= 0) & ok0[b])[0]; j = m0[b][i]; keep = j < s.m["n"][k]
+            res.append((kp0[b][i[keep]], s.m["X"][k][j[keep]]))
     return res
 def pnp(K, uv, X):
-    # MAGSAC, not SQPnP in a plain RANSAC: 12 -> 3 ms, and at 30% inliers (synthetic, 400 matches) it keeps 99 of 101
-    # where SQPnP returns none. Narrowing the matches around the predicted pose first did not help.
+    # PoseLib, not OpenCV: on the tracker's own matches (d05, ~900 from two keyframes, 33% inliers) MAGSAC takes 11 ms
+    # (its scoring, not its 500 iterations: 200 is as slow) and PoseLib 4 ms, and the answers come out closer to the
+    # offline path (p50 0.24 -> 0.19 m). MAGSAC in turn beat SQPnP in a plain RANSAC (12 ms, none kept at 30% inliers).
+    # Narrowing the matches around the predicted pose first did not help.
     if len(uv) < 12: return None
-    ok, rv, tv, inl = cv2.solvePnPRansac(X.astype(np.float64), uv.astype(np.float64), K, None, iterationsCount=500, reprojectionError=3.0, flags=cv2.USAC_MAGSAC)
-    if not ok or inl is None or len(inl) < 12: return None
+    if PNP == "poselib":                            # P3P + LO-RANSAC in C++; it lets go of the GIL, so the PnP threads run side by side
+        # dyn_num_trials_mult: PoseLib runs 3x the trials its success_prob asks for by default (~377 at 33% inliers instead of ~126)
+        pose, r = poselib.estimate_absolute_pose(uv.astype(np.float64), X.astype(np.float64), {"model": "PINHOLE", "width": RW, "height": RH, "params": [K[0, 0], K[1, 1], K[0, 2], K[1, 2]]},
+                                                 {"max_reproj_error": 3.0, "max_iterations": 500, "min_iterations": 10, "success_prob": 0.99, "dyn_num_trials_mult": PL_DYN}, {})
+        inl = np.flatnonzero(r["inliers"])[:, None]
+        if len(inl) < 12: return None
+        rv, tv = cv2.Rodrigues(pose.R)[0], pose.t.reshape(3, 1).copy()
+    else:
+        ok, rv, tv, inl = cv2.solvePnPRansac(X.astype(np.float64), uv.astype(np.float64), K, None, iterationsCount=500, reprojectionError=3.0, flags=cv2.USAC_MAGSAC)
+        if not ok or inl is None or len(inl) < 12: return None
     rv, tv = cv2.solvePnPRefineLM(X[inl[:, 0]].astype(np.float64), uv[inl[:, 0]].astype(np.float64), K, None, rv, tv)
     Rw = cv2.Rodrigues(rv)[0]; c = -Rw.T @ tv[:, 0]
     return Rot.from_matrix(Rw.T), c, len(inl), inl[:, 0], (info(K, Rw, c, X[inl[:, 0]]) if INFO or BA else None)
