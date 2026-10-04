@@ -102,7 +102,7 @@ ul.tight li { margin: 3px 0; }
 <main>
 
 <header>
-  <div class="mono muted" style="font-size:12.5px">ghostline / realtime-flight-position · rt_map.py · rt_track.py · rt_send.py · viewer/src/live.ts</div>
+  <div class="mono muted" style="font-size:12.5px">ghostline · rt_map.py · rt_track.py · rt_send.py · rt_capture.sh · viewer/src/live.ts · viewer/live.html</div>
   <h1>ライブ位置推定のしくみ</h1>
   <p class="lead">HDZero のライブ映像（60 fps）だけから、レース中の各パイロットの機体位置を 3DGS スキャン上に出す。オフラインの通しは 1 フレーム約 1 秒で、束調整が未来のフレームも使う。ライブはそれと別の設計で、<b>過去のフレームだけで 1 フレーム十数 ms</b> に収めている。4 人分を 1 プロセスで、RTX 4090 1 枚で回す。</p>
   <div class="stats">
@@ -112,10 +112,10 @@ ul.tight li { margin: 3px 0; }
     <div class="stat"><div class="v">37<small>ms</small></div><div class="k">フレーム到着から姿勢まで p50（1 人）。4 人同時は 54 ms</div></div>
     <div class="stat"><div class="v">≈300<small>ms</small></div><div class="k">会場で送ってから画面に点が出るまで（表示の 100 ms 遅らせを含む）</div></div>
   </div>
-  <p class="note">点線の下線の語はカーソルを乗せると説明が出る。まとめは末尾の<a href="#s10">用語集</a>。<br>誤差の参照はオフラインの通しの経路 <code>poses60_pad.json</code>。同じ映像から作った姿勢で、独立した真値ではない。数値は RTX 4090、2026-09-29〜30 の計測。</p>
+  <p class="note">点線の下線の語はカーソルを乗せると説明が出る。まとめは末尾の<a href="#s12">用語集</a>。<br>誤差の参照はオフラインの通しの経路 <code>poses60_pad.json</code>。同じ映像から作った姿勢で、独立した真値ではない。数値は RTX 4090、2026-09-29〜30 の計測。09・10 は 2026-10-04、屋内のアナログ機。</p>
   <nav class="toc">
     <a href="#s1">1 全体の流れ</a><a href="#s2">2 キーフレーム地図</a><a href="#s3">3 毎フレームの処理</a><a href="#s4">4 1 周の時間割</a>
-    <a href="#s5">5 4 人をまとめる</a><a href="#s6">6 精度</a><a href="#s7">7 描き方</a><a href="#s8">8 回線とビットレート</a><a href="#s9">9 効いたこと・残り</a><a href="#s10">10 用語集</a>
+    <a href="#s5">5 4 人をまとめる</a><a href="#s6">6 精度</a><a href="#s7">7 描き方</a><a href="#s8">8 回線とビットレート</a><a href="#s9">9 USB キャプチャから</a><a href="#s10">10 ライブの束調整</a><a href="#s11">11 効いたこと・残り</a><a href="#s12">12 用語集</a>
   </nav>
 </header>
 
@@ -305,7 +305,159 @@ ul.tight li { margin: 3px 0; }
 </div>
 
 <!-- ============================================================ 9 -->
-<h2 id="s9"><span class="n">09</span>効いたこと・効かなかったこと・残っていること</h2>
+<h2 id="s9"><span class="n">09</span>USB キャプチャから 1 人をライブで（屋内の Tiny Whoop）</h2>
+<p>アナログの Tiny Whoop をオフィス（約 10 m 四方）で飛ばし、受信機の HDMI を USB キャプチャで Mac に取り込んで、位置をページにその場で描いた。スキャンは THETA V の動画から作った 3DGS、地図は先に同じ部屋で撮ったクリップの経路から作った。ここまでの節の数字は FDF のレース機、この節と次の節は 2026-10-04 の屋内の計測。</p>
+<div class="card">
+<svg class="chart" viewBox="0 0 1060 74">
+<rect x="8" y="10" width="160" height="50" rx="8" fill="#fcfcfb" stroke="#e2e0d9"/>
+<text x="88" y="31" text-anchor="middle" font-size="12.5" fill="#121211">アナログ受信機<tspan x="88" dy="15">HDMI</tspan></text>
+<path d="M170 35 h10 m-4 -4 l4 4 l-4 4" stroke="#8a8983" fill="none" stroke-width="1.4"/>
+<rect x="184" y="10" width="160" height="50" rx="8" fill="#fcfcfb" stroke="#e2e0d9"/>
+<text x="264" y="31" text-anchor="middle" font-size="12.5" fill="#121211">USB キャプチャ<tspan x="264" dy="15">Mac</tspan></text>
+<path d="M346 35 h10 m-4 -4 l4 4 l-4 4" stroke="#8a8983" fill="none" stroke-width="1.4"/>
+<rect x="360" y="10" width="160" height="50" rx="8" fill="#fcfcfb" stroke="#e2e0d9"/>
+<text x="440" y="31" text-anchor="middle" font-size="12.5" fill="#121211">GStreamer<tspan x="440" dy="15">x264 → RTP / SRT</tspan></text>
+<path d="M522 35 h10 m-4 -4 l4 4 l-4 4" stroke="#8a8983" fill="none" stroke-width="1.4"/>
+<rect x="536" y="10" width="160" height="50" rx="8" fill="#fcfcfb" stroke="#e2e0d9"/>
+<text x="616" y="31" text-anchor="middle" font-size="12.5" fill="#121211">rt_track.py<tspan x="616" dy="15">RTX 4090</tspan></text>
+<path d="M698 35 h10 m-4 -4 l4 4 l-4 4" stroke="#8a8983" fill="none" stroke-width="1.4"/>
+<rect x="712" y="10" width="160" height="50" rx="8" fill="#fcfcfb" stroke="#e2e0d9"/>
+<text x="792" y="31" text-anchor="middle" font-size="12.5" fill="#121211">server-sent events<tspan x="792" dy="15">PUSH</tspan></text>
+<path d="M874 35 h10 m-4 -4 l4 4 l-4 4" stroke="#8a8983" fill="none" stroke-width="1.4"/>
+<rect x="888" y="10" width="160" height="50" rx="8" fill="#fcfcfb" stroke="#e2e0d9"/>
+<text x="968" y="31" text-anchor="middle" font-size="12.5" fill="#121211">live.html<tspan x="968" dy="15">点・軌跡・映像</tspan></text>
+</svg>
+  <p class="note">tracker は答えを 1 行ずつ流し、ページ（<code>viewer/live.html</code>）が点・軌跡・視錐台を描く。右上の映像はブラウザがキャプチャを直接読んだもの。<code>rt_capture.sh</code> は送った映像と答えを録り、<code>?replay=</code> で同じ飛行を再生できる（スライダーを飛びながら触れないため）。</p>
+</div>
+<div class="grid2">
+  <div class="card">
+    <h4>送り手は時計を待たずに送る（<code>sync=false</code>）</h4>
+    <p class="sub">tracker の処理の頻度。同じ録画を同じ経路で流した</p>
+<svg class="chart" viewBox="0 0 500 92">
+<text x="202" y="21" text-anchor="end" font-size="12" fill="#52514e">塊で届く（既定の送り方）</text>
+<rect x="210" y="10" width="82.5" height="16" rx="3" fill="var(--s2)"/>
+<text x="298.5" y="22" font-size="12" class="mono" fill="#121211">22.5 Hz</text>
+<text x="202" y="47" text-anchor="end" font-size="12" fill="#52514e">等間隔で届く</text>
+<rect x="210" y="36" width="187.7" height="16" rx="3" fill="var(--s1)"/>
+<text x="403.7" y="48" font-size="12" class="mono" fill="#121211">51.2 Hz</text>
+<text x="202" y="73" text-anchor="end" font-size="12" fill="#52514e">ファイルから直接（上限）</text>
+<rect x="210" y="62" width="197.6" height="16" rx="3" fill="var(--io)"/>
+<text x="413.6" y="74" font-size="12" class="mono" fill="#121211">53.9 Hz</text>
+</svg>
+    <p>GStreamer の出口は既定で「時計に合わせて待ってから送る」。Mac ではその待ちがずれて、フレームが 40〜60 ms たまってから 5 ms 間隔でまとめて出ていた。tracker は<b>最新の 1 枚しか見ない</b>ので、処理の回数が塊の数になる。</p>
+    <table>
+      <tr><th>カメラ → 4090</th><th class="num">到着間隔 p50</th><th class="num">p90</th><th class="num">30 ms 超</th></tr>
+      <tr><td>時計を待つ（既定）</td><td class="num">8.2 ms</td><td class="num">51.1 ms</td><td class="num">22%</td></tr>
+      <tr><td>待たずに送る</td><td class="num">15.9 ms</td><td class="num">21.6 ms</td><td class="num">4%</td></tr>
+    </table>
+    <p class="note">原因ではなかったもの：回線（Mac の中だけで流しても同じ）、SRT（素の UDP でも同じ）、デコーダのスレッド、パイプに流す画の大きさ。録画に残った時刻は 16〜17 ms の等間隔で、カメラは無実。受信パイプラインだけを動かして到着間隔を測ると切り分けられる。</p>
+  </div>
+  <div class="card">
+    <h4>屋内での基準値 <span class="pill">RTX 4090、1 人、60 fps</span></h4>
+    <table>
+      <tr><th>項目</th><th class="num">値</th></tr>
+      <tr><td>解けたフレーム（飛行中）</td><td class="num">92〜93%</td></tr>
+      <tr><td>答えの位置（オフラインの経路との差）p50 / p90</td><td class="num">0.09 / 0.30 m</td></tr>
+      <tr><td>答えの向き p50</td><td class="num">1.2°</td></tr>
+      <tr><td>inlier p10 / p50 / p90</td><td class="num">79 / 236 / 432</td></tr>
+      <tr><td>0.3 秒を超える見失い（145 秒の飛行）</td><td class="num">3 回・1.8 秒</td></tr>
+      <tr><td>フレーム到着から姿勢まで p50</td><td class="num">43 ms</td></tr>
+    </table>
+    <p><b>答えの揺れは inlier の数で決まる</b>：60 点未満で 22 cm、120〜250 点で 9 cm、400 点以上で 4 cm。回転の速さとは弱い関係（順位相関 +0.31）、速度とは無関係。この機体は回転の中央値 72 °/s・99% 点 265 °/s で、レース機の「400 °/s を超えると崩れる」領域に入らない。</p>
+    <p class="note">受信の画は小さくてよい（<code>GRID_CROP</code> で中央を切って 640×480 か 320×240 に）。解けた割合 97%・inlier 中央値 290 前後は 1280×720 のままと同じ。08 の「解像度は効かない」と同じ結果。</p>
+  </div>
+</div>
+<div class="grid2">
+  <div class="card">
+    <h4>精度で効かなかったこと</h4>
+    <p class="sub">真値つきのクリップで、オフラインの経路との差 p50 はどれも 7〜9 cm のまま</p>
+    <ul class="tight">
+      <li>飛行を地図に足す：見失いは 5 回 3.1 秒 → 3 回 1.4 秒、揺れは同じ。キーフレームは 3DGS を描いた画なので、ライブの答えをそのまま視点に使える（地図作り 17 秒）</li>
+      <li>照合するキーフレームを 3 枚・4 枚に、特徴点を 4,096 に：遅くなるだけ</li>
+      <li>描く側で inlier の少ない答えを軽く扱う、窓を 0.25〜0.6 秒、遅れを 0.1〜5 秒：どれも同じ</li>
+      <li>奇数・偶数フィールドのずれ：無い（平均の差 0.25 cm）</li>
+    </ul>
+    <p class="note">0.6 秒ぶんの答えをならしても差が減らないので、残る 7 cm は隣り合う答えに共通のずれか、参照（オフラインの束調整）の誤差。どちらかは分けられていない。</p>
+  </div>
+  <div class="card">
+    <h4>ページの描き方</h4>
+    <ul class="tight">
+      <li><b>時計は tracker の時刻で数える</b>（答えの完了時刻 − 遅延）。フレーム番号 ÷ 60 だと、キャプチャが 59.2 fps のとき 1 秒に 13 ms ずつ先走り、追跡できているのに「見失い」と出る</li>
+      <li><b>軌跡と視錐台は splat の後ろに回る</b>：不透明な帯にして splat より先に描き、奥行きを書く。古い側が薄くなる表現は半透明ではなく網点（毎フレーム模様を変える）。半透明だと、まだ何も描かれていない背景と混ざる</li>
+      <li><code>trail</code>・<code>smooth</code>・<code>delay</code> のスライダーと視点はブラウザに残る</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ 10 -->
+<h2 id="s10"><span class="n">10</span>ライブの束調整：直近 0.5 秒を解き直す（<code>BA</code>）</h2>
+<p>03 のとおり、tracker は 1 フレームずつ別々に位置を解き、平滑化はページが位置だけをならしていた。照合点の情報は答えを出した時点で捨てている。<code>BA=0.5</code> は、答えのたびに<b>直近 0.5 秒の答えをまとめて解き直す</b>。1 つの答えは「自分の照合点から作った 6×6 の情報行列つきの 6 自由度の測定」で、加速度と角加速度の制約でつなぐ。解き直した姿勢は答えと一緒に流れ、ページが過去の答えを置き換える。</p>
+<div class="grid2">
+  <div class="card">
+    <h4>揺れ p50 と、描くときの遅れ <span class="pill">60 fps の飛行</span></h4>
+    <p class="sub">各フレームに描かれた点が、前後 2 フレームを結ぶ線からどれだけ外れるか</p>
+<svg class="chart" viewBox="0 0 500 196">
+<text x="202" y="21" text-anchor="end" font-size="12" fill="#52514e">遅れ 0.1 秒　生の答え</text>
+<rect x="210" y="10" width="185.3" height="16" rx="3" fill="var(--io)"/>
+<text x="401.3" y="22" font-size="12" class="mono" fill="#121211">8 cm</text>
+<text x="202" y="47" text-anchor="end" font-size="12" fill="#52514e">遅れ 0.1 秒　2 次式</text>
+<rect x="210" y="36" width="26.4" height="16" rx="3" fill="var(--s2)"/>
+<text x="242.4" y="48" font-size="12" class="mono" fill="#121211">1.14 cm</text>
+<text x="202" y="73" text-anchor="end" font-size="12" fill="#52514e">遅れ 0.1 秒　束調整</text>
+<rect x="210" y="62" width="23.2" height="16" rx="3" fill="var(--s1)"/>
+<text x="239.2" y="74" font-size="12" class="mono" fill="#121211">1 cm</text>
+<text x="202" y="99" text-anchor="end" font-size="12" fill="#52514e">遅れ 0.2 秒　2 次式</text>
+<rect x="210" y="88" width="7.9" height="16" rx="3" fill="var(--s2)"/>
+<text x="223.9" y="100" font-size="12" class="mono" fill="#121211">0.34 cm</text>
+<text x="202" y="125" text-anchor="end" font-size="12" fill="#52514e">遅れ 0.2 秒　束調整</text>
+<rect x="210" y="114" width="9.7" height="16" rx="3" fill="var(--s1)"/>
+<text x="225.7" y="126" font-size="12" class="mono" fill="#121211">0.42 cm</text>
+<text x="202" y="151" text-anchor="end" font-size="12" fill="#52514e">遅れ 0.4 秒　2 次式</text>
+<rect x="210" y="140" width="5.6" height="16" rx="3" fill="var(--s2)"/>
+<text x="221.6" y="152" font-size="12" class="mono" fill="#121211">0.24 cm</text>
+<text x="202" y="177" text-anchor="end" font-size="12" fill="#52514e">遅れ 0.4 秒　束調整</text>
+<rect x="210" y="166" width="10.2" height="16" rx="3" fill="var(--s1)"/>
+<text x="226.2" y="178" font-size="12" class="mono" fill="#121211">0.44 cm</text>
+</svg>
+    <p class="note">効くのは遅れが短いとき。0.2 秒以上遅らせるなら、窓の広い 2 次式（07）と同じ線になる。</p>
+  </div>
+  <div class="card">
+    <h4>クリップ（25 fps、真値つき）を 0.1 秒遅れで描いたとき</h4>
+    <table>
+      <tr><th></th><th class="num">生の答え</th><th class="num">2 次式</th><th class="num">束調整</th></tr>
+      <tr><td>揺れ p50</td><td class="num">6.6 cm</td><td class="num">3.0 cm</td><td class="num">2.5 cm</td></tr>
+      <tr><td>真値との差 p50</td><td class="num">8.5 cm</td><td class="num">7.4 cm</td><td class="num">6.7 cm</td></tr>
+      <tr><td>真値との差 p90</td><td class="num">29.9 cm</td><td class="num">24.3 cm</td><td class="num">22.1 cm</td></tr>
+      <tr><td>真値との差 p99</td><td class="num">94 cm</td><td class="num">80 cm</td><td class="num">52 cm</td></tr>
+      <tr><td>向き p90</td><td class="num">3.68°</td><td class="num">生のまま</td><td class="num">2.88°</td></tr>
+    </table>
+    <p>大きく外れた点と向きに効く。束調整は点の少ない答えを自動で軽く扱い、向きも位置と一緒に解く。真値との差の中央値は 7 cm のまま（09 の「共通のずれ」は束調整でも消えない）。</p>
+  </div>
+</div>
+<div class="grid2">
+  <div class="card">
+    <h4>速さ</h4>
+    <table>
+      <tr><th></th><th class="num">1 周 p50</th><th class="num">1 人あたり</th></tr>
+      <tr><td>1 人、束調整なし</td><td class="num">16.7 ms</td><td class="num">53.9 Hz</td></tr>
+      <tr><td>1 人、束調整あり</td><td class="num">17.6 ms</td><td class="num">53.2 Hz</td></tr>
+      <tr><td>4 人、束調整なし</td><td class="num">29.7 ms</td><td class="num">31.2 Hz</td></tr>
+      <tr><td>4 人、束調整あり</td><td class="num">31.9 ms</td><td class="num">29.0 Hz</td></tr>
+    </table>
+    <p class="note">4 人は同じ録画を 4 本ぶん流した値。束調整の計算は 1 回 0.2 ms（25 個の答えで 150 元の連立方程式）。</p>
+  </div>
+  <div class="card">
+    <h4>踏んだこと</h4>
+    <ul class="tight">
+      <li><b>numpy の BLAS は 1 スレッドにする。</b>束調整を入れると tracker が 54 → 33 Hz に落ちた。計算量ではなく、OpenBLAS が 32 コアぶんのスレッドを小さな行列にも立てて、ほかのスレッドと取り合っていた。<code>OPENBLAS_NUM_THREADS=1</code> で 53 Hz。C で書き直す必要は無かった</li>
+      <li>答えごとのループで式を組むと 1 回約 10 ms。配列の演算に直して 0.2 ms（結果は一致）</li>
+      <li>オフラインの束調整は同じクリップで揺れを 2.2 → 0.7 cm にした。ライブで届かないのは、未来のフレームを全部は使えず、照合点も 10 分の 1 だから</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ 11 -->
+<h2 id="s11"><span class="n">11</span>効いたこと・効かなかったこと・残っていること</h2>
 <div class="grid2">
   <div class="card">
     <h4>見失いと探し直し</h4>
@@ -321,8 +473,10 @@ ul.tight li { margin: 3px 0; }
     <h4>残っていること</h4>
     <ul class="tight">
       <li>会場での通し：本物の NDI の 2×2、会場の上り回線は未計測</li>
-      <li>答えを WebSocket でページへ流す（いまは処理用 PC のファイルに書くだけ）</li>
-      <li>race ページで 4 人の軌跡＋ライブの点を重ねる</li>
+      <li>ライブページは 1 人ぶんしか描かない：複数人の答えが 1 本に混ざる（issue #3）。race ページで 4 人の軌跡＋ライブの点を重ねるのもこれから</li>
+      <li>送り手が立ち上がり直すと、録画の映像と答えがずれる（issue #4）</li>
+      <li>本物のライブ入力で束調整と <code>sync=false</code> を通す（どちらも録画を流し直して測った）。4 人ぶんのライブ入力も未確認</li>
+      <li>公開のページ（ghostline.saqoo.sh）へ答えを流す。いまは LAN / Tailscale の中だけ</li>
       <li>台の上で見つからない：d05 の最初の答えは #177〜#195（離陸前の約 3 秒は点が出ない）</li>
       <li>KNT の描く点の p90 5.5 m：速い旋回で見失う区間</li>
       <li>コースが変わったとき：スキャンのカメラだけの地図、合成の視点 14,400 枚（1 m / 2.5 m の高さ × 12 方位 × 下向き 10°/35°）を作って試している途中</li>
@@ -343,11 +497,15 @@ ul.tight li { margin: 3px 0; }
     <tr><td><code>BATCH</code></td><td class="num">16</td><td>LighterGlue 1 回に入れる組の上限</td></tr>
     <tr><td><code>REACH</code> / <code>NEAR</code> / <code>FLOW</code></td><td class="num">0 / 0 / 0</td><td>上の探し直しと光学フローの手（既定は切ってある）</td></tr>
     <tr><td><code>GRID</code> / <code>GRID_FPS</code> / <code>GRID_GST</code></td><td class="num">– / 30 / –</td><td>ライブ入力：2×2 の大きさ、フレームレート、GStreamer で受ける</td></tr>
+    <tr><td><code>GRID_CROP</code></td><td class="num">–</td><td>デコードした画を、縮める前に切り出す（左:上:右:下 px）</td></tr>
+    <tr><td><code>PUSH</code></td><td class="num">0</td><td>ポート番号。答えを 1 行ずつ server-sent events で流す</td></tr>
+    <tr><td><code>BA</code></td><td class="num">0</td><td>秒。答えのたびに直近の答えをまとめて解き直す（<code>BA_PX</code> 8 / <code>BA_ACC</code> 3 / <code>BA_ALPHA</code> 10）</td></tr>
+    <tr><td><code>INFO</code></td><td class="num">0</td><td>1 で各行に 6×6 の情報行列を書く</td></tr>
     <tr><td><code>DEV</code></td><td class="num">cuda</td><td><code>mps</code> で Apple silicon</td></tr>
   </table>
 </div>
 
-<h2 id="s10"><span class="n">10</span>用語集</h2>
+<h2 id="s12"><span class="n">12</span>用語集</h2>
 <div id="glossary"></div>
 
 </main>

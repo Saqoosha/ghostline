@@ -35,7 +35,7 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
   （8 組で 19 ms、1 組で 14 ms）。PnP は `cv2.USAC_MAGSAC`
 - **ライブの送り手（GStreamer）の出口は `sync=false`。** 既定だと Mac ではフレームが塊で届き、最新の 1 枚しか見ない tracker が 22 Hz に落ちる（直すと 51 Hz）
 - **`rt_track.py` の numpy は BLAS 1 スレッド。** 外すと 32 コアの機械で小さな行列にスレッドが立ち、束調整つきの tracker が 54 → 33 Hz に落ちる
-- **ライブの速度や精度をいじる前に、設計の報告書を読む**（`docs/realtime-architecture.html`、ブランチ `ghostline-realtime-architecture`）。解像度は効かない、1 人 56 Hz など、測り直しになる数字がそこにある
+- **ライブの速度や精度をいじる前に、設計の報告書を読む**（`docs/realtime-architecture.html`。オフラインの通しは `docs/offline-architecture.html`）。解像度は効かない、1 人 56 Hz など、測り直しになる数字がそこにある
 - **race ページの splat がぼやける**：PlayCanvas の CPU ソートは走行中の依頼を捨てる。カメラが止まったら `resortWhenIdle` がソートを頼み直す
   （PlayCanvas の内部フィールドを読んでいるので、上げたら確かめる）
 

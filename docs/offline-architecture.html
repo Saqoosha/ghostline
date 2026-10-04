@@ -117,10 +117,10 @@ ul.tight li { margin: 3px 0; }
     <div class="stat"><div class="v">67→23</div><div class="k">d05 で遠景が 10 px 超ずれるフレーム（評価 534 枚中）。2 周目の照合で減った</div></div>
     <div class="stat"><div class="v">0.947</div><div class="k">解いた回転の速さと機体のジャイロ（blackbox）の相関。d05、解けたフレーム</div></div>
   </div>
-  <p class="note">点線の下線の語はカーソルを乗せると説明が出る。まとめは末尾の<a href="#s11">用語集</a>。数字は docs/dvr-localization.ja.md と、手元の d05・SENA の結果ファイルから。</p>
+  <p class="note">点線の下線の語はカーソルを乗せると説明が出る。まとめは末尾の<a href="#s12">用語集</a>。数字は docs/dvr-localization.ja.md と、手元の d05・SENA の結果ファイルから。</p>
   <nav class="toc">
     <a href="#s1">1 全体の流れ</a><a href="#s2">2 描いて照合する</a><a href="#s3">3 束調整</a><a href="#s4">4 2 周目の照合</a>
-    <a href="#s5">5 離陸と台</a><a href="#s6">6 6 本の経路</a><a href="#s7">7 確かめ方</a><a href="#s8">8 描画の規則</a><a href="#s9">9 限界と残り</a><a href="#s10">10 前の系統</a><a href="#s11">11 用語集</a>
+    <a href="#s5">5 離陸と台</a><a href="#s6">6 6 本の経路</a><a href="#s7">7 確かめ方</a><a href="#s8">8 描画の規則</a><a href="#s9">9 限界と残り</a><a href="#s10">10 屋内・別のカメラ</a><a href="#s11">11 前の系統</a><a href="#s12">12 用語集</a>
   </nav>
 </header>
 
@@ -365,7 +365,35 @@ ul.tight li { margin: 3px 0; }
 </div>
 
 <!-- ============================================================ 10 -->
-<h2 id="s10"><span class="n">10</span>前の系統：COLMAP・画素比較・人の印（hdz_0067）</h2>
+<h2 id="s10"><span class="n">10</span>屋内・別のカメラで回す（オフィスの Tiny Whoop）</h2>
+<p>同じ通しが、約 10 m 四方のオフィスとアナログの Tiny Whoop でも通った（2026-10-04、171 秒・25 fps の録画）。スキャンは THETA V の動画から作った 3DGS で、図面に合わせて実寸にしてある。飛行中の 3,880 フレームのうち 3,341 枚が自分の照合点で解け、ビューアで描画と DVR の線がつながった。ここまでの節との違いだけを書く。</p>
+<div class="grid2">
+  <div class="card">
+    <h4>変えたところ</h4>
+    <table>
+      <tr><th>項目</th><th>屋外のレース（ここまで）</th><th>屋内の Whoop</th></tr>
+      <tr><td>入力の形</td><td>HDZero の DVR（1280×720 の中央に 960 幅）</td><td>1920×1080 の録画を <code>scale=1280:720</code> で同じ形に</td></tr>
+      <tr><td>レンズ</td><td>HDZero の校正</td><td>同じ値のままで直線がまっすぐ。<code>LENS=&lt;json&gt;</code> で別の校正も渡せる</td></tr>
+      <tr><td>参照カメラ</td><td>スキャンの撮影カメラ</td><td>撮影位置に水平 8 方位を立てたもの（360 カメラの向きは使えない）</td></tr>
+      <tr><td>近い splat を描かない距離</td><td class="num">1 m</td><td class="num">0.1 m</td></tr>
+      <tr><td>位置の確かめの視点のずらし</td><td class="num">2 m</td><td class="num">0.3 m</td></tr>
+      <tr><td>離陸と台（05）</td><td>掛ける</td><td>掛けない。机の上でも最初のフレームから 3,000 点以上で位置が取れる</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>分かったこと</h4>
+    <ul class="tight">
+      <li><b>低い fps は線の滑らかさに出る。</b>60 フィールドの映像を 25 fps で録ると、各フレームは 2 フィールドぶんか 3 フィールドぶんの間隔になる（1 フレームの移動量が 2.4 フレーム周期で伸び縮みする）。束調整は等間隔と仮定するので消しきれない。揺れ p50 は生 2.22 cm → 束調整 0.70 cm（FDF の d07 は 0.36 cm）。遅い機体では 1 フレームの移動 10 cm に対する比が 7%（d07 は 1.2%）</li>
+      <li><b>並列にしても速くならない。</b>追跡は 1 本 1.1 秒/フレーム。2 並列で合計はほぼ同じ、3 並列は GPU メモリ 24 GB があふれて 6 割に落ちる。区間に分けたときは <code>merge_track.py</code> で 1 本にしてから束調整</li>
+      <li>着地後の画面（Betaflight の統計表示）は解けない。区間の開始に選んだ 1 枚がそこに当たると、その区間は始まらない</li>
+      <li>屋内のスキャンは上から見ると天井が邪魔になる。ビューアは <code>index.json</code> の <code>top</code>（切り取った天井）を follow と compare のときだけ描く</li>
+    </ul>
+    <p class="note">この経路は、ライブの位置推定（<a href="realtime-architecture.html#s9">ライブ版の 09・10</a>）の最初の地図と、その真値に使った。</p>
+  </div>
+</div>
+
+<!-- ============================================================ 11 -->
+<h2 id="s11"><span class="n">11</span>前の系統：COLMAP・画素比較・人の印（hdz_0067）</h2>
 <p>最初の DVR（JDL-2026-R6 の hdz_0067、94.6 s）は別の通しで解いた。COLMAP で登録し、穴を LK で埋め、Kalman で 60 fps にし、3DGS との画素比較で詰め、残った外れは人がビューアで印を打って直す。いまの通しの教訓の多くはここで得た。</p>
 <div class="card">
   <svg class="chart" viewBox="0 0 1060 150" id="oldSvg"></svg>
@@ -388,7 +416,7 @@ ul.tight li { margin: 3px 0; }
   </div>
 </div>
 
-<h2 id="s11"><span class="n">11</span>用語集</h2>
+<h2 id="s12"><span class="n">12</span>用語集</h2>
 <div id="glossary"></div>
 
 </main>
