@@ -10,13 +10,14 @@
 export type Answer = { i: number; done: number; pos: number[]; quat: number[]; inl: number; how: string }
 export type Dot = { pos: number[]; quat: number[]; state: 'interp' | 'extrap' | 'hold' | 'lost'; frame: number }
 
-const WS = 0.25                                       // seconds either side in a fit
 
-function fit(ans: Answer[], j: number, W: number): number[] | null {   // weighted quadratic through the answers within W frames of j, at j
+// taper: weights fall to zero at the window's edge (biweight) instead of ending at a step - an answer entering or
+// leaving a box window moves the fit at once, which shows as small kinks along a trail
+function fit(ans: Answer[], j: number, W: number, taper = false): number[] | null {   // weighted quadratic through the answers within W frames of j, at j
   let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0; const b0 = [0, 0, 0], b1 = [0, 0, 0], b2 = [0, 0, 0]; let n = 0
   for (const a of ans) {
     const x = a.i - j; if (Math.abs(x) > W) continue
-    const w = Math.sqrt(Math.min(a.inl, 400) / 200); n++
+    const u = x / (W + 1), w = Math.sqrt(Math.min(a.inl, 400) / 200) * (taper ? (1 - u * u) ** 2 : 1); n++
     s0 += w; s1 += w * x; s2 += w * x * x; s3 += w * x * x * x; s4 += w * x * x * x * x
     for (let k = 0; k < 3; k++) { b0[k] += w * a.pos[k]; b1[k] += w * x * a.pos[k]; b2[k] += w * x * x * a.pos[k] }
   }
@@ -35,6 +36,8 @@ function slerp(a: number[], b: number[], t: number): number[] {
 
 export class LiveDraw {
   byDone: Answer[]; fps: number; trail: (number[] | null)[] = []; trailT = -1
+  ws = 0.25                                           // seconds either side in a fit
+  taper = false
   constructor(answers: Answer[], fps: number) { this.byDone = answers.slice().sort((a, b) => a.done - b.done); this.fps = fps }
   arrived(t: number): Answer[] {                      // answers finished by time t, in frame order
     let lo = 0, hi = this.byDone.length
@@ -43,18 +46,18 @@ export class LiveDraw {
   }
   dot(t: number, mode: 'extrap' | 'delay', delay: number, lostAfter = 0.3): Dot | null {
     const got = this.arrived(t); if (!got.length) return null
-    const W = WS * this.fps
+    const W = this.ws * this.fps
     const now = Math.floor(t * this.fps + 1e-3), last = got[got.length - 1]
     if (mode === 'extrap') {
       const recent = got.filter(a => a.i > now - 2 * W)
-      const pos = (recent.length >= 4 ? fit(recent, now, W) : null) ?? last.pos
+      const pos = (recent.length >= 4 ? fit(recent, now, W, this.taper) : null) ?? last.pos
       return { pos, quat: last.quat, state: now - last.i > lostAfter * this.fps ? 'lost' : 'extrap', frame: now }
     }
     const j = Math.floor((t - delay) * this.fps + 1e-3)
     let before: Answer | null = null, after: Answer | null = null
     for (const a of got) { if (a.i <= j) before = a; if (a.i >= j && !after) after = a }
     if (before && after && after.i - before.i <= 2 * W) {
-      const pos = fit(got, j, W) ?? before.pos, u = after.i === before.i ? 0 : (j - before.i) / (after.i - before.i)
+      const pos = fit(got, j, W, this.taper) ?? before.pos, u = after.i === before.i ? 0 : (j - before.i) / (after.i - before.i)
       return { pos, quat: slerp(before.quat, after.quat, u), state: 'interp', frame: j }
     }
     // no answer after frame j yet, or a gap around it: hold at the answer before j (never at one ahead of it)
@@ -64,9 +67,9 @@ export class LiveDraw {
   trailAt(t: number, upto: number, settle = 0.5): (number[] | null)[] {
     if (t < this.trailT) this.trail = []              // seeked back: start again
     this.trailT = t
-    const got = this.arrived(t), from = Math.max(0, upto - Math.ceil(settle * this.fps)), W = WS * this.fps
-    for (let k = this.trail.length; k < from; k++) this.trail[k] = fit(got.filter(a => Math.abs(a.i - k) <= W), k, W)
-    for (let k = from; k <= upto; k++) this.trail[k] = fit(got.filter(a => Math.abs(a.i - k) <= W), k, W)
+    const got = this.arrived(t), from = Math.max(0, upto - Math.ceil(settle * this.fps)), W = this.ws * this.fps
+    for (let k = this.trail.length; k < from; k++) this.trail[k] = fit(got.filter(a => Math.abs(a.i - k) <= W), k, W, this.taper)
+    for (let k = from; k <= upto; k++) this.trail[k] = fit(got.filter(a => Math.abs(a.i - k) <= W), k, W, this.taper)
     this.trail.length = upto + 1
     return this.trail
   }

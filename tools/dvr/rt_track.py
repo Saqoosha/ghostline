@@ -23,7 +23,8 @@ env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s w
      FRESH (0.1 s: an answer this old or newer is labelled "rt", older "rt-carry"), KQ (1e4, the drawn position's jerk density (m/s^3)^2 s),
      BLEND (0.025 s; 0 = draw the filter as it jumps), TRAIL_L (0.2 s the trail is drawn late), TRAIL_W (0.25 s either
      side in its fit), PIPE (2: overlap the next cycle's GPU work with this cycle's PnP, below),
-     FLOW (0; 1 = carry points to the next frame with LK instead of matching, below), FLOW_EVERY (8), FLOW_RESEED (60), FLOW_MIN (30)"""
+     FLOW (0; 1 = carry points to the next frame with LK instead of matching, below), FLOW_EVERY (8), FLOW_RESEED (60), FLOW_MIN (30),
+     PUSH (0; a port: answers out as server-sent events while it runs, for viewer/live.html)"""
 import json, sys, os, time, math, numpy as np, torch, cv2
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.expanduser(os.environ.get("XFEAT_DIR", "~/xfeat"))); from modules.xfeat import XFeat
@@ -42,6 +43,22 @@ REACH = E("REACH", 0)
 NEAR, NEAR_K, NEAR_ANG = int(E("NEAR", 0)), int(E("NEAR_K", 4)), E("NEAR_ANG", 100)
 FLOW, FLOW_EVERY, FLOW_RESEED, FLOW_MIN = int(E("FLOW", 0)), int(E("FLOW_EVERY", 8)), int(E("FLOW_RESEED", 60)), int(E("FLOW_MIN", 30))
 GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30), E("SEND_T0", 0), os.environ.get("FRAME_CODE")
+# PUSH (port): every answer goes out the moment it is solved, as server-sent events (one JSON object per event: the
+# .jsonl row plus "stream" and "fps"), for the live page (viewer/live.html). 0 = off.
+PUSH = int(E("PUSH", 0)); subs = []
+if PUSH:
+    import http.server, queue, threading
+    class _Push(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            for k, v in (("Content-Type", "text/event-stream"), ("Cache-Control", "no-cache"), ("Access-Control-Allow-Origin", "*")): self.send_header(k, v)
+            self.end_headers(); q = queue.Queue(); subs.append(q)
+            try:
+                while True: self.wfile.write(f"data: {q.get()}\n\n".encode()); self.wfile.flush()
+            except OSError: pass
+            finally: subs.remove(q)
+        def log_message(self, *a): pass
+    threading.Thread(target=http.server.ThreadingHTTPServer(("0.0.0.0", PUSH), _Push).serve_forever, daemon=True).start()
 FRESH, KQ, BLEND, TRAIL_L, TRAIL_W = E("FRESH", 0.1), E("KQ", 1e4), E("BLEND", 0.025), E("TRAIL_L", 0.2), E("TRAIL_W", 0.25)
 T = lambda a: torch.tensor(a, dtype=torch.float32, device=dev)
 def sync(): torch.cuda.synchronize() if dev == "cuda" else torch.mps.synchronize() if dev == "mps" else None
@@ -57,8 +74,12 @@ class GridSource:                                   # one decoded live video; it
         # The url's port and latency are reused; the url field still names the source the cells share.
         if os.environ.get("GRID_GST"):
             port = self.url.split("//")[1].split("?")[0].split(":")[-1]; lat = int(self.url.split("latency=")[1].split("&")[0]) // 1000 if "latency=" in self.url else 80
+            # GRID_CROP (left:top:right:bottom px): cut the decoded frame before it is scaled to GRID and piped here. One pilot on
+            # a 1280x720 capture with the 4:3 picture in the middle: GRID_CROP=160:0:160:0 GRID=640x480, cell 0:0:640:480 -
+            # the pipe then carries 0.9 MB a frame instead of 2.8 (at 60 fps Python was reading 166 MB/s to use a ninth of it).
+            c = os.environ.get("GRID_CROP"); crop = "videocrop left={} top={} right={} bottom={} ! ".format(*c.split(":")) if c else ""
             cmd = (f"gst-launch-1.0 -q srtsrc uri=srt://:{port}?mode=listener latency={lat} ! application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000"
-                   f" ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! videoscale ! video/x-raw,format=BGR,width={self.W},height={self.H} ! fdsink fd=1 sync=false")
+                   f" ! rtph264depay ! h264parse ! avdec_h264 ! {crop}videoconvert ! videoscale ! video/x-raw,format=BGR,width={self.W},height={self.H} ! fdsink fd=1 sync=false")
             self.proc = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE, bufsize=0)
             threading.Thread(target=self.run, daemon=True).start(); return
         # small probe: ffmpeg's default reads ~5 s of the stream before the first frame comes out
@@ -269,6 +290,9 @@ def land(c, out, t0, clock0):                       # apply the answers to the s
             s.hist = (s.hist + [(i, r[0], r[1])])[-6:]; s.last = s.hist[-1]
         lat = dict(lat=round((tf - s.arrive[i]) * 1000, 1), e2e=round((time.time() - (time.perf_counter() - tf) - SEND_T0 - i / s.fps) * 1000, 1) if SEND_T0 else None) if s.live else {}
         s.recs.append(dict(i=i, done=done, plan=c["plan"][b][0], **lat, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how) if r else {"how": "none"})))
+        if subs:
+            m = json.dumps(dict(stream=os.path.basename(s.prefix), fps=s.fps, **s.recs[-1]))
+            for q in list(subs): q.put(m)
     s_ = {k: c[k] * 1000 for k in ("feat", "match")}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
 REAL = any(s.live for s in streams)
 def pick(clock):                                    # the newest arrived frame of each stream not already in flight
