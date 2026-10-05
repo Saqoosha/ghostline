@@ -99,7 +99,8 @@ import threading, subprocess
 # the tracker, and with every cell quiet the loop only waits. On an EventVRX recording (2x2, analog, 707 s) the flat screens
 # (grey, blue, black) have a pixel std of 0 and pictures 8 and up; snow is told apart by the correlation of neighbouring
 # rows, 0.1-0.3 against 0.8-0.9 for a picture (0.5-0.7: a weak signal with a faint picture). The cells had a picture 47% of
-# the time, all four were quiet 13% of it, and ~0.1 s of flight was dropped. Not tried yet on an HDZero receiver's screen.
+# the time, all four were quiet 13% of it, and ~0.1 s of flight was dropped. HDZero (FDF semifinal 2x2): flat grey or black,
+# breakup 0.1-0.5; live over SRT, four cells, RENDER=1: 251 -> 129 W on average (60 W between heats), solved frames -3%.
 SIGNAL = int(E("SIGNAL", 0))
 def has_signal(cell):                               # BGR crop of one cell
     g = cv2.cvtColor(cv2.resize(cell, (160, 90), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)[4:86, 4:156].astype(np.float32)
