@@ -22,13 +22,14 @@ env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s w
      RELOC_TOPK (5), RELOC_MIN (50), TOPK (2048) keypoints on the frame, MAPK (0 = all) per keyframe, NMAX (0 = all frames), BATCH (16 pairs per call),
      FRESH (0.1 s: an answer this old or newer is labelled "rt", older "rt-carry"), KQ (1e4, the drawn position's jerk density (m/s^3)^2 s),
      BLEND (0.025 s; 0 = draw the filter as it jumps), TRAIL_L (0.2 s the trail is drawn late), TRAIL_W (0.25 s either
-     side in its fit), PIPE (2: overlap the next cycle's GPU work with this cycle's PnP, below),
+     side in its fit), PIPE (2, 1 with RENDER: overlap the next cycle's GPU work with this cycle's PnP, below),
      FLOW (0; 1 = carry points to the next frame with LK instead of matching, below), FLOW_EVERY (8), FLOW_RESEED (60), FLOW_MIN (30),
      PUSH (0; a port: answers out as server-sent events while it runs, for viewer/live.html),
      INFO (0; 1 = rows carry H), BA (0; seconds of answers solved again together after every answer, below),
      GLUE / XFEAT (unset; TensorRT engines from rt_trt.py to match / find features with instead of PyTorch),
      PNP (poselib; magsac = OpenCV's USAC_MAGSAC, below),
-     RENDER (0; 1 = while tracking, match a render of SCENE (.ply) at the prediction instead of keyframes, rt_render.py), RNEAR (1.0 m near plane)"""
+     RENDER (0; 1 = while tracking, match a render of SCENE (.ply) at the prediction instead of keyframes, rt_render.py), RNEAR (1.0 m near plane),
+     RFALL (1: also match keyframes right after a failed try); RCLIP / ROPA / RBATCH / REDGE: see rt_render.py"""
 import os
 # One BLAS thread. numpy's matrices here are small (the BA's system is about 150 x 150), and OpenBLAS otherwise starts a
 # thread per core for them: on a 32-core machine that took the tracker from 54 to 33 Hz with BA on, the solve itself 0.2 ms.
@@ -42,7 +43,7 @@ LIVE, NKF, MIN_INL, LOST = int(E("LIVE", 1)), int(E("NKF", 2)), int(E("MIN_INL",
 RTOPK, RMIN, TOPK, NMAX, BATCH = int(E("RELOC_TOPK", 5)), int(E("RELOC_MIN", 50)), int(E("TOPK", 2048)), int(E("NMAX", 0)), int(E("BATCH", 16))
 PNP = os.environ.get("PNP", "poselib")           # poselib (PoseLib's LO-RANSAC) or magsac (OpenCV USAC_MAGSAC)
 if PNP == "poselib": import poselib
-RENDER, SCENE, RNEAR, RFALL = int(E("RENDER", 0)), os.environ.get("SCENE"), E("RNEAR", 1.0), int(E("RFALL", 1))   # rt_render.py: match a render at the prediction, not keyframes
+RENDER, SCENE, RNEAR, RFALL = int(E("RENDER", 0)), os.environ.get("SCENE"), E("RNEAR", 1.0), int(E("RFALL", 1))
 PL_DYN = E("PL_DYN", 1.0)                           # PoseLib: trials x this over what success_prob 0.99 needs
 MAPK = int(E("MAPK", 0))                            # keypoints per keyframe used from the map (0 = all)
 # NEAR: after a failed attempt, match NEAR_K keyframes around the prediction up to NEAR_ANG degrees off, and add NEAR_K
@@ -217,7 +218,10 @@ def features(batch):                                # [(stream, frame)] -> per f
         uv = f["keypoints"]; ix = uv.round().long(); ok = s.qvalid[ix[:, 1].clamp(0, RH - 1), ix[:, 0].clamp(0, RW - 1)]
         out.append((uv[ok], f["descriptors"][ok]))
     return out, x
-def ref(s, k): return (s.m["kp"][k], s.m["desc"][k], s.m["X"][k], s.m["n"][k]) if isinstance(k, int) else (k["kp"], k["desc"], k["X"], k["n"])
+def ref(s, k):                                      # a keyframe padded to TOPK points (as a render view) so the two stack in one batch
+    if not isinstance(k, int): return k["kp"], k["desc"], k["X"], k["n"]
+    p = TOPK - s.m["kp"].shape[1]; fit = lambda t: torch.nn.functional.pad(t, (0, 0, 0, p)) if p > 0 else t[:TOPK]   # the map keeps the strongest first
+    return fit(s.m["kp"][k]), fit(s.m["desc"][k]), s.m["X"][k][:TOPK], min(s.m["n"][k], TOPK)
 def match_all(pairs):                               # [(query, stream, keyframe index or rt_render view)] -> per pair (uv on the frame, X in the world)
     res = []
     for c in range(0, len(pairs), BATCH):
@@ -331,8 +335,8 @@ def middle(c):                                      # plan from the answers so f
             plan.append(("flow", None, [], None))  # no XFeat, no matching: the CPU carries last frame's points over with LK
         elif s.hist and (i - s.hist[-1][0]) / s.fps <= LOST:
             pred = predict(s.hist, i)
-            # with RENDER the render at the prediction replaces the keyframes, except right after a failed try: a bad
-            # prediction renders a view that barely overlaps the frame, and the keyframes' wider pick (45 deg, 12 m) still finds it
+            # with RENDER the render at the prediction replaces the keyframes, except right after a failed try, when the keyframes are
+            # matched too: a bad prediction renders a view that barely overlaps the frame, and the keyframes' wider pick still finds it
             ks = [] if scene and not (s.fails and RFALL) else s.nearest(*pred, NEAR_K, NEAR_ANG, 30) if NEAR and s.fails else s.nearest(*pred)
             plan.append(("track", pred, ks, s.hist[-1][0]))
         else: plan.append(("reloc", None, None, None)); lost.append(b)
