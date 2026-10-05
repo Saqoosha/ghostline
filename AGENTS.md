@@ -31,7 +31,7 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 - **gsplat で照合用に描くときは視野外の splat を 1.2 倍で切る**（`tools/dvr/frustum.py`）。切らないと真横の splat が空を灰色にする。
   既定の組み合わせ（d07m）は 1 周目を全部描き（`CULL=0`）、2 周目と評価を DVR に色を合わせたシーンで切って描く
 - **他のセッションの `wsl --shutdown` は走っている処理を黙って殺す**
-- **ライブの照合と XFeat は TensorRT のエンジン（`GLUE=` / `XFEAT=`、`tools/dvr/rt_trt.py`）、PnP は PoseLib（既定）で回す**（4 人で 1 周 28 → 9 ms、精度は同じか良い）。
+- **ライブの照合と XFeat は TensorRT のエンジン（`GLUE=` / `XFEAT=`、`tools/dvr/rt_trt.py`）、PnP は PoseLib（既定）で回す**（4 人で 1 周 28 → 9 ms、精度は同じか良い）。精度を取るなら `RENDER=1 RCLIP=2 SCENE=<地図の .ply>` で予測姿勢でその場で描いて照合する（d05 の答え p50 0.19 → 0.11 m、新しいコースはスキャンのカメラだけの地図で足りる。4 人では遅延が約 20 → 35 ms）。
   PyTorch の LighterGlue に autocast の fp16（`mp`）を掛けない（解けるフレームが半分になる。TensorRT の fp16 は問題ない）。照合は 1 組ずつでなくバッチで呼ぶ
 - **tracker の速さは、走行中の実際の入力で測る。** PnP を合成データ（400 点）で 3 ms と見積もっていたが、走行中は約 900 点で MAGSAC が 11 ms かかり、いちばんの詰まりだった
 - **ライブの送り手（GStreamer）の出口は `sync=false`。** 既定だと Mac ではフレームが塊で届き、最新の 1 枚しか見ない tracker が 22 Hz に落ちる（直すと 51 Hz）
