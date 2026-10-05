@@ -7,8 +7,9 @@ A render and XFeat on it take ~7 ms (640 x 480, 4090)."""
 import os, numpy as np, torch
 from plyfile import PlyData
 from scipy.spatial.transform import Rotation as Rot
-from frustum import rasterize_culled
-RCLIP, ROPA = float(os.environ.get("RCLIP", 0)), float(os.environ.get("ROPA", 0.1))   # skip splats under RCLIP px across / below ROPA opacity
+from frustum import rasterize_culled, keep_mask
+from gsplat import rasterization
+RCLIP, ROPA, RBATCH = float(os.environ.get("RCLIP", 0)), float(os.environ.get("ROPA", 0.1)), int(os.environ.get("RBATCH", 0))   # skip splats under RCLIP px across / below ROPA opacity
 
 
 class Scene:
@@ -30,8 +31,11 @@ class Scene:
         for m, (R, c) in zip(vm, poses): Rm = R.as_matrix(); m[:3, :3] = Rm.T; m[:3, 3] = -Rm.T @ c
         vmt, Kt = self.T(vm), self.T(np.stack(Ks)); B = len(poses)
         with torch.no_grad():
-            o, a, _ = rasterize_culled(self.means, self.quats, self.scales, self.opac, self.colors, vmt, Kt, self.W, self.H,
-                                       sh_degree=1, render_mode="RGB+ED", near_plane=self.near, radius_clip=RCLIP)
+            kw = dict(sh_degree=1, render_mode="RGB+ED", near_plane=self.near, radius_clip=RCLIP)
+            if RBATCH and B > 1:                    # one call for all cameras on the union of their culls: half the time of one by one
+                i = keep_mask(self.means, vmt, Kt, self.W, self.H, self.near).any(0).nonzero()[:, 0]
+                o, a, _ = rasterization(self.means[i], self.quats[i], self.scales[i], self.opac[i], self.colors[i], vmt, Kt, self.W, self.H, **kw)
+            else: o, a, _ = rasterize_culled(self.means, self.quats, self.scales, self.opac, self.colors, vmt, Kt, self.W, self.H, **kw)
             kp, desc, sc = self.detect(o[..., :3].clamp(0, 1).permute(0, 3, 1, 2))
             ix = kp.round().long(); ix[..., 0].clamp_(0, self.W - 1); ix[..., 1].clamp_(0, self.H - 1); bi = torch.arange(B, device=kp.device)[:, None]
             d, al = o[..., 3][bi, ix[..., 1], ix[..., 0]], a[..., 0][bi, ix[..., 1], ix[..., 0]]

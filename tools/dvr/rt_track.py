@@ -314,7 +314,7 @@ pool = ThreadPoolExecutor(max(4, len(streams)))
 # slow global retrieval, which drops frames and loses it again
 # d05 alone: PIPE 0 28 Hz, 1 43 Hz, 2 56 Hz, the drawn position no worse (0.61 / 0.58 / 0.55 m p50); 4 streams at once
 # (3 race flights at 30 fps + d05): 2 gives 25-32 Hz each with the GPU busy all the time (XFeat 8 + LighterGlue 19 ms; PyTorch + MAGSAC)
-PIPE = int(E("PIPE", 2))
+PIPE = int(E("PIPE", 1 if RENDER else 2))         # with RENDER, 1: the prediction (and so the render) one cycle fresher; 4 at once, the drawn p90 KNT 5.2 -> 3.1 m
 def flowing(s):                                     # carry this stream's points with LK instead of matching (FLOW, below)
     return bool(FLOW and s.hist and s.flow is not None and len(s.flow["X"]) >= FLOW_RESEED and s.flow["age"] < FLOW_EVERY)
 def front(batch):                                   # GPU: features, for the streams that will be matched
@@ -354,7 +354,7 @@ def middle(c):                                      # plan from the answers so f
                 ks += [k for k in s.nearest(s.last[1], s.last[2], NEAR_K, 180, 60) if k not in ks]
             plan[b] = ("reloc", None, ks, None)
     pairs = [(q[b], batch[b][0], k) for b in range(len(batch)) for k in plan[b][2]]
-    res = match_all(pairs); sync(); per, n = [], 0
+    tg = time.perf_counter(); res = match_all(pairs); sync(); c["glue"] = time.perf_counter() - tg; per, n = [], 0
     for b in range(len(batch)): per.append(res[n:n + len(plan[b][2])]); n += len(plan[b][2])
     c.update(plan=plan, per=per, pairs=len(pairs), match=time.perf_counter() - t); return c
 # FLOW: after an answer, its inlier points (where they are in the frame, where they are in the world) are carried to the
@@ -407,7 +407,7 @@ def land(c, out, t0, clock0):                       # apply the answers to the s
             m = json.dumps(dict(stream=os.path.basename(s.prefix), fps=s.fps, **s.recs[-1]))
             for q in list(subs):
                 if not q.full(): q.put_nowait(m)
-    s_ = {k: c[k] * 1000 for k in ("feat", "match", "rend") if k in c}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
+    s_ = {k: c[k] * 1000 for k in ("feat", "match", "rend", "glue") if k in c}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
 REAL = any(s.live for s in streams)
 def pick(clock):                                    # the newest arrived frame of each stream not already in flight
     if REAL:
@@ -454,7 +454,7 @@ try: loop()
 except KeyboardInterrupt: print("stopped", flush=True)   # a live feed never ends by itself; keep what was measured
 pc = lambda a, q: float(np.percentile(a, q)) if len(a) else float("nan")
 print(f"PIPE {PIPE}: steps {len(steps)}, ms p50 {pc(steps, 50):.1f} p90 {pc(steps, 90):.1f}; streams per cycle p50 {pc([c['n'] for c in cycles], 50):.0f}, pairs p50 {pc([c['pairs'] for c in cycles], 50):.0f}; " +
-      ", ".join(f"{k} p50 {pc([c[k] for c in cycles if k in c], 50):.1f}" for k in ("feat", "match", "rend", "wait")) + " (match includes rend, the renders; wait: for the PnP threads after the GPU work)")
+      ", ".join(f"{k} p50 {pc([c[k] for c in cycles if k in c], 50):.1f}" for k in ("feat", "match", "rend", "glue", "wait")) + " (match includes rend, the renders, and glue, the matcher; wait: for the PnP threads after the GPU work)")
 # ---- per stream: the extrapolated dot at frame j, from the answers finished by j/fps (scoring only; the page draws its own). Rotation: the newest answer
 # carried at constant angular velocity. Position: a constant-acceleration Kalman filter over the answers (measurement
 # sigma 0.25 m at 200 inliers, larger with fewer), then a new answer's jump is spread over BLEND instead of drawn at once.
