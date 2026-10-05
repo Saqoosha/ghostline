@@ -38,6 +38,12 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 # ~100 W whatever the load (4090 box, d05 alone 104 -> 56 W, four pilots 94 -> 62 W; Hz, latency and accuracy the same)
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import json, sys, time, math, numpy as np, torch, cv2
+# CUDA_SYNC=block: a thread waiting on the GPU sleeps instead of spinning a core. Set on the primary context before torch
+# makes it (TensorRT shares it). Native Windows honours it (a .item() loop: 1.02 s of CPU in 1.04 s -> 0.00 s); WSL ignores it.
+if os.environ.get("CUDA_SYNC"):
+    import ctypes; _cu = ctypes.WinDLL("nvcuda.dll") if os.name == "nt" else ctypes.CDLL("libcuda.so.1"); _d = ctypes.c_int()
+    assert _cu.cuInit(0) == 0 and _cu.cuDeviceGet(ctypes.byref(_d), 0) == 0
+    assert _cu.cuDevicePrimaryCtxSetFlags(_d, {"spin": 1, "yield": 2, "block": 4}[os.environ["CUDA_SYNC"]]) == 0
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.expanduser(os.environ.get("XFEAT_DIR", "~/xfeat"))); from modules.xfeat import XFeat
 from scipy.spatial.transform import Rotation as Rot, Slerp

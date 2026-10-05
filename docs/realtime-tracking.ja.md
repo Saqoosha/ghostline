@@ -330,6 +330,17 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   event を 0.2 ms ごとに覗いて寝かせると CPU 時間は 1/4.5 になるが、tracker に入れると CPU −4 W・遅延 +2〜3 ms で割に合わなかった。
   残る CPU 約 60 W（無負荷 +30 W）は、このメインスレッドの待ちと WSL の ioctl（CUDA の命令が Windows に渡る分）。py-spy で見るとメインスレッドは追跡中ずっと動いている
 - CPU のターボ切り（電源プランの最大 99%）は差なし
+- **Windows で直に回すと遅すぎる。** 同じ版（torch 2.11 cu128、gsplat 1.5.3、TensorRT 11.3、エンジンは `eng_win/` に作り直し）を Windows の venv で回した。
+  CUDA を寝て待たせる `CUDA_SYNC=block` は Windows では効く（`.item()` の繰り返しで CPU 時間 1.02 → 0.00 s）。けど各段が遅い（4 人で描画 7.6 → 13.3 ms）。
+
+  | 4 人、`RENDER=1` | GPU＋CPU | 1 周 p50 | d05 処理 / 遅延 p50 | レース 3 本の処理 / 遅延 p50 |
+  |---|---|---|---|---|
+  | WSL | 191＋62 W | 15.5 ms | 46 Hz / 32 ms | 30 Hz / 35〜37 ms |
+  | Windows で直に | 160＋50 W | 32.3 ms | 31 Hz / 47 ms | 25 Hz / 57〜60 ms |
+  | Windows で直に、`CUDA_SYNC=block` | 180＋46 W | 25.1 ms | 39 Hz / 37 ms | 29 Hz / 42〜44 ms |
+
+  電力が下がって見えるのは、主に処理するフレームが減ったから。gsplat は Windows ではそのままではビルドできない（torch のヘッダの引数名 `small` が Windows のマクロとぶつかり、`-Wno-attributes` を MSVC が受けない）。
+  残る候補は Linux で直に動かすこと：`tools/dvr/rt_linux_setup.sh`（4090 機の 750 EVO に 150 GiB 空けてある。BIOS の画面は 4K の HDMI ダミープラグ側に出るので、抜いてから入れる）
 
 DELTA 2 Max の AC は変換効率 86%・AC を入れているだけで 23 W（[thesolarlab](https://www.thesolarlab.com/review/ecoflow-delta-2-max-review)、
 [diglloyd](https://windinmyface.com/blog/2025/20250116_1012-Ecoflow-Delta2Max-AC-conversion-efficiency.html)）なので、使えるのは約 1,760 Wh。
