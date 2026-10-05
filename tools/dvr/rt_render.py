@@ -1,16 +1,15 @@
 """Keyframes rendered on the spot for rt_track.py (RENDER=1): the 3DGS drawn at each stream's predicted pose, XFeat on
 the render, its points lifted to 3D with the rendered depth - what rt_map.py stores, made for the pose itself instead
-of looked up among the stored ones. On d05 (offline, 991 frames, PyTorch matcher, PoseLib) matching the frame against
-this one render instead of the 2 nearest keyframes took the answer from p50 0.193 / p90 0.71 m to 0.121 / 0.61 m
-(0.112 / 0.51 m with a second render at that answer); adding the keyframes' matches back made it worse (0.138 m).
-A render and XFeat on it take ~7 ms (640 x 480, 4090)."""
+of looked up among the stored ones. Offline on d05, p50 0.19 -> 0.12 m against the 2 nearest keyframes; the numbers
+are in docs/realtime-tracking.ja.md."""
 import os, numpy as np, torch
 from plyfile import PlyData
 from scipy.spatial.transform import Rotation as Rot
+import frustum
 from frustum import rasterize_culled, keep_mask
 from gsplat import rasterization
-RCLIP, ROPA, RBATCH = float(os.environ.get("RCLIP", 0)), float(os.environ.get("ROPA", 0.1)), int(os.environ.get("RBATCH", 0))
-REDGE = float(os.environ.get("REDGE", 0))   # drop points whose 5x5 depth range is over REDGE x their depth (0 = keep all)   # skip splats under RCLIP px across / below ROPA opacity
+RCLIP, ROPA, RBATCH = float(os.environ.get("RCLIP", 0)), float(os.environ.get("ROPA", 0.1)), int(os.environ.get("RBATCH", 0))   # skip splats under RCLIP px across / below ROPA opacity
+REDGE = float(os.environ.get("REDGE", 0))   # drop points whose 5x5 depth range is over REDGE x their depth (0 = keep all)
 
 
 class Scene:
@@ -33,8 +32,8 @@ class Scene:
         vmt, Kt = self.T(vm), self.T(np.stack(Ks)); B = len(poses)
         with torch.no_grad():
             kw = dict(sh_degree=1, render_mode="RGB+ED", near_plane=self.near, radius_clip=RCLIP)
-            if RBATCH and B > 1:                    # one call for all cameras on the union of their culls: half the time of one by one
-                i = keep_mask(self.means, vmt, Kt, self.W, self.H, self.near).any(0).nonzero()[:, 0]
+            if RBATCH and B > 1:                    # one call for all cameras on the union of their culls: half the time, slightly less accurate
+                i = keep_mask(self.means, vmt, Kt, self.W, self.H, self.near).any(0).nonzero()[:, 0] if frustum.CULL > 0 else torch.arange(len(self.means), device=vmt.device)
                 o, a, _ = rasterization(self.means[i], self.quats[i], self.scales[i], self.opac[i], self.colors[i], vmt, Kt, self.W, self.H, **kw)
             else: o, a, _ = rasterize_culled(self.means, self.quats, self.scales, self.opac, self.colors, vmt, Kt, self.W, self.H, **kw)
             kp, desc, sc = self.detect(o[..., :3].clamp(0, 1).permute(0, 3, 1, 2))
