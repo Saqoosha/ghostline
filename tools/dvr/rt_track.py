@@ -34,6 +34,9 @@ import os
 # One BLAS thread. numpy's matrices here are small (the BA's system is about 150 x 150), and OpenBLAS otherwise starts a
 # thread per core for them: on a 32-core machine that took the tracker from 54 to 33 Hz with BA on, the solve itself 0.2 ms.
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+# One OpenMP thread for torch's CPU ops too: its 16 workers spin between the small ops here and held the CPU package at
+# ~100 W whatever the load (4090 box, d05 alone 104 -> 56 W, four pilots 94 -> 62 W; Hz, latency and accuracy the same)
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 import json, sys, time, math, numpy as np, torch, cv2
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.expanduser(os.environ.get("XFEAT_DIR", "~/xfeat"))); from modules.xfeat import XFeat
@@ -413,6 +416,9 @@ def land(c, out, t0, clock0):                       # apply the answers to the s
                 if not q.full(): q.put_nowait(m)
     s_ = {k: c[k] * 1000 for k in ("feat", "match", "rend", "glue") if k in c}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
 REAL = any(s.live for s in streams)
+# PACE=1 (recorded video): wait on the wall clock for the next frame instead of jumping to it, so the GPU idles between
+# frames as it does on a live feed. Without it a recording runs back to back - right for timings, wrong for power.
+PACE = int(E("PACE", 0))
 def pick(clock):                                    # the newest arrived frame of each stream not already in flight
     if REAL:
         batch = [(s, s.N - 1) for s in streams if s.N - 1 >= s.next]
@@ -431,6 +437,7 @@ if REAL:                                            # the warm-up's blank frame 
     for s in streams: s.frames, s.N, s.next = {}, 0, 0
     for src in sources.values(): src.start()
     print("listening", flush=True)
+else: print("tracking", flush=True)
 cycles.clear(); clock, t_all, pending, steps = 0.0, time.time(), None, []
 def loop():
   global clock, pending
@@ -441,7 +448,9 @@ def loop():
       if not batch and not futs:
           if not live: break
           if REAL: time.sleep(0.001); continue
-          clock = min(s.next / s.fps for s in live); continue
+          nxt_t = min(s.next / s.fps for s in live)
+          if PACE: time.sleep(max(0.0, nxt_t - clock))
+          clock = nxt_t; continue
       nxt = None
       if PIPE == 0 and futs is None and batch:        # one after another: this batch's whole cycle now
           nxt = middle(front(batch)); futs = [pool.submit(solve, nxt, b) for b in range(len(batch))]; pending, nxt = nxt, None

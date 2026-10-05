@@ -36,6 +36,7 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 - **tracker の速さは、走行中の実際の入力で測る。** PnP を合成データ（400 点）で 3 ms と見積もっていたが、走行中は約 900 点で MAGSAC が 11 ms かかり、いちばんの詰まりだった
 - **ライブの送り手（GStreamer）の出口は `sync=false`。** 既定だと Mac ではフレームが塊で届き、最新の 1 枚しか見ない tracker が 22 Hz に落ちる（直すと 51 Hz）
 - **`rt_track.py` の numpy は BLAS 1 スレッド。** 外すと 32 コアの機械で小さな行列にスレッドが立ち、束調整つきの tracker が 54 → 33 Hz に落ちる
+- **録画で電力を測るなら `PACE=1`。** 付けないと次のフレームを待たずに回り、GPU が埋まって本番より高く出る。CPU は torch の OpenMP が空回りして約 100 W 食っていた（`OMP_NUM_THREADS=1` を既定にして 55〜60 W）。数字は realtime 文書の「電池で回す」
 - **ライブの速度や精度をいじる前に、設計の報告書を読む**（`docs/realtime-architecture.html`。オフラインの通しは `docs/offline-architecture.html`）。解像度は効かない、1 人 60 fps・4 人で 1 周 9 ms など、測り直しになる数字がそこにある
 - **race ページの splat がぼやける**：PlayCanvas の CPU ソートは走行中の依頼を捨てる。カメラが止まったら `resortWhenIdle` がソートを頼み直す
   （PlayCanvas の内部フィールドを読んでいるので、上げたら確かめる）

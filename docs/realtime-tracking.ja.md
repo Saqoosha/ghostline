@@ -305,7 +305,36 @@ bash tools/dvr/rt_replay.sh build/dvr/office-whoop-1/rec [名前]      # 録っ�
 未検証の候補は、物の縁に乗った地図の点を捨てる（このスキャンは不透明度が低く、描いた深度が縁で手前と奥の混ざりになる）、このカメラでのレンズ校正
 （いまは HDZero の値）、位置の分かる目印を使った真値、本物のライブ入力で束調整を通すこと、4 人ぶんのライブ入力。
 
-## 効いたこと・効かなかったこと
+## 電池で回す（消費電力、2026-10-05）
+
+会場に 4090 機を持ち込み、ポータブル電源（EcoFlow DELTA 2 Max、2,048 Wh）で回す場合の数字。GPU は `nvidia-smi`（200 ms ごと）、CPU はパッケージの
+RAPL（Windows の `\Energy Meter(rapl_package0_pkg)\Power`、1 秒ごと）で測った。マザーボード・メモリ・ファン・電源の損失は入っていない。
+録画は `PACE=1` で実時間に歩かせる。付けないと次のフレームを待たずに回し、GPU が常に埋まって電力が本番より高く出る。
+測る道具は `tools/dvr/rt_power.ps1`（Windows 側で記録しつつ `rt_power_run.sh` を呼ぶ）と `rt_power_an.py`（追跡中の平均を出す）。
+
+| 4 人同時、`RENDER=1 RCLIP=2` | GPU | CPU | 計 | d05 処理 / 遅延 p50 | レース 3 本の遅延 p50 |
+|---|---|---|---|---|---|
+| これまで | 188 W | 94 W | 282 W | 45 Hz / 33 ms | 37〜38 ms |
+| **OpenMP 1 スレッド（いまの既定）** | 191 | 62 | 253 | 46 / 32 | 35〜37 |
+| **それに GPU の電力上限 150 W** | 147 | 61 | **208** | 42 / 35 | 38〜40 |
+| 上限 100 W | 100 | 78 | 177 | 29 / 46 | 58〜65（30 → 22 Hz） |
+| クロック固定 2100 MHz（上限は 450） | 123 | 87 | 210 | 38 / 38 | 42〜47 |
+
+d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 W・CPU 31 W。答えの精度はどの行も変わらない（d05 p50 0.11〜0.12 m）。
+
+- **CPU の大半は torch の OpenMP の空回りだった。** 16 本のスレッドが各 33% 回り、CPU は負荷に関係なく約 100 W（1 本のほうが 4 本より多い）。
+  `OMP_NUM_THREADS=1` で消え、速さも精度も同じ。`rt_track.py` の冒頭で既定にした。`OPENCV_FOR_THREADS_NUM=1` は効かない
+- **GPU は電力上限 150 W が手ごろ。** 200 W 以上ではほぼ下がらない（もともと平均 188 W）。100 W ではクロックが 1,200 MHz まで落ちて遅れる。
+  クロック固定は同じ電力でも上限より遅い（2100 MHz で 1 周 p50 16 → 25 ms）。上限は `nvidia-smi -pl 150`（管理者、再起動で 450 に戻る）
+- **WSL の CUDA は待つ間ずっとコアを回す。** primary context に BLOCKING_SYNC を立てても変わらない（`.item()` の繰り返しで CPU 時間 1.08 s / 壁 1.08 s）。
+  event を 0.2 ms ごとに覗いて寝かせると CPU 時間は 1/4.5 になるが、tracker に入れると CPU −4 W・遅延 +2〜3 ms で割に合わなかった。
+  残る CPU 約 60 W（無負荷 +30 W）は、このメインスレッドの待ちと WSL の ioctl（CUDA の命令が Windows に渡る分）。py-spy で見るとメインスレッドは追跡中ずっと動いている
+- CPU のターボ切り（電源プランの最大 99%）は差なし
+
+DELTA 2 Max の AC は変換効率 86%・AC を入れているだけで 23 W（[thesolarlab](https://www.thesolarlab.com/review/ecoflow-delta-2-max-review)、
+[diglloyd](https://windinmyface.com/blog/2025/20250116_1012-Ecoflow-Delta2Max-AC-conversion-efficiency.html)）なので、使えるのは約 1,760 Wh。
+本体の残り（マザーボード・メモリ・ファン）を 40 W、電源の効率を 90% と仮に置くと、4 人で 282 W → 約 360 W で 4.9 時間、208 W → 約 275 W で 6.4 時間
+（モニターや受信機は別）。仮定の部分は、走らせながら DELTA の出力表示を読めば確かめられる。
 
 - **照合はまとめて呼ぶ。** LighterGlue は 1 組 14 ms、8 組を 1 回のバッチで 19 ms。命令を出す回数で時間が決まっている。
   バッチには点の刈り込み（`width_confidence`）を切る必要がある（B > 1 で `The size of tensor a (2048) must match the size of tensor b` で落ちる）。
