@@ -218,10 +218,10 @@ def features(batch):                                # [(stream, frame)] -> per f
         uv = f["keypoints"]; ix = uv.round().long(); ok = s.qvalid[ix[:, 1].clamp(0, RH - 1), ix[:, 0].clamp(0, RW - 1)]
         out.append((uv[ok], f["descriptors"][ok]))
     return out, x
-def ref(s, k):                                      # a keyframe padded to TOPK points (as a render view) so the two stack in one batch
+def ref(s, k):                                      # a keyframe narrower than TOPK padded (as a render view) so the two stack in one batch
     if not isinstance(k, int): return k["kp"], k["desc"], k["X"], k["n"]
-    p = TOPK - s.m["kp"].shape[1]; fit = lambda t: torch.nn.functional.pad(t, (0, 0, 0, p)) if p > 0 else t[:TOPK]   # the map keeps the strongest first
-    return fit(s.m["kp"][k]), fit(s.m["desc"][k]), s.m["X"][k][:TOPK], min(s.m["n"][k], TOPK)
+    p = TOPK - s.m["kp"].shape[1]; pad = lambda t: torch.nn.functional.pad(t, (0, 0, 0, p)) if p > 0 else t
+    return pad(s.m["kp"][k]), pad(s.m["desc"][k]), s.m["X"][k], s.m["n"][k]
 def match_all(pairs):                               # [(query, stream, keyframe index or rt_render view)] -> per pair (uv on the frame, X in the world)
     res = []
     for c in range(0, len(pairs), BATCH):
