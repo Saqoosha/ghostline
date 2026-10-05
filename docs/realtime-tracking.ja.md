@@ -60,7 +60,7 @@ ssh 越しに `$p` のような変数を使うループは引用で消える。�
 
 この節の「描く点」は `rt_track.py` の外挿した点（`.json`）。ページの 100 ms 遅らせた内挿は上の段落の数字。遅延はフレームが届いてから姿勢が出るまで。
 
-| | PyTorch＋MAGSAC（`GLUE` / `XFEAT` なし、`PNP=magsac`） | TensorRT＋PoseLib（推奨） |
+| | PyTorch＋MAGSAC（`GLUE` / `XFEAT` なし、`PNP=magsac`） | TensorRT＋PoseLib（`RENDER=0`。遅延を取るとき） |
 |---|---|---|
 | d05 1 本：処理 / 1 周 p50 / 遅延 p50 | 56 Hz / 15.6 ms / 36 ms | **60 Hz（全フレーム）/ 6.7 ms / 11 ms** |
 | d05 1 本：答えの位置 p50 / p90・向き p50 | 0.24 / 0.77 m・0.5° | 0.19 / 0.72 m・0.4° |
@@ -69,6 +69,7 @@ ssh 越しに `$p` のような変数を使うループは引用で消える。�
 | 4 本同時：処理 | レース 25 Hz・d05 33 Hz | 全員が全フレーム（レース 30 Hz・d05 59 Hz） |
 | 4 本同時：描く点 p90（KNT / SENA / SAQ / d05） | 9.9 / 4.0 / 2.0 / 1.77 m | 3.4 / 2.4 / 2.3 / 1.18 m |
 
+精度を取るなら、これに予測姿勢での描画（`RENDER=1 RCLIP=2`、下の節）を足すのが推奨：d05 1 本は答え 0.11 / 0.47 m・遅延 15 ms、4 本同時は遅延が約 35 ms に伸びる。
 4 本同時はレース 3 本（中継の 4 分割から切った 30 fps・半分の解像度）＋ d05。4 本同時の描く点の p90 は同じ設定でも回ごとに 1〜2 m ぶれるので、確かなのは Hz と遅延。
 軌跡（200 ms 遅れ）は d05 1 本で p50 0.27 m / p90 0.65 m（揺れ 1.8 cm、束調整の経路と同程度）。本番のライブは 60 fps・フル解像度なので、d05 に近いはず（未確認）。
 
@@ -239,9 +240,10 @@ VDGS `docs/spirula.ja.md`）の上に位置をライブで出す。スキャン�
 （`viewer/public/office-whoop-1` はそこへのリンク）。
 
 ```bash
-# win4090（WSL、rt/）：待ち受け。office/live.env が MAP / GRID / GRID_CROP / CELL を持ち、送り手が切れると読み直して立ち上がり直す
-bash run_live2.sh                       # スケジュールタスク whoop-live。止めるのは office/live.stop を置いて python を kill
-#   中身: BA=0.5 GRID=640x480 GRID_CROP=160:0:160:0 GRID_FPS=60 GRID_GST=1 PUSH=8765 rt_track.py \
+# win4090（WSL、rt/）：待ち受け。office/live.env が MAP / GRID / GRID_CROP / CELL と GLUE / XFEAT / RENDER=1 / RCLIP / SCENE / RNEAR=0.1 を持ち、
+# 送り手が切れると読み直して立ち上がり直す。旧版（PyTorch＋MAGSAC）は rt_track.py.bak-20261005 と office/live.env.bak-20261005
+bash run_live2.sh                       # スケジュールタスク whoop-live。止めるのは office/live.stop を置いて python を kill（起こすときは live.stop を消してタスクを起動）
+#   中身: (live.env) GRID_FPS=60 GRID_GST=1 PUSH=8765 rt_track.py \
 #         "office/map_office2.npz,srt://0.0.0.0:9000?mode=listener&latency=80000|0:0:640:480|../office-whoop-1/dvr_pinhole.mp4.json,office/live/runN"
 # Mac：取り込み → 送信、送った映像と答えの記録。止めるのは <rec>/stop を置いて gst を kill -INT
 bash tools/dvr/rt_capture.sh build/dvr/office-whoop-1/rec
@@ -273,8 +275,8 @@ bash tools/dvr/rt_replay.sh build/dvr/office-whoop-1/rec [名前]      # 録っ�
 **基準値（RTX 4090、アナログ Whoop、1 人）**
 - クリップ（25 fps、束調整の経路が真値、自分を含まない地図）：答えの位置 p50 0.09 m・p90 0.30 m、向き 1.2°、解けたのは飛行中の 93%
 - ライブの飛行（60 fps）：処理 32 Hz（塊で届いていたとき）、解けた割合 92〜93%、inlier p10 / p50 / p90 79 / 236 / 432、0.3 秒超の見失いは 145 秒に 3 回・1.8 秒
-- 録画（`office/f2/sent.mp4`）を WSL の中から SRT で流したとき（`wslsend.sh`、受け方は `run_live2.sh` と同じ）：PyTorch＋MAGSAC は処理 50 Hz・届いてから姿勢まで
-  p50 43 ms、TensorRT＋PoseLib は 60 Hz・15 ms（クリップの答えの精度は同じ）
+- 録画（`office/f2/sent.mp4`）を WSL の中から SRT で流したとき（`wslsend.sh`、受け方は `run_live2.sh` と同じ）：届いてから姿勢まで p50 は PyTorch＋MAGSAC 43 ms（処理 50 Hz）、
+  TensorRT＋PoseLib 15 ms、いまの `live.env`（＋`RENDER=1`）18 ms（どれも処理 60 Hz 前後）。本物の Whoop ではまだ飛ばしていない
 - 答えの揺れ（前後 0.25 秒の 2 次式からのずれ）は inlier で決まる：60 未満 22 cm、120〜250 で 9 cm、400 以上で 4 cm。回転の速さとは弱く（順位相関 +0.31）、
   速度とは無関係。この Whoop は回転 p50 72 °/s・p99 265 °/s で、レース機の「400 °/s 超で崩れる」領域に入らない
 
@@ -358,12 +360,11 @@ bash tools/dvr/rt_replay.sh build/dvr/office-whoop-1/rec [名前]      # 録っ�
 - **race ページで 4 人の「軌跡＋ライブの点」を重ねる**。いまの viewer は 1 飛行の姿勢集合を 1 つ出すだけ。配信は LAN の WebSocket で足りる見込み（調査）
 - **台の上で見つからない**：最初の答えは d05 で #177〜#195（離陸前の約 3 秒は点が出ない）
 - **KNT の描く点の p90 が 3.4〜3.8 m**（TensorRT＋PoseLib。前は 5.5 m）。速い旋回で見失う区間を調べる
-- **オフィスのライブ（`run_live2.sh`）はまだ PyTorch＋MAGSAC の旧版**。新しい `rt_track.py` と `rt_trt.py` を `rt/` に、エンジンを `rt/eng/` に置き、
-  `office/live.env` に `GLUE=eng/glue_mix.engine` と `XFEAT=eng/xfeat_fp32.engine` を足す（いまのエンジンは `rt/trt/eng/` にある）。録画の再送では確かめた（上）
+- **オフィスのライブ（TensorRT＋PoseLib＋`RENDER=1`）を本物の Whoop で飛ばして確かめる**。`rt/` の差し替えと録画の再送での確認までは済んでいる
 - PnP の 2.8 ms の大半は inlier 33% の RANSAC そのもの。外れを減らすなら重複点を外す（真値で確かめる）
 - **`RENDER=1` の残り**：
   - 4 本同時の遅延（約 35 ms、1 周 16 ms のほぼ 2 周分）。描画の使い回しは精度が落ちるので使えず、まとめて描くのも精度が少し落ちる
   - KNT の見失い
-  - 答えで描き直す 2 周目。オフラインでは p99 1.97 → 1.43 m に下がるが、描画がもう 1 回要る
-  - オフィスのライブへの反映
+  - 答えで描き直す 2 周目。オフラインでは p99 1.97 → 1.43 m に下がるが、描画がもう 1 回要り、1 周がほぼ倍になる
+  - 参照の姿勢で描いた 1 枚（d05 0.08 m）との差。対応点の細かさ（XRefine）や深度の縁では縮まらなかった
 - 地図は FDF R6b の 6 本から作っている。コースが変わったら、変わった所は他の飛行の視点が無い

@@ -112,7 +112,7 @@ ul.tight li { margin: 3px 0; }
     <div class="stat"><div class="v">11<small>ms</small></div><div class="k">フレーム到着から姿勢まで p50（1 人）。4 人同時は 18〜23 ms</div></div>
     <div class="stat"><div class="v">≈300<small>ms</small></div><div class="k">会場で送ってから画面に点が出るまで（表示の 100 ms 遅らせを含む）</div></div>
   </div>
-  <p class="note">点線の下線の語はカーソルを乗せると説明が出る。まとめは末尾の<a href="#s12">用語集</a>。<br>誤差の参照はオフラインの通しの経路 <code>poses60_pad.json</code>。同じ映像から作った姿勢で、独立した真値ではない。数値は RTX 4090、2026-09-29〜30 の計測。09・10 は 2026-10-04、屋内のアナログ機。冒頭の数字と 04 の「照合・特徴・PnP を速くする」の表は 2026-10-05（照合と XFeat を TensorRT、PnP を PoseLib）。図と 3D の答えは PyTorch＋MAGSAC の版のまま。</p>
+  <p class="note">点線の下線の語はカーソルを乗せると説明が出る。まとめは末尾の<a href="#s12">用語集</a>。<br>誤差の参照はオフラインの通しの経路 <code>poses60_pad.json</code>。同じ映像から作った姿勢で、独立した真値ではない。数値は RTX 4090、2026-09-29〜30 の計測。09・10 は 2026-10-04、屋内のアナログ機。冒頭の数字と 04 の「照合・特徴・PnP を速くする」の表は 2026-10-05（照合と XFeat を TensorRT、PnP を PoseLib）。図と 3D の答えは PyTorch＋MAGSAC の版のまま。予測姿勢でその場で描いて照合する <code>RENDER=1</code>（d05 の答え p50 0.11 m、新しいコースもスキャンだけの地図で同じ精度）はこのページに無く、<code>docs/realtime-tracking.ja.md</code> の RENDER 節にある。</p>
   <nav class="toc">
     <a href="#s1">1 全体の流れ</a><a href="#s2">2 キーフレーム地図</a><a href="#s3">3 毎フレームの処理</a><a href="#s4">4 1 周の時間割</a>
     <a href="#s5">5 4 人をまとめる</a><a href="#s6">6 精度</a><a href="#s7">7 描き方</a><a href="#s8">8 回線とビットレート</a><a href="#s9">9 USB キャプチャから</a><a href="#s10">10 ライブの束調整</a><a href="#s11">11 効いたこと・残り</a><a href="#s12">12 用語集</a>
@@ -492,7 +492,7 @@ ul.tight li { margin: 3px 0; }
       <li>公開のページ（ghostline.saqoo.sh）へ答えを流す。いまは LAN / Tailscale の中だけ</li>
       <li>台の上で見つからない：d05 の最初の答えは #177〜#195（離陸前の約 3 秒は点が出ない）</li>
       <li>KNT の描く点の p90 3.4〜3.8 m（TensorRT＋PoseLib。前は 5.5 m）：速い旋回で見失う区間</li>
-      <li>オフィスのライブ（<code>run_live2.sh</code>）はまだ PyTorch＋MAGSAC。録画の再送では TensorRT＋PoseLib で届いてから姿勢まで 43 → 15 ms</li>
+      <li>オフィスのライブ（<code>run_live2.sh</code>）は TensorRT＋PoseLib＋<code>RENDER=1</code> に差し替え済み。録画の再送で届いてから姿勢まで 43 → 18 ms。本物の Whoop ではまだ</li>
       <li>コースが変わったとき：スキャンのカメラだけの地図、合成の視点 14,400 枚（1 m / 2.5 m の高さ × 12 方位 × 下向き 10°/35°）を作って試している途中</li>
       <li>Apple M1 Max：1 人 25 Hz まで（1,024 点・1 枚・FLOW など）、描く点 p50 1.44 m。4 人は無理 → 会場で処理するなら NVIDIA のノート</li>
     </ul>
