@@ -9,7 +9,8 @@ from plyfile import PlyData
 from scipy.spatial.transform import Rotation as Rot
 from frustum import rasterize_culled, keep_mask
 from gsplat import rasterization
-RCLIP, ROPA, RBATCH = float(os.environ.get("RCLIP", 0)), float(os.environ.get("ROPA", 0.1)), int(os.environ.get("RBATCH", 0))   # skip splats under RCLIP px across / below ROPA opacity
+RCLIP, ROPA, RBATCH = float(os.environ.get("RCLIP", 0)), float(os.environ.get("ROPA", 0.1)), int(os.environ.get("RBATCH", 0))
+REDGE = float(os.environ.get("REDGE", 0))   # drop points whose 5x5 depth range is over REDGE x their depth (0 = keep all)   # skip splats under RCLIP px across / below ROPA opacity
 
 
 class Scene:
@@ -40,6 +41,9 @@ class Scene:
             ix = kp.round().long(); ix[..., 0].clamp_(0, self.W - 1); ix[..., 1].clamp_(0, self.H - 1); bi = torch.arange(B, device=kp.device)[:, None]
             d, al = o[..., 3][bi, ix[..., 1], ix[..., 0]], a[..., 0][bi, ix[..., 1], ix[..., 0]]
             ok = (sc > 0) & (al > 0.9) & (d > 0.3) & (d < 200)
+            if REDGE:                               # on a depth edge the rendered depth mixes near and far: the lifted point is off
+                dm = o[..., 3][:, None]; rng = (torch.nn.functional.max_pool2d(dm, 5, 1, 2) + torch.nn.functional.max_pool2d(-dm, 5, 1, 2))[:, 0]
+                ok &= rng[bi, ix[..., 1], ix[..., 0]] < REDGE * d
             order = torch.argsort((~ok).int(), dim=1, stable=True)   # points with depth first, in the detector's order
             g = lambda t: torch.gather(t, 1, order[..., None].expand(-1, -1, t.shape[-1]))
             kp, desc, d, ok = g(kp), g(desc), torch.gather(d, 1, order), torch.gather(ok, 1, order)
