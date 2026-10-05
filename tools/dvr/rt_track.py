@@ -95,6 +95,17 @@ T = lambda a: torch.tensor(a, dtype=torch.float32, device=dev)
 def sync(): torch.cuda.synchronize() if dev == "cuda" else torch.mps.synchronize() if dev == "mps" else None
 maps, sources = {}, {}
 import threading, subprocess
+# SIGNAL=1 (live): a cell whose receiver shows no picture - its flat no-signal screen or analog snow - sends no frames to
+# the tracker, and with every cell quiet the loop only waits. On an EventVRX recording (2x2, analog, 707 s) the flat screens
+# (grey, blue, black) have a pixel std of 0 and pictures 8 and up; snow is told apart by the correlation of neighbouring
+# rows, 0.1-0.3 against 0.8-0.9 for a picture (0.5-0.7: a weak signal with a faint picture). The cells had a picture 47% of
+# the time, all four were quiet 13% of it, and ~0.1 s of flight was dropped. Not tried yet on an HDZero receiver's screen.
+SIGNAL = int(E("SIGNAL", 0))
+def has_signal(cell):                               # BGR crop of one cell
+    g = cv2.cvtColor(cv2.resize(cell, (160, 90), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)[4:86, 4:156].astype(np.float32)
+    if g.std() < 2: return False
+    a0, a1 = g[:-1] - g[:-1].mean(), g[1:] - g[1:].mean()
+    return float((a0 * a1).sum() / (np.sqrt((a0 ** 2).sum() * (a1 ** 2).sum()) + 1e-6)) >= 0.5
 class GridSource:                                   # one decoded live video; its frames fan out to the cells that use it
     def __init__(self, url):
         self.url, self.cells, self.ended, self.n = url, [], False, 0
@@ -166,7 +177,7 @@ class Stream:
             x0, y0, w, h = self.rect; Km = self.K
             mx, my = cv2.fisheye.initUndistortRectifyMap(Kf, np.array(fk["k"]), np.eye(3), Km, (RW, RH), cv2.CV_32FC1)
             self.mx, self.my = mx * w / W + x0, my * h / H + y0
-            self.frames, self.arrive, self.arrive_wall = {0: np.zeros((RH, RW, 3), np.uint8)}, {}, {}; self.N = 1   # a blank frame for the warm-up
+            self.frames, self.arrive, self.arrive_wall = {0: np.zeros((RH, RW, 3), np.uint8)}, {}, {}; self.N = 1; self.signal, self.flip = None, 0   # a blank frame for the warm-up
             src = sources.setdefault(url, GridSource(url)); src.cells.append(self); self.src = src
             print(f"{self.prefix}: live cell {rect} of {url}, {len(self.m['pos'])} keyframes", flush=True); return
         cap = cv2.VideoCapture(self.video); self.frames = []
@@ -177,6 +188,11 @@ class Stream:
         self.N = len(self.frames)
         print(f"{self.prefix}: {self.N} frames at {self.fps} fps, {len(self.m['pos'])} keyframes", flush=True)
     def push(self, n, full, t, tw):                  # reader thread: a new frame of the source
+        if SIGNAL:                                  # no picture in the cell: no frame, so a quiet cell costs nothing
+            on = has_signal(full[self.rect[1]:self.rect[1] + self.rect[3], self.rect[0]:self.rect[0] + self.rect[2]])
+            self.flip = self.flip + 1 if on != self.signal else 0   # logged once it has held 0.5 s; a weak signal flickers
+            if self.flip >= self.fps / 2: self.signal, self.flip = on, 0; print(f"{self.prefix}: signal {'on' if on else 'off'}", flush=True)
+            if not on: return
         self.frames[n] = cv2.cvtColor(cv2.remap(full, self.mx, self.my, cv2.INTER_LINEAR), cv2.COLOR_BGR2RGB)
         if not self.arrive: self.t_base = t - n / self.fps   # when frame 0 would have arrived, even if it was lost
         self.arrive[n], self.arrive_wall[n] = t, tw; self.N = n + 1
