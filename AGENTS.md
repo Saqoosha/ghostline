@@ -12,7 +12,7 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 | 場所 | 中身 |
 |---|---|
 | `tools/dvr/` | 姿勢推定（CPR 照合 `cpr_track.py` → 束調整 `cpr_ba.py` → 2 周目 `cpr_rematch.py` → `takeoff.py`、評価 `eval_align.py`）、`make_race.py`（race.json） |
-| `tools/dvr/rt_*` | ライブの位置推定（`rt_map.py` で他の飛行からキーフレーム地図、`rt_track.py` で過去のフレームだけで追跡・複数人をバッチ・答えを SSE で配信（`PUSH`）・直近の答えの束調整（`BA`））、`rt_trt.py`（LighterGlue と XFeat を TensorRT のエンジンに）、`rt_capture.sh`（USB キャプチャ → SRT、録画つき）、`rt_replay.sh`。正本は [docs/realtime-tracking.ja.md](docs/realtime-tracking.ja.md) |
+| `tools/dvr/rt_*` | ライブの位置推定（`rt_map.py` で他の飛行からキーフレーム地図、`rt_track.py` で過去のフレームだけで追跡・複数人をバッチ・答えを SSE で配信（`PUSH`）・直近の答えの束調整（`BA`））、`rt_trt.py`（LighterGlue と XFeat を TensorRT のエンジンに）、`rt_render.py`（`RENDER=1`：予測姿勢でその場で 3DGS を描いて照合。キーフレームより精度が高い）、`rt_capture.sh`（USB キャプチャ → SRT、録画つき）、`rt_replay.sh`。正本は [docs/realtime-tracking.ja.md](docs/realtime-tracking.ja.md) |
 | `viewer/` | Vite + PlayCanvas。`index.html` は 1 飛行のビューア（mark / pad の道具つき、`live` でライブの答えの再生：`src/live.ts` が 100 ms 遅らせた内挿で描く）、`race.html` はレースの再生、`live.html` はライブの表示と録画の再生（`?replay=`） |
 | `data/dvr/` | 結果の小さな JSON（姿勢・評価・pad・race.json）。映像と中間物は `build/dvr/`（git の外） |
 | `worker/` | https://ghostline.saqoo.sh 。R2（バケット `vdgs`）の `dvr/<name>/` を `/<name>/` として返す |
@@ -31,7 +31,7 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 - **gsplat で照合用に描くときは視野外の splat を 1.2 倍で切る**（`tools/dvr/frustum.py`）。切らないと真横の splat が空を灰色にする。
   既定の組み合わせ（d07m）は 1 周目を全部描き（`CULL=0`）、2 周目と評価を DVR に色を合わせたシーンで切って描く
 - **他のセッションの `wsl --shutdown` は走っている処理を黙って殺す**
-- **ライブの照合と XFeat は TensorRT のエンジン（`GLUE=` / `XFEAT=`、`tools/dvr/rt_trt.py`）、PnP は PoseLib（既定）で回す**（4 人で 1 周 28 → 9 ms、精度は同じか良い）。
+- **ライブの照合と XFeat は TensorRT のエンジン（`GLUE=` / `XFEAT=`、`tools/dvr/rt_trt.py`）、PnP は PoseLib（既定）で回す**（4 人で 1 周 28 → 9 ms、精度は同じか良い）。精度を取るなら `RENDER=1 RCLIP=2 SCENE=<地図の .ply>` で予測姿勢でその場で描いて照合する（d05 の答え p50 0.19 → 0.11 m、新しいコースはスキャンのカメラだけの地図で足りる。4 人では遅延が約 20 → 35 ms）。
   PyTorch の LighterGlue に autocast の fp16（`mp`）を掛けない（解けるフレームが半分になる。TensorRT の fp16 は問題ない）。照合は 1 組ずつでなくバッチで呼ぶ
 - **tracker の速さは、走行中の実際の入力で測る。** PnP を合成データ（400 点）で 3 ms と見積もっていたが、走行中は約 900 点で MAGSAC が 11 ms かかり、いちばんの詰まりだった
 - **ライブの送り手（GStreamer）の出口は `sync=false`。** 既定だと Mac ではフレームが塊で届き、最新の 1 枚しか見ない tracker が 22 Hz に落ちる（直すと 51 Hz）

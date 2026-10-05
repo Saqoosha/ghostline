@@ -22,12 +22,14 @@ env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s w
      RELOC_TOPK (5), RELOC_MIN (50), TOPK (2048) keypoints on the frame, MAPK (0 = all) per keyframe, NMAX (0 = all frames), BATCH (16 pairs per call),
      FRESH (0.1 s: an answer this old or newer is labelled "rt", older "rt-carry"), KQ (1e4, the drawn position's jerk density (m/s^3)^2 s),
      BLEND (0.025 s; 0 = draw the filter as it jumps), TRAIL_L (0.2 s the trail is drawn late), TRAIL_W (0.25 s either
-     side in its fit), PIPE (2: overlap the next cycle's GPU work with this cycle's PnP, below),
+     side in its fit), PIPE (2, 1 with RENDER: overlap the next cycle's GPU work with this cycle's PnP, below),
      FLOW (0; 1 = carry points to the next frame with LK instead of matching, below), FLOW_EVERY (8), FLOW_RESEED (60), FLOW_MIN (30),
      PUSH (0; a port: answers out as server-sent events while it runs, for viewer/live.html),
      INFO (0; 1 = rows carry H), BA (0; seconds of answers solved again together after every answer, below),
      GLUE / XFEAT (unset; TensorRT engines from rt_trt.py to match / find features with instead of PyTorch),
-     PNP (poselib; magsac = OpenCV's USAC_MAGSAC, below)"""
+     PNP (poselib; magsac = OpenCV's USAC_MAGSAC, below),
+     RENDER (0; 1 = while tracking, match a render of SCENE (.ply) at the prediction instead of keyframes, rt_render.py), RNEAR (1.0 m near plane),
+     RFALL (1: also match keyframes right after a failed try); RCLIP / ROPA / RBATCH / REDGE: see rt_render.py"""
 import os
 # One BLAS thread. numpy's matrices here are small (the BA's system is about 150 x 150), and OpenBLAS otherwise starts a
 # thread per core for them: on a 32-core machine that took the tracker from 54 to 33 Hz with BA on, the solve itself 0.2 ms.
@@ -41,6 +43,7 @@ LIVE, NKF, MIN_INL, LOST = int(E("LIVE", 1)), int(E("NKF", 2)), int(E("MIN_INL",
 RTOPK, RMIN, TOPK, NMAX, BATCH = int(E("RELOC_TOPK", 5)), int(E("RELOC_MIN", 50)), int(E("TOPK", 2048)), int(E("NMAX", 0)), int(E("BATCH", 16))
 PNP = os.environ.get("PNP", "poselib")           # poselib (PoseLib's LO-RANSAC) or magsac (OpenCV USAC_MAGSAC)
 if PNP == "poselib": import poselib
+RENDER, SCENE, RNEAR, RFALL = int(E("RENDER", 0)), os.environ.get("SCENE"), E("RNEAR", 1.0), int(E("RFALL", 1))
 PL_DYN = E("PL_DYN", 1.0)                           # PoseLib: trials x this over what success_prob 0.99 needs
 MAPK = int(E("MAPK", 0))                            # keypoints per keyframe used from the map (0 = all)
 # NEAR: after a failed attempt, match NEAR_K keyframes around the prediction up to NEAR_ANG degrees off, and add NEAR_K
@@ -184,12 +187,23 @@ glue = xf = None                                    # LighterGlue / XFeat as Ten
 if os.environ.get("GLUE"):                          # both sides must be TOPK points
     assert dev == "cuda" and streams[0].m["kp"].shape[1] == TOPK, "GLUE needs cuda and TOPK points per map keyframe"
     from rt_trt import Trt; glue = Trt(os.environ["GLUE"])
+def detect(img):                                    # [B, 3, H, W] in 0..1 -> keypoints [B, TOPK, 2], descriptors [B, TOPK, 64], score (-1 = none)
+    if xf: return xf(img)
+    with torch.no_grad(): fs = xfeat.detectAndCompute(img, top_k=TOPK)
+    kp, d, sc = torch.zeros(len(fs), TOPK, 2, device=dev), torch.zeros(len(fs), TOPK, 64, device=dev), torch.full((len(fs), TOPK), -1.0, device=dev)
+    for b, f in enumerate(fs): n = len(f["keypoints"]); kp[b, :n], d[b, :n], sc[b, :n] = f["keypoints"], f["descriptors"], f["scores"]
+    return kp, d, sc
 if os.environ.get("XFEAT"):
     assert dev == "cuda", "XFEAT needs cuda"
     from rt_trt import Trt; xf = Trt(os.environ["XFEAT"])
 if dev != "cuda":                                   # both pick cuda-or-cpu themselves
     xfeat.dev = lg.dev = torch.device(dev); xfeat.net.to(dev); lg.net.to(dev)
 dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14").to(dev).eval()
+scene = None
+if RENDER:
+    assert dev == "cuda" and SCENE, "RENDER needs cuda and SCENE=<the map's .ply>"
+    from rt_render import Scene; scene = Scene(SCENE, RW, RH, RNEAR, TOPK, detect)
+    scene.views([(Rot.identity(), np.zeros(3))] * len(streams), [s.K for s in streams])   # the first render compiles kernels: not on a tracked frame
 MEAN, STD = T([0.485, 0.456, 0.406])[None, :, None, None], T([0.229, 0.224, 0.225])[None, :, None, None]
 SIZE = T([[RW, RH]])
 def features(batch):                                # [(stream, frame)] -> per frame (keypoints, descriptors[, mask]), and the tensor
@@ -204,7 +218,11 @@ def features(batch):                                # [(stream, frame)] -> per f
         uv = f["keypoints"]; ix = uv.round().long(); ok = s.qvalid[ix[:, 1].clamp(0, RH - 1), ix[:, 0].clamp(0, RW - 1)]
         out.append((uv[ok], f["descriptors"][ok]))
     return out, x
-def match_all(pairs):                               # [(query, stream, keyframe)] -> per pair (uv on the frame, X in the world)
+def ref(s, k):                                      # a keyframe narrower than TOPK padded (as a render view) so the two stack in one batch
+    if not isinstance(k, int): return k["kp"], k["desc"], k["X"], k["n"]
+    p = TOPK - s.m["kp"].shape[1]; pad = lambda t: torch.nn.functional.pad(t, (0, 0, 0, p)) if p > 0 else t
+    return pad(s.m["kp"][k]), pad(s.m["desc"][k]), s.m["X"][k], s.m["n"][k]
+def match_all(pairs):                               # [(query, stream, keyframe index or rt_render view)] -> per pair (uv on the frame, X in the world)
     res = []
     for c in range(0, len(pairs), BATCH):
         chunk = pairs[c:c + BATCH]; B = len(chunk)
@@ -215,19 +233,19 @@ def match_all(pairs):                               # [(query, stream, keyframe)
             kp0 = torch.zeros(B, TOPK, 2, device=dev); d0 = torch.zeros(B, TOPK, 64, device=dev); n0 = []
             for b, ((uv, d), s, k) in enumerate(chunk): kp0[b, :len(uv)] = uv; d0[b, :len(uv)] = d; n0.append(len(uv))
             ok0 = torch.arange(TOPK, device=dev)[None] < torch.tensor(n0, device=dev)[:, None]
-        ks = torch.tensor([k for _, _, k in chunk], device=dev); mp = chunk[0][1].m
-        same = all(s.m is mp for _, s, _ in chunk)
-        kp1 = mp["kp"][ks] if same else torch.stack([s.m["kp"][k] for _, s, k in chunk])
-        d1 = (mp["desc"][ks] if same else torch.stack([s.m["desc"][k] for _, s, k in chunk])).float()
+        mp = chunk[0][1].m; rf = [ref(s, k) for _, s, k in chunk]
+        if all(isinstance(k, int) and s.m is mp for _, s, k in chunk):
+            ks = torch.tensor([k for _, _, k in chunk], device=dev); kp1, d1 = mp["kp"][ks], mp["desc"][ks].float()
+        else: kp1, d1 = torch.stack([r[0] for r in rf]), torch.stack([r[1].float() for r in rf])
         if glue: m0 = glue(kp0, d0, kp1, d1)[0]
         else:
             with torch.no_grad():
                 m0 = lg.net({"image0": {"keypoints": kp0, "descriptors": d0, "image_size": SIZE.expand(B, 2)},
                              "image1": {"keypoints": kp1, "descriptors": d1, "image_size": SIZE.expand(B, 2)}})["matches0"]
         m0, ok0, kp0 = m0.cpu().numpy(), ok0.cpu().numpy(), kp0.cpu().numpy()   # one copy each for the chunk, not one per pair
-        for b, (q, s, k) in enumerate(chunk):
-            i = np.nonzero((m0[b] >= 0) & ok0[b])[0]; j = m0[b][i]; keep = j < s.m["n"][k]
-            res.append((kp0[b][i[keep]], s.m["X"][k][j[keep]]))
+        for b, r in enumerate(rf):
+            i = np.nonzero((m0[b] >= 0) & ok0[b])[0]; j = m0[b][i]; keep = j < r[3]
+            res.append((kp0[b][i[keep]], r[2][j[keep]]))
     return res
 def pnp(K, uv, X):
     # PoseLib, not OpenCV: on the tracker's own matches (d05, ~900 from two keyframes, 33% inliers) MAGSAC takes 11 ms
@@ -300,7 +318,7 @@ pool = ThreadPoolExecutor(max(4, len(streams)))
 # slow global retrieval, which drops frames and loses it again
 # d05 alone: PIPE 0 28 Hz, 1 43 Hz, 2 56 Hz, the drawn position no worse (0.61 / 0.58 / 0.55 m p50); 4 streams at once
 # (3 race flights at 30 fps + d05): 2 gives 25-32 Hz each with the GPU busy all the time (XFeat 8 + LighterGlue 19 ms; PyTorch + MAGSAC)
-PIPE = int(E("PIPE", 2))
+PIPE = int(E("PIPE", 1 if RENDER else 2))         # with RENDER, 1: the prediction (and so the render) one cycle fresher; 4 at once, the drawn p90 KNT 5.2 -> 3.1 m
 def flowing(s):                                     # carry this stream's points with LK instead of matching (FLOW, below)
     return bool(FLOW and s.hist and s.flow is not None and len(s.flow["X"]) >= FLOW_RESEED and s.flow["age"] < FLOW_EVERY)
 def front(batch):                                   # GPU: features, for the streams that will be matched
@@ -317,9 +335,16 @@ def middle(c):                                      # plan from the answers so f
             plan.append(("flow", None, [], None))  # no XFeat, no matching: the CPU carries last frame's points over with LK
         elif s.hist and (i - s.hist[-1][0]) / s.fps <= LOST:
             pred = predict(s.hist, i)
-            ks = s.nearest(*pred, NEAR_K, NEAR_ANG, 30) if NEAR and s.fails else s.nearest(*pred)
+            # with RENDER the render at the prediction replaces the keyframes, except right after a failed try, when the keyframes are
+            # matched too: a bad prediction renders a view that barely overlaps the frame, and the keyframes' wider pick still finds it
+            ks = [] if scene and not (s.fails and RFALL) else s.nearest(*pred, NEAR_K, NEAR_ANG, 30) if NEAR and s.fails else s.nearest(*pred)
             plan.append(("track", pred, ks, s.hist[-1][0]))
         else: plan.append(("reloc", None, None, None)); lost.append(b)
+    tr = [b for b, p in enumerate(plan) if p[0] == "track"] if scene else []
+    if tr:                                          # one render per tracked stream, at its prediction
+        tv = time.perf_counter()
+        for b, v in zip(tr, scene.views([plan[b][1] for b in tr], [batch[b][0].K for b in tr])): plan[b][2].append(v)
+        c["rend"] = time.perf_counter() - tv
     if lost:
         with torch.no_grad(): g = torch.nn.functional.normalize(dino(((torch.nn.functional.interpolate(x[[c["row"][b] for b in lost]], (168, 224), mode="area") if dev == "cuda" else   # MPS: area only for divisible sizes
                                                                   torch.nn.functional.interpolate(x[[c["row"][b] for b in lost]], (168, 224), mode="bilinear", antialias=True)) - MEAN) / STD), dim=1)
@@ -333,7 +358,7 @@ def middle(c):                                      # plan from the answers so f
                 ks += [k for k in s.nearest(s.last[1], s.last[2], NEAR_K, 180, 60) if k not in ks]
             plan[b] = ("reloc", None, ks, None)
     pairs = [(q[b], batch[b][0], k) for b in range(len(batch)) for k in plan[b][2]]
-    res = match_all(pairs); sync(); per, n = [], 0
+    tg = time.perf_counter(); res = match_all(pairs); sync(); c["glue"] = time.perf_counter() - tg; per, n = [], 0
     for b in range(len(batch)): per.append(res[n:n + len(plan[b][2])]); n += len(plan[b][2])
     c.update(plan=plan, per=per, pairs=len(pairs), match=time.perf_counter() - t); return c
 # FLOW: after an answer, its inlier points (where they are in the frame, where they are in the world) are carried to the
@@ -386,7 +411,7 @@ def land(c, out, t0, clock0):                       # apply the answers to the s
             m = json.dumps(dict(stream=os.path.basename(s.prefix), fps=s.fps, **s.recs[-1]))
             for q in list(subs):
                 if not q.full(): q.put_nowait(m)
-    s_ = {k: c[k] * 1000 for k in ("feat", "match")}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
+    s_ = {k: c[k] * 1000 for k in ("feat", "match", "rend", "glue") if k in c}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
 REAL = any(s.live for s in streams)
 def pick(clock):                                    # the newest arrived frame of each stream not already in flight
     if REAL:
@@ -433,7 +458,7 @@ try: loop()
 except KeyboardInterrupt: print("stopped", flush=True)   # a live feed never ends by itself; keep what was measured
 pc = lambda a, q: float(np.percentile(a, q)) if len(a) else float("nan")
 print(f"PIPE {PIPE}: steps {len(steps)}, ms p50 {pc(steps, 50):.1f} p90 {pc(steps, 90):.1f}; streams per cycle p50 {pc([c['n'] for c in cycles], 50):.0f}, pairs p50 {pc([c['pairs'] for c in cycles], 50):.0f}; " +
-      ", ".join(f"{k} p50 {pc([c[k] for c in cycles if k in c], 50):.1f}" for k in ("feat", "match", "wait")) + " (wait: for the PnP threads after the GPU work)")
+      ", ".join(f"{k} p50 {pc([c[k] for c in cycles if k in c], 50):.1f}" for k in ("feat", "match", "rend", "glue", "wait")) + " (match includes rend, the renders, and glue, the matcher; wait: for the PnP threads after the GPU work)")
 # ---- per stream: the extrapolated dot at frame j, from the answers finished by j/fps (scoring only; the page draws its own). Rotation: the newest answer
 # carried at constant angular velocity. Position: a constant-acceleration Kalman filter over the answers (measurement
 # sigma 0.25 m at 200 inliers, larger with fewer), then a new answer's jump is spread over BLEND instead of drawn at once.
