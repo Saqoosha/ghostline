@@ -401,7 +401,7 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   受けるだけなら 1080p 30 fps を 1 枚も落とさず、送ってから届くまで 31.5 ms、1 枚の取り出し 0.6 ms
 - **会場用に Linux を絞った。** 時計は日本時間で持つ（`timedatectl set-local-rtc 1`。UTC のままだと Linux で起動したあと Windows が 9 時間遅れる）。
   自動更新・snap・cloud-init・使わない記憶装置の仕組みなど 47 個を止めた（`rt_linux_setup.sh` の最後の段、消さずに止めるだけ）。何もしていないとき GPU＋CPU 30 → 19 W。
-  起動は 2 分 10 秒で、うち BIOS が 1 分 30 秒。Linux 側は initramfs から systemd に移る所で約 20 秒止まり、ログから原因は読めない（未調査）。
+  電源から SSH まで約 170 秒。うち BIOS が約 110 秒で、その間は映像も出ない（メモリは 32 GB × 4 枚、Crucial と SanMax の混在）。MRC Fast Boot と Fast Boot は最初から有効で、POST Delay Time は 3 秒。残りの原因は未確認。rEFInd の画面が 5 秒。Linux 側は initramfs から systemd に移る所で約 20 秒止まり、ログから原因は読めない（未調査）。
   1 度だけ Linux の再起動が終了処理の最後で固まった（JetKVM の ATX の Reset で戻した）。その後 3 回は再現しない
 - **裏で起動した tracker は止めの合図を受けなかった。** 非対話のシェルが裏で起動したプロセスは SIGINT を無視する設定で始まり、Python はそれを引き継ぐ。
   `rt_track.py` で SIGINT と SIGTERM を明示的に受けるようにした（止めると集計が書かれる）
