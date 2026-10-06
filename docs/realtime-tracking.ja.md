@@ -401,12 +401,14 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
 
   届いてから答えまではマスごとに p50 15〜27 ms、p90 21〜32 ms（ログの「arrival -> pose」。「latency ms (frame arrives -> pose)」の行は受けた枚数で時刻を数えるので、NDI では当てにならない）。
   **この形では電力上限 150 W は 3 W しか効かない。** ヒート中の GPU は平均 122 W で、上限が削るのは山だけ（4 人が飛び続ける試験は平均 190 W だったので効いた）。
-  ヒートのあいだは、最後のフレームから約 20 秒は GPU が P2 のまま 56 W、そのあと P8 に落ちる。P8 の電力は起動直後は 7 W（11 W だった起動が 1 回ある）、一度でも CUDA を使うと 21 W になり、プロセスが終わっても戻らない
+  ヒートのあいだは、最後のフレームから約 20 秒は GPU が P2 のまま 56 W、そのあと P8 に落ちる。P8 の電力は起動直後は 7 W、一度でも CUDA を使うと 21 W になり、プロセスが終わっても戻らない
   （`torch.zeros(1, device='cuda')` を 1 回実行するだけで再現する。何もしなければ起動から 1 時間 43 分後も 7 W。ドライバは 595.91.07 の open 版）。tracker は合間もコンテキストを持ったままなので、何もしなければ会場の合間は 21 W。
   **21 W のときにドライバの suspend と resume を続けて書くと 7 W に戻る**：`echo suspend | sudo tee /proc/driver/nvidia/suspend && echo resume | sudo tee /proc/driver/nvidia/suspend`。
   4 人ぶんの tracker（5 GB のコンテキスト）が NDI を待っている合間に打つと 20.9 → 6.9 W で、かかるのは約 2 秒（プロセスが無ければ 0.8 秒）。tracker はそのまま解き続け、次の 2 回のヒートのあとの合間も 8.0 W・7.8 W だった。
   21 W から打った 4 回は 4 回とも下がった。効くのは打ったときに生きていたプロセスのあいだだけで、**tracker の起動前に打っても意味がない**（読み込んだ時点で 21 W になる）。そのプロセスが終わったあとに起動した次のプロセスはまた 21 W に戻る。
-  平均への効果は、準決勝の形（合間が約 6 割）で約 8 W の見込み（合間 14 W ぶん。通しでは未測定、壁の電力でも未確認）。21 W を見つけて自動で打つ仕掛けはまだ無い。
+  平均への効果は、準決勝の形（合間が約 6 割）で約 8 W の見込み（合間 14 W ぶん。通しでは未測定、壁の電力でも未確認）。
+  **これを自動で打つのが `tools/dvr/rt_gpu_idle.sh`**（`ghostline-gpu-idle.service`、root、`rt_linux_setup.sh` が入れる）。5 秒ごとに見て、P8 で 15 W 以上が 20 秒続いたら 1 回打つ。ヒートの最中は P2 なので発火しない。打っても下がらなければ間隔を 60 秒から倍に延ばす。起動直後に CUDA を 1 回使う試験で 20.6 → 6.9 W に自分で戻し、そのあとの tracker は読み込み後も 3 回のヒートの合間も 7.2〜8.1 W だった（`journalctl -u ghostline-gpu-idle` に打った記録が出る）。
+  CUDA を使っても 10〜12 W のまま 21 W に上がらない起動が 1 回あった（`fbdev=0` を消した直後の起動。理由は未確認。このときは発火しない）。
   効かなかったもの：persistence mode、`nvidia_uvm` の取り外し、`nvidia-smi -pl`、コンソールの消灯、`nvidia-smi` の測定の頻度、`--gpu-reset`（primary GPU なので拒否される）、`options nvidia-drm fbdev=0`（コンソールが simpledrm に移り、起動直後から 21 W になるので逆効果）。
   同じ症状の報告：NVIDIA のフォーラムの [3090・ドライバ 525 以降](https://forums.developer.nvidia.com/t/idle-power-usage-problem-p8-after-debian-driver-distupgrade-470-525-rtx-3090/257061)、[headless でモニター無し](https://forums.developer.nvidia.com/t/high-idle-power-consumption-in-headless-server-without-monitor-connected/311064)（suspend / resume の回避策はここ）、[ドライバ 570 で増えた](https://forums.developer.nvidia.com/t/increased-idle-consumption-with-driver-570/321460)
 

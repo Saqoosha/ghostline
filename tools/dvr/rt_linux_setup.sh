@@ -75,6 +75,23 @@ sudo systemctl disable --now unattended-upgrades.service apt-daily.timer apt-dai
   systemd-networkd-wait-online.service 2>/dev/null || true
 sudo touch /etc/cloud/cloud-init.disabled
 
+step "the GPU's idle power: 21 W in P8 once CUDA has run, 7 W again after the driver's suspend + resume (rt_gpu_idle.sh does it)"
+sudo install -m 755 "$(dirname "$0")/rt_gpu_idle.sh" /usr/local/sbin/rt_gpu_idle.sh
+sudo tee /etc/systemd/system/ghostline-gpu-idle.service > /dev/null <<'UNIT'
+[Unit]
+Description=ghostline: bring the GPU's idle power back down after CUDA use
+After=nvidia-persistenced.service
+
+[Service]
+ExecStart=/usr/local/sbin/rt_gpu_idle.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload; sudo systemctl enable --now ghostline-gpu-idle.service
+
 step "done: a paced 4-pilot run to compare with WSL"
 echo 'cd ~/rt && GLUE=eng_linux/glue_mix.engine XFEAT=eng_linux/xfeat_fp32.engine RENDER=1 RCLIP=2 PACE=1 CUDA_SYNC=block \'
 echo '  SCENE=~/scenes/FDF-2026-R6b-spirula-web-dvr2.ply ~/mastenv/bin/python rt_track.py map_fdf-r6b-d05.npz,../fdf-r6b-d05/dvr_pinhole.mp4,pw/o_d05,truth-d05.json ...'
