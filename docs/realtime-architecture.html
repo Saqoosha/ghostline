@@ -483,7 +483,7 @@ ul.tight li { margin: 3px 0; }
       <tr><td>Linux ＋ GPU の電力上限 150 W</td><td class="num" style="white-space:nowrap">195 W</td><td class="num" style="white-space:nowrap">12.1 ms</td></tr>
       <tr><td>準決勝をライブで、<code>SIGNAL=1</code>、Mac Studio から 1080p NDI（Linux）</td><td class="num" style="white-space:nowrap"><b>123 W</b>（ヒート中 163、あいだ 46）</td><td class="num" style="white-space:nowrap">10.3 ms</td></tr>
     </table>
-    <p class="note">答えの精度はどの段階も同じ（d05 p50 0.11〜0.12 m）。準決勝の NDI では解けたフレーム 14,081、届いてから答えまで p50 30 ms。</p>
+    <p class="note">答えの精度はどの段階も同じ（d05 p50 0.11〜0.12 m）。準決勝の NDI では解けたフレーム 14,081、届いてから答えまでマスごとに p50 15〜27 ms。この形では GPU の上限 150 W は 3 W しか効かない（ヒート中の GPU は平均 122 W）。屋外のライブの束調整は <code>BA=0.5 BA_ACC=30 BA_ALPHA=60</code>（既定は屋内向けで、屋外では悪くなる）：描く点 d05 p90 0.47 → 0.40 m。</p>
   </div>
   <div class="card">
     <h4>効いたこと・効かなかったこと</h4>

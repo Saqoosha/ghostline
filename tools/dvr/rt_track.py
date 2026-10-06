@@ -75,6 +75,8 @@ INFO = int(E("INFO", 0))                           # 1: every answer row carries
 # p90 24 -> 21.5 cm, p99 80 -> 51 cm, rotation p90 3.55 -> 2.83 deg; at 0.2 s and more the two draw the same line.
 # BA_PX is the pixel noise the information is read at, BA_ACC m/s^2 and BA_ALPHA rad/s^2 the priors (a Tiny Whoop
 # indoors; while the angular term stays under its Huber threshold only their ratio to BA_PX matters).
+# Outdoors (FDF, racing quads) these defaults make the drawn dot worse (d05 p50 0.13 -> 0.19 m); BA_ACC=30 BA_ALPHA=60 makes it
+# better for all four pilots (d05 p90 0.47 -> 0.40 m, tools/dvr/rt_eval_draw.py).
 BA, BA_PX, BA_ACC, BA_ALPHA = E("BA", 0), E("BA_PX", 8), E("BA_ACC", 3), E("BA_ALPHA", 10)
 PUSH = int(E("PUSH", 0)); subs = []
 if PUSH:
