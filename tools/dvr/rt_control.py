@@ -1,6 +1,6 @@
 """rt_control.py: the field box's control page. Serves rt_control.html and starts / stops rt_track.py on an NDI source
 (a 2x2 grid, one pilot per cell), so the box needs no keyboard at the venue: pick the source the Event VRX sends, name
-the cells, start. While the tracker runs it reads its output (signal on / off per cell, cycle time), its PUSH stream
+the cells, start (the frame size and rate are read off the source). While the tracker runs it reads its output (signal on / off per cell, cycle time), its PUSH stream
 (frames processed and solved per cell) and the GPU's power from nvidia-smi.
 usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080
 env: PORT (8080), PUSH (8765: the tracker's answers, also what viewer/live.html reads), ENG (eng_linux),
@@ -14,7 +14,7 @@ CELLS = ("tl", "tr", "bl", "br")                    # the grid's cells, row by r
 KNOBS = set("NKF MIN_INL LOST RELOC_TOPK RELOC_MIN TOPK MAPK BATCH FRESH PIPE BA BA_PX BA_ACC BA_ALPHA RENDER RNEAR RFALL RCLIP ROPA RBATCH REDGE "
             "REACH NEAR FLOW FLOW_EVERY SIGNAL INFO PNP PL_DYN".split())
 lock = threading.Lock(); gpu = {}
-S = dict(phase="stopped", proc=None, since=None, exit=None, cycle=None, ndi=None, config=None, cells={}, log=collections.deque(maxlen=400))
+S = dict(phase="stopped", proc=None, since=None, exit=None, cycle=None, ndi=None, input=None, config=None, cells={}, log=collections.deque(maxlen=400))
 
 try:                                                # the same finder rt_track.py uses; it keeps its list fresh on a thread
     from cyndilib.finder import Finder
@@ -28,24 +28,43 @@ def options():
     return dict(maps=rel(glob.glob(HERE + "/map_*.npz")), cams=rel(glob.glob(HERE + "/../*/dvr_pinhole.mp4.json")),
                 scenes=sorted(glob.glob(os.path.expanduser("~/scenes/*.ply"))), sources=src)
 
+def probe(name):
+    """the source's full name, frame size and rate, read off its first frame: the tracker's clock runs on the rate, so it is not typed in"""
+    from cyndilib.receiver import Receiver
+    from cyndilib.video_frame import VideoFrameSync
+    from cyndilib.wrapper.ndi_recv import RecvColorFormat, RecvBandwidth
+    if finder is None: raise ValueError("NDI が使えない（cyndilib が無い）")
+    t0 = time.time(); src = None
+    while src is None and time.time() - t0 < 5: finder.wait(0.5); src = next((s for s in finder.iter_sources() if name in s.name), None)
+    if src is None: raise ValueError(f"NDI の送り手「{name}」が見つからない")
+    rx = Receiver(color_format=RecvColorFormat.BGRX_BGRA, bandwidth=RecvBandwidth.highest)   # highest: the low-bandwidth stream is a smaller picture
+    vf = VideoFrameSync(); rx.frame_sync.set_video_frame(vf); rx.set_source(src); t0 = time.time()
+    try:
+        while not vf.xres and time.time() - t0 < 5: rx.frame_sync.capture_video(); time.sleep(0.01)
+        if not vf.xres: raise ValueError(f"{src.name} から映像が来ない")
+        (w, h), fps = vf.get_resolution(), float(vf.get_frame_rate())
+    finally: rx.disconnect()
+    return src.name, w, h, fps
+
 def start(c):
     o = options(); src = str(c.get("source", "")).strip()
     if not src or re.search(r"[,|]", src): raise ValueError("NDI の送り手の名前が要る（, と | は使えない）")
-    g = re.fullmatch(r"(\d+)x(\d+)", str(c.get("grid", "1920x1080")))
-    if not g: raise ValueError("画面の大きさは 1920x1080 の形で")
-    w, h = int(g[1]), int(g[2]); fps = int(c.get("fps", 30))
     if c.get("cam") not in o["cams"]: raise ValueError("カメラの定義が見つからない")
     if c.get("map") not in o["maps"]: raise ValueError("地図が見つからない")   # one map for every cell: a venue has one course
     on = [x for x in c.get("cells", []) if x.get("on")]
     if not on: raise ValueError("使うマスが 1 つも無い")
     names = [re.sub(r"[^A-Za-z0-9_-]", "", str(x.get("name") or ""))[:24] or str(x.get("cell")) for x in on]
     if len(set(names)) < len(names): raise ValueError("マスの名前が重なっている")
+    with lock:
+        if S["phase"] != "stopped": raise ValueError("もう動いている")
+    full, w, h, fps = probe(src)
+    if w % 2 or h % 2: raise ValueError(f"{full} は {w}x{h}：2×2 に割れない")
     specs = []
     for x, n in zip(on, names):
         if x.get("cell") not in CELLS: raise ValueError(f"{n}: マスの指定がおかしい")
         k = CELLS.index(x["cell"]); specs.append(f"{c['map']},ndi://{src}|{k % 2 * (w // 2)}:{k // 2 * (h // 2)}:{w // 2}:{h // 2}|{c['cam']},live/{n}")
     env = dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}",
-               SIGNAL="1", GRID=f"{w}x{h}", GRID_FPS=str(fps), PUSH=str(PUSH))
+               SIGNAL="1", GRID=f"{w}x{h}", GRID_FPS=f"{fps:g}", PUSH=str(PUSH))
     for k, f in (("GLUE", "glue_mix.engine"), ("XFEAT", "xfeat_fp32.engine")):
         if os.path.exists(f"{HERE}/{ENG}/{f}"): env[k] = f"{ENG}/{f}"
     if c.get("render"):
@@ -60,7 +79,7 @@ def start(c):
         if S["phase"] != "stopped": raise ValueError("もう動いている")
         os.makedirs(HERE + "/live", exist_ok=True)
         p = subprocess.Popen([sys.executable, "-u", "rt_track.py", *specs], cwd=HERE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
-        S.update(phase="loading", proc=p, since=time.time(), exit=None, cycle=None, ndi=None, config=c,
+        S.update(phase="loading", proc=p, since=time.time(), exit=None, cycle=None, ndi=None, config=c, input=f"{w}×{h} · {fps:g} fps",
                  cells={n: dict(cell=x["cell"], signal=None, rows=collections.deque(maxlen=600), last=None) for x, n in zip(on, names)})
         S["log"].clear(); S["log"].append("$ rt_track.py " + " ".join(specs))
     json.dump(c, open(CONF, "w"), ensure_ascii=False)
@@ -120,7 +139,7 @@ def state():
         if conf is None and os.path.exists(CONF):
             try: conf = json.load(open(CONF))
             except Exception: conf = None
-        return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], cycle=S["cycle"], ndi=S["ndi"],
+        return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], cycle=S["cycle"], ndi=S["ndi"], input=S["input"],
                     config=conf, cells=cells, log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH)
 
 class Handler(http.server.BaseHTTPRequestHandler):

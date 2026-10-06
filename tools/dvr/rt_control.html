@@ -54,10 +54,10 @@
   <div id="err"></div>
 
   <div class="stats">
-    <div class="stat"><b id="gw">–</b><span>GPU（W）</span></div>
+    <div class="stat"><b id="gw">–</b><span>GPU の電力（W）</span></div>
     <div class="stat"><b id="gp">–</b><span>GPU の状態・温度</span></div>
-    <div class="stat"><b id="cyc">–</b><span>1 周（ms）</span></div>
-    <div class="stat"><b id="ndi" style="font-size:14px;line-height:30px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">–</b><span>受けている NDI</span></div>
+    <div class="stat"><b id="cyc">–</b><span>処理 1 回の時間（ms）</span></div>
+    <div class="stat"><b id="ndi" style="font-size:14px;line-height:30px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">–</b><span id="ndi-sub">受けている NDI</span></div>
   </div>
 
   <div class="grid" id="cells"></div>
@@ -65,7 +65,6 @@
   <div class="card" id="form">
     <h2>入力と設定</h2>
     <div class="row"><label for="source">NDI の送り手</label><div><input type="text" id="source" list="sources" placeholder="名前の一部でよい" autocomplete="off"><datalist id="sources"></datalist></div></div>
-    <div class="row"><label for="grid">画面の大きさ / fps</label><div style="display:flex;gap:8px"><input type="text" id="grid" value="1920x1080"><input type="text" id="fps" value="30" style="max-width:80px"></div></div>
     <div class="row"><label for="map">地図（全マス共通）</label><select id="map"></select></div>
     <div class="row"><label for="cam">カメラの定義</label><select id="cam"></select></div>
     <div class="row"><label for="scene">シーン（.ply）</label><select id="scene"></select></div>
@@ -84,7 +83,7 @@ let filled = false, phase = null, logAtEnd = true;
 // the four cells, in the grid's own layout: what to track there, and how it is going while the tracker runs
 $("cells").innerHTML = CELLS.map(([c, ja]) => `<div class="cell" id="c-${c}">
   <div class="top"><input type="checkbox" id="on-${c}" checked><span class="pos">${ja}</span><input type="text" id="name-${c}" placeholder="${c}" maxlength="24"></div>
-  <div class="live"><span class="dot" id="dot-${c}"></span><b id="hz-${c}">–</b><small>解けた Hz</small><small id="sub-${c}"></small></div></div>`).join("");
+  <div class="live"><span class="dot" id="dot-${c}"></span><b id="hz-${c}">–</b><small>回/秒 位置が出た</small><small id="sub-${c}"></small></div></div>`).join("");
 
 function fillSelect(el, items, value, parts = 1) {   // parts: how much of the path's end to show (the cams all have the same file name)
   const want = value ?? el.value;
@@ -95,7 +94,7 @@ function fillSelect(el, items, value, parts = 1) {   // parts: how much of the p
 function fillForm(s) {                              // once, from the last start; after that the fields are the operator's
   const c = s.config || {}, o = s.options;
   fillSelect($("map"), o.maps, c.map); fillSelect($("cam"), o.cams, c.cam, 2); fillSelect($("scene"), o.scenes, c.scene);
-  for (const k of ["source", "grid", "fps", "extra"]) if (c[k] != null) $(k).value = c[k];
+  for (const k of ["source", "extra"]) if (c[k] != null) $(k).value = c[k];
   for (const k of ["render", "ba"]) if (c[k] != null) $(k).checked = !!c[k];
   for (const [cell] of CELLS) {
     const x = (c.cells || []).find(x => x.cell === cell);
@@ -114,9 +113,9 @@ function render(s) {
   $("start").disabled = !stopped; $("stop").disabled = stopped || s.phase === "stopping";
   for (const el of document.querySelectorAll("#form input, #form select, .cell .top input")) el.disabled = !stopped;
   $("gw").textContent = s.gpu.w != null ? s.gpu.w.toFixed(0) : "–";
-  $("gp").textContent = s.gpu.pstate ? `${s.gpu.pstate} · ${s.gpu.temp} ℃` : "–";
+  $("gp").textContent = s.gpu.pstate ? `${s.gpu.pstate === "P8" ? "待機" : "動作中"} · ${s.gpu.temp} ℃` : "–";   // P8 is the idle state, P0-P2 working
   $("cyc").textContent = !stopped && s.cycle != null ? s.cycle.toFixed(1) : "–";
-  $("ndi").textContent = (!stopped && s.ndi) || "–";
+  $("ndi").textContent = (!stopped && s.ndi) || "–"; $("ndi-sub").textContent = "受けている NDI" + (!stopped && s.input ? `（${s.input}）` : "");
   const byCell = Object.fromEntries(Object.entries(s.cells).map(([n, c]) => [c.cell, { n, ...c }]));
   for (const [cell] of CELLS) {
     const c = stopped ? null : byCell[cell];
@@ -124,7 +123,7 @@ function render(s) {
     $("dot-" + cell).className = "dot" + (c ? (c.signal === false ? " nosig" : c.solved > 0 ? " on" : "") : "");
     $("hz-" + cell).textContent = c ? c.solved.toFixed(1) : "–";
     $("sub-" + cell).textContent = !c ? "" : c.signal === false ? "映像なし" :
-      `処理 ${c.hz.toFixed(1)} Hz` + (c.last ? ` · ${c.last.age < 2 ? "inlier " + c.last.inl : "最後の答えから " + c.last.age.toFixed(0) + " 秒"}` : " · まだ答えなし");
+      `映像 ${c.hz.toFixed(1)} 枚/秒` + (c.last ? ` · ${c.last.age < 2 ? "一致点 " + c.last.inl : "最後に位置が出てから " + c.last.age.toFixed(0) + " 秒"}` : " · まだ位置が出ない");
   }
   const log = $("log"); log.textContent = s.log.join("\n"); if (logAtEnd) log.scrollTop = log.scrollHeight;
   phase = s.phase;
@@ -140,7 +139,7 @@ async function post(path, body) {
   poll();
 }
 $("start").onclick = () => post("/api/start", {
-  source: $("source").value, grid: $("grid").value, fps: +$("fps").value || 30, map: $("map").value, cam: $("cam").value, scene: $("scene").value,
+  source: $("source").value, map: $("map").value, cam: $("cam").value, scene: $("scene").value,
   render: $("render").checked, ba: $("ba").checked, extra: $("extra").value,
   cells: CELLS.map(([cell]) => ({ cell, on: $("on-" + cell).checked, name: $("name-" + cell).value.trim() })) });
 $("stop").onclick = () => { if (confirm("tracker を止める？")) post("/api/stop"); };
