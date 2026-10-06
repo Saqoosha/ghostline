@@ -223,7 +223,17 @@ function scale() {
 addEventListener("resize", scale);
 // Positions as they are solved, straight from the tracker's own stream (its PUSH port): every answer, so the trails move at the video's
 // rate instead of once a second. If that port cannot be reached, the trail in the state is drawn instead.
-const live = {}, names = {}; let es = null, lastRow = 0, dirty = true;   // live: cell -> [[x, z, when it arrived (ms)]], oldest first
+const live = {}, names = {}, held = {}; let es = null, lastRow = 0, dirty = true;   // live: cell -> [[x, z, when it arrived (ms), cut?]], oldest first
+// An answer that would need more than VMAX from the last drawn point is held back: alone it is a stray answer and is dropped; if the
+// next one continues from it the pilot really is there (found again elsewhere), and the trail goes on from it without a line across.
+const VMAX = 60;                                     // m/s, 216 km/h: above what the quads fly
+function add(cell, x, z, t) {
+  const pts = live[cell] ||= [], last = pts[pts.length - 1], h = held[cell];
+  const near = a => Math.hypot(x - a[0], z - a[1]) <= VMAX * Math.max((t - a[2]) / 1000, 1 / 30);
+  if (!last || t - last[2] > 700 || near(last)) { pts.push([x, z, t]); held[cell] = null; }
+  else if (h && near(h)) { pts.push([h[0], h[1], h[2], true], [x, z, t]); held[cell] = null; }
+  else held[cell] = [x, z, t];
+}
 function listen(s) {
   if (s.phase === "stopped") { if (es) { es.close(); es = null; } for (const k in live) delete live[k]; dirty = true; return; }
   for (const [n, c] of Object.entries(s.cells)) names[n] = c.cell;
@@ -231,7 +241,7 @@ function listen(s) {
     es = new EventSource(`http://${location.hostname}:${s.push}/`);
     es.onmessage = e => {
       const r = JSON.parse(e.data), cell = names[r.stream]; if (!cell || !r.pos) return;
-      (live[cell] ||= []).push([r.pos[0], r.pos[2], lastRow = performance.now()]); dirty = true;
+      add(cell, r.pos[0], r.pos[2], lastRow = performance.now()); dirty = true;
     };
   }
   const now = performance.now();
@@ -242,7 +252,7 @@ function drawTrail(cell, pts, now) {
   const paths = $("tr-" + cell).children, d = ["", "", "", ""];
   for (let i = 0; i < pts.length - 1; i++) {
     const p = pts[i], q = pts[i + 1];
-    if (q[2] - p[2] < 700) d[Math.min(3, Math.floor((now - p[2]) / 3000))] += `M${p[0]},${p[1]}L${q[0]},${q[1]}`;
+    if (q[2] - p[2] < 700 && !q[3]) d[Math.min(3, Math.floor((now - p[2]) / 3000))] += `M${p[0]},${p[1]}L${q[0]},${q[1]}`;
   }
   d.forEach((v, b) => paths[b].setAttribute("d", v));
   const last = pts[pts.length - 1], fresh = !!last && now - last[2] < 1500 && !!courseBox, tag = $("tag-" + cell);
