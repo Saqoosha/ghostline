@@ -55,11 +55,11 @@
   /* the broadcast's 2x2 as a reticle: two hairlines crossing, each pilot's reading drawn up against the centre */
   .quad { position: relative; display: grid; grid-template-columns: 1fr 1fr; margin-top: 44px; }
   .quad::before, .quad::after { content: ""; position: absolute; background: var(--hair); pointer-events: none; }
-  .quad::before { left: 50%; top: -12px; bottom: -12px; width: 1px; transform: scaleX(.5); }
-  .quad::after { top: 50%; left: -12px; right: -12px; height: 1px; transform: scaleY(.5); }
+  .quad::before { left: calc(50% - .5px); top: -12px; bottom: -12px; width: 1px; transform: scaleX(.5); }
+  .quad::after { top: calc(50% - .5px); left: -12px; right: -12px; height: 1px; transform: scaleY(.5); }
   /* the centre: a ring in the four colours, each towards its quarter; grey while nothing runs */
-  .eye { position: absolute; left: 50%; top: 50%; width: 19px; height: 19px; margin: -9.5px; border-radius: 50%; z-index: 2; box-shadow: 0 0 0 4px var(--paper); transition: filter .6s;
-         background: radial-gradient(circle, var(--paper) 0 6.5px, transparent 7px), conic-gradient(var(--tr) 0 25%, var(--br) 0 50%, var(--bl) 0 75%, var(--tl) 0); }
+  .eye { position: absolute; left: 50%; top: 50%; width: 20px; height: 20px; margin: -10px; border-radius: 50%; z-index: 2; box-shadow: 0 0 0 4px var(--paper); transition: filter .6s;
+         background: radial-gradient(circle, var(--paper) 0 7px, transparent 7.5px), conic-gradient(var(--tr) 0 25%, var(--br) 0 50%, var(--bl) 0 75%, var(--tl) 0); }
   body:not(.running) .eye { filter: grayscale(1) opacity(.55); }
   .q.tl { --c: var(--tl); } .q.tr { --c: var(--tr); } .q.bl { --c: var(--bl); } .q.br { --c: var(--br); }
   .q { position: relative; height: 232px; padding: 20px 26px; display: flex; flex-direction: column; transition: opacity .6s; }
