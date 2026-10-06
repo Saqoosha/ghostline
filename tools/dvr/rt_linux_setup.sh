@@ -6,9 +6,9 @@
 set -euo pipefail
 step() { printf '\n== %s\n' "$*"; }
 
-step "packages (build tools, GStreamer with SRT for the live input, ffmpeg)"
+step "packages (build tools, GStreamer with SRT for the live input, ffmpeg, avahi so NDI finds its sources over mDNS)"
 sudo apt-get update
-sudo apt-get install -y build-essential git curl ffmpeg ntfs-3g avahi-daemon \   # avahi: NDI finds its sources over mDNS
+sudo apt-get install -y build-essential git curl ffmpeg ntfs-3g avahi-daemon \
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
 
 step "NVIDIA driver (headless, open kernel modules); reboot afterwards if nvidia-smi fails"
