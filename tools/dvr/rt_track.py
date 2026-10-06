@@ -10,7 +10,7 @@ arrived and the ones in between are dropped, as on a capture card. Scored agains
 poses60_pad.json; src ba / ba-fill / takeoff / ground). The page draws its own dot from the answers (viewer/src/live.ts,
 100 ms behind); the .json / _trail.json here are the extrapolated dot and trail, kept for scoring the replay.
 Live input (GRID=WxH): a 2x2 broadcast grid (the Event VRX over NDI -> OBS -> SRT) instead of files. The video field is
-"<url>|x:y:w:h|<cam.json>": one ffmpeg per url decodes it on a thread, and each frame's cell (the pilot's 4:3 fisheye
+"<url>|x:y:w:h|<cam.json>" (or "a.json+b.json": the lenses the pilots may fly, LENS_* below): one ffmpeg per url decodes it on a thread, and each frame's cell (the pilot's 4:3 fisheye
 stretched to the cell) is remapped straight to the map's pinhole size. Then the clock is the real one, each cycle takes
 the newest frame of every cell, and each answer records its latency from the frame's arrival (and, with SEND_T0 = the
 sender's wall-clock start and FRAME_CODE, from the moment it was sent - the two machines' clocks must agree).
@@ -37,7 +37,7 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 # One OpenMP thread for torch's CPU ops too: its 16 workers spin between the small ops here and held the CPU package at
 # ~100 W whatever the load (4090 box, d05 alone 104 -> 56 W, four pilots 94 -> 62 W; Hz, latency and accuracy the same)
 os.environ.setdefault("OMP_NUM_THREADS", "1")
-import json, sys, time, math, numpy as np, torch, cv2
+import json, sys, time, math, collections, numpy as np, torch, cv2
 # CUDA_SYNC=block: a thread waiting on the GPU sleeps instead of spinning a core. Set on the primary context before torch
 # makes it (TensorRT shares it). Native Windows honours it (a .item() loop: 1.02 s of CPU in 1.04 s -> 0.00 s); WSL ignores it.
 if os.environ.get("CUDA_SYNC"):
@@ -65,6 +65,13 @@ REACH = E("REACH", 0)
 NEAR, NEAR_K, NEAR_ANG = int(E("NEAR", 0)), int(E("NEAR_K", 4)), E("NEAR_ANG", 100)
 FLOW, FLOW_EVERY, FLOW_RESEED, FLOW_MIN = int(E("FLOW", 0)), int(E("FLOW_EVERY", 8)), int(E("FLOW_RESEED", 60)), int(E("FLOW_MIN", 30))
 GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30), E("SEND_T0", 0), os.environ.get("FRAME_CODE")
+# Two lenses (a live cell's camera field "a.json+b.json"): the HDZero Nano 90 flies with its stock lens or the upgrade one, and the
+# wrong definition leaves a third of the inliers and a wobble of 1-2 m (semifinal, first heat: 122 inliers and 0.72 m against 270 and
+# 0.11 m). So the cell tries them: once it is tracking after its picture came on (a new heat, maybe another pilot), LENS_N frames
+# with each, and keeps the one with more inliers. Later only when the last 45 frames averaged under LENS_LOW inliers (an unsolved
+# frame counts 0), at most every LENS_AGAIN s, twice as long each time the same one wins again. Not tracking for 3 s after the picture
+# came on: the other definition gets its turn.
+LENS_N, LENS_LOW, LENS_AGAIN = int(E("LENS_N", 12)), E("LENS_LOW", 100), E("LENS_AGAIN", 20)
 # PUSH (port): every answer goes out the moment it is solved, as server-sent events (one JSON object per event: the
 # .jsonl row plus "stream" and "fps"), for the live page (viewer/live.html). 0 = off.
 INFO = int(E("INFO", 0))                           # 1: every answer row carries "H", its 6x6 information (upper triangle, 21 numbers)
@@ -192,7 +199,9 @@ class Stream:
     def __init__(self, spec):
         f = spec.split(","); self.map_npz, self.video, self.prefix = f[:3]; self.truth = f[3] if len(f) > 3 else None
         self.live = "|" in self.video
-        if self.live: url, rect, camj = self.video.split("|"); self.rect = [int(v) for v in rect.split(":")]; self.video = camj[:-5] if camj.endswith(".json") else camj
+        if self.live:
+            url, rect, camj = self.video.split("|"); self.rect = [int(v) for v in rect.split(":")]
+            camjs = [c if c.endswith(".json") else c + ".json" for c in camj.split("+")]; self.video = camjs[0][:-5]   # the first one gives the frame size
         if self.map_npz not in maps:
             m = np.load(self.map_npz); mk = MAPK or m["kp"].shape[1]   # XFeat returns the strongest first, so the first MAPK are the best
             maps[self.map_npz] = dict(K=m["K"], size=[int(x) for x in m["size"]], n=np.minimum(m["n"], mk), kp=T(m["kp"][:, :mk]), desc=torch.tensor(m["desc"][:, :mk], device=dev), X=m["X"][:, :mk],
@@ -207,9 +216,15 @@ class Stream:
         self.qvalid = T(cv2.resize((cv2.erode(cv2.remap(osd, m1, m2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST)) > 0
         self.next = 0; self.hist = []; self.recs = []; self.flow = None; self.fails = 0; self.last = None
         if self.live:                               # cell pixel for every pinhole pixel of the map's size: 4:3 fisheye stretched to the cell
-            x0, y0, w, h = self.rect; Km = self.K
-            mx, my = cv2.fisheye.initUndistortRectifyMap(Kf, np.array(fk["k"]), np.eye(3), Km, (RW, RH), cv2.CV_32FC1)
-            self.mx, self.my = mx * w / W + x0, my * h / H + y0
+            x0, y0, w, h = self.rect; Km = self.K; self.lenses = []   # per camera definition: (the cell's map, the valid mask, its name)
+            for cj in camjs:
+                f2 = json.load(open(cj))["source_fisheye"]; K2 = np.array([[f2["fx"], 0, f2["cx"]], [0, f2["fy"], f2["cy"]], [0, 0, 1]]); k2 = np.array(f2["k"])
+                mx, my = cv2.fisheye.initUndistortRectifyMap(K2, k2, np.eye(3), Km, (RW, RH), cv2.CV_32FC1)
+                a1, a2 = cv2.fisheye.initUndistortRectifyMap(K2, k2, np.eye(3), Kfull, (W, H), cv2.CV_16SC2)
+                qv = T(cv2.resize((cv2.erode(cv2.remap(osd, a1, a2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST))
+                self.lenses.append(((mx * w / W + x0, my * h / H + y0), qv, os.path.basename(cj)[:-5]))
+            self.trial, self.want, self.waited, self.okrun, self.lens_t, self.again, self.recent = None, len(camjs) > 1, 0, 0, 0.0, LENS_AGAIN, collections.deque(maxlen=45)
+            self.set_lens(0)
             self.frames, self.arrive, self.arrive_wall = {0: np.zeros((RH, RW, 3), np.uint8)}, {}, {}; self.N = 1; self.signal, self.flip = None, 0   # a blank frame for the warm-up
             src = sources.setdefault(url, GridSource(url)); src.cells.append(self); self.src = src
             print(f"{self.prefix}: live cell {rect} of {url}, {len(self.m['pos'])} keyframes", flush=True); return
@@ -224,12 +239,37 @@ class Stream:
         if SIGNAL:                                  # no picture in the cell: no frame, so a quiet cell costs nothing
             on = has_signal(full[self.rect[1]:self.rect[1] + self.rect[3], self.rect[0]:self.rect[0] + self.rect[2]])
             self.flip = self.flip + 1 if on != self.signal else 0   # logged once it has held 0.5 s; a weak signal flickers
-            if self.flip >= self.fps / 2: self.signal, self.flip = on, 0; print(f"{self.prefix}: signal {'on' if on else 'off'}", flush=True)
+            if self.flip >= self.fps / 2:
+                self.signal, self.flip = on, 0; print(f"{self.prefix}: signal {'on' if on else 'off'}", flush=True)
+                if on and len(self.lenses) > 1: self.want, self.waited, self.again = True, 0, LENS_AGAIN   # a new heat: the pilot in this cell may have changed
             if not on: return
-        self.frames[n] = cv2.cvtColor(cv2.remap(full, self.mx, self.my, cv2.INTER_LINEAR), cv2.COLOR_BGR2RGB)
+        mx, my = self.cellmap
+        self.frames[n] = cv2.cvtColor(cv2.remap(full, mx, my, cv2.INTER_LINEAR), cv2.COLOR_BGR2RGB)
         if not self.arrive: self.t_base = t - n / self.fps   # when frame 0 would have arrived, even if it was lost
         self.arrive[n], self.arrive_wall[n] = t, tw; self.N = n + 1
         for k in [k for k in self.frames if k < n - 30]: del self.frames[k]   # codes skip on drops; 30 outlasts a slow cycle
+    def set_lens(self, j): self.li = j; self.cellmap, self.qvalid = self.lenses[j][:2]
+    def lens_step(self, inl):                        # main thread, after every processed frame: its inliers, 0 when it was not solved
+        if self.trial is None:
+            self.recent.append(inl); self.okrun = self.okrun + 1 if inl else 0
+            if self.want:
+                self.waited += 1
+                if self.okrun >= 5: self.trial, self.want = dict(skip=0, was=self.li, got=[[] for _ in self.lenses]), False
+                elif self.waited > 3 * self.fps: self.set_lens((self.li + 1) % len(self.lenses)); self.waited = 0
+            elif time.perf_counter() - self.lens_t > self.again and len(self.recent) == self.recent.maxlen and np.mean(self.recent) < LENS_LOW:
+                self.trial = dict(skip=0, was=self.li, got=[[] for _ in self.lenses])
+            return
+        t = self.trial
+        if t["skip"]: t["skip"] -= 1; return             # frames mapped with the definition before are still on their way through
+        t["got"][self.li].append(inl)
+        if len(t["got"][self.li]) < LENS_N: return
+        todo = [j for j, g in enumerate(t["got"]) if not g]
+        if todo: self.set_lens(todo[0]); t["skip"] = 5; return
+        mean = [float(np.mean(g)) for g in t["got"]]; best = int(np.argmax(mean))
+        self.again = LENS_AGAIN if best != t["was"] else min(self.again * 2, 320)
+        if best != self.li: self.set_lens(best)
+        print(f"{self.prefix}: lens {self.lenses[best][2]} ({' / '.join(f'{m:.0f}' for m in mean)} inliers)", flush=True)
+        self.trial, self.lens_t = None, time.perf_counter(); self.recent.clear()
     def nearest(self, R, p, n=None, max_ang=45, per_deg=15):   # keyframes near the predicted pose, looking about the same way
         d = np.linalg.norm(self.m["pos"] - p, axis=1); ang = np.degrees(np.arccos(np.clip(self.m["fwd"] @ R.as_matrix()[:, 2], -1, 1)))
         score = d / 1.5 + ang / per_deg; score[(d > 12) | (ang > max_ang)] = np.inf
@@ -465,6 +505,7 @@ def land(c, out, t0, clock0):                       # apply the answers to the s
             if len(s.win) >= 3:
                 qs, ps = smooth(s.win); win = {"win": [[w[1], *p_, *q_] for w, p_, q_ in zip(s.win, np.round(ps, 4).tolist(), np.round(qs, 5).tolist())]}
         s.recs.append(dict(i=i, done=done, plan=c["plan"][b][0], **lat, **win, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how, **({"H": [float(f"{v:.6g}") for v in r[4][np.triu_indices(6)]]} if INFO and r[4] is not None else {})) if r else {"how": "none"})))
+        if s.live and len(s.lenses) > 1: s.recs[-1]["lens"] = s.li; s.lens_step(int(r[2]) if r is not None else 0)
         if subs:
             m = json.dumps(dict(stream=os.path.basename(s.prefix), fps=s.fps, **s.recs[-1]))
             for q in list(subs):

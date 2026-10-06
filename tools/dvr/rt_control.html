@@ -268,7 +268,8 @@ const num = (id, text) => { const el = $(id); if (el.textContent !== text) el.te
 
 function fillSelect(el, items, value, parts = 1) {   // parts: how much of the path's end to show (the cams all have the same file name)
   const want = value ?? el.value;
-  if (el.dataset.items !== items.join("|")) { el.replaceChildren(...items.map(v => new Option(v.split("/").slice(-parts).join("/"), v))); el.dataset.items = items.join("|"); }
+  const label = v => v.includes("+") ? "自動（" + v.split("+").map(x => x.split("/").pop().replace(".json", "")).join(" / ") + "）" : v.split("/").slice(-parts).join("/");   // several lenses: the tracker picks per cell
+  if (el.dataset.items !== items.join("|")) { el.replaceChildren(...items.map(v => new Option(label(v), v))); el.dataset.items = items.join("|"); }
   if (items.includes(want)) el.value = want;
 }
 
@@ -320,7 +321,7 @@ function render(s) {
     $("tag-" + cell).textContent = c ? c.n : "";
     num("hz-" + cell, c ? c.solved.toFixed(0) : "–");
     $("sub-" + cell).textContent = !c ? "" : c.signal === false ? "映像なし" :
-      `映像 ${c.hz.toFixed(1)} 枚/秒` + (c.last ? ` · ${c.last.age < 2 ? "一致点 " + c.last.inl : "見失って " + c.last.age.toFixed(0) + " 秒"}` : " · まだ位置が出ない");
+      (c.lens ? c.lens.replace("hdzero-nano90-", "").replace("-lens", "") + " · " : "") + `映像 ${c.hz.toFixed(1)} 枚/秒` + (c.last ? ` · ${c.last.age < 2 ? "一致点 " + c.last.inl : "見失って " + c.last.age.toFixed(0) + " 秒"}` : " · まだ位置が出ない");
   }
   pvName = (stopped ? $("source").value : (s.config && s.config.source) || "").trim(); loadCourse(...(stopped ? [$("map").value, $("scene").value] : [s.config && s.config.map, (s.config && s.config.scene) || ""]));
   const h = s.hist; spark("w", h.w, h.n, 0, 150); spark("temp", h.temp, h.n, 25, 60); spark("cycle", h.lat, h.n, 0, 40);

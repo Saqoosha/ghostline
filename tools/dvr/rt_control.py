@@ -91,7 +91,8 @@ def options():
     rel = lambda ps: sorted(os.path.relpath(p, HERE) for p in ps)
     try: src = sorted(finder.get_source_names()) if finder else []
     except Exception: src = []
-    return dict(maps=rel(glob.glob(HERE + "/map_*.npz")), cams=rel(glob.glob(HERE + "/../*/dvr_pinhole.mp4.json")),
+    lenses = rel(glob.glob(HERE + "/cams/*.json"))  # the lenses the pilots may fly; offered together, the tracker picks per cell (LENS_* in rt_track.py)
+    return dict(maps=rel(glob.glob(HERE + "/map_*.npz")), cams=(["+".join(lenses)] if len(lenses) > 1 else []) + lenses + rel(glob.glob(HERE + "/../*/dvr_pinhole.mp4.json")),
                 scenes=sorted(glob.glob(os.path.expanduser("~/scenes/*.ply"))), sources=src)
 
 def probe(name):
@@ -146,7 +147,7 @@ def start(c):
         os.makedirs(HERE + "/live", exist_ok=True)
         p = subprocess.Popen([sys.executable, "-u", "rt_track.py", *specs], cwd=HERE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         S.update(phase="loading", proc=p, since=time.time(), exit=None, ndi=None, config=c, input=f"{w}×{h} · {fps:g} fps",
-                 cells={n: dict(cell=x["cell"], signal=None, rows=collections.deque(maxlen=600), last=None, trail=collections.deque(maxlen=150)) for x, n in zip(on, names)})
+                 cells={n: dict(cell=x["cell"], signal=None, lens=None, rows=collections.deque(maxlen=600), last=None, trail=collections.deque(maxlen=150)) for x, n in zip(on, names)})
         S["log"].clear(); S["log"].append("$ rt_track.py " + " ".join(specs))
     json.dump(c, open(CONF, "w"), ensure_ascii=False)
     threading.Thread(target=watch, args=(p,), daemon=True).start(); threading.Thread(target=answers, args=(p,), daemon=True).start()
@@ -158,6 +159,8 @@ def watch(p):                                       # the tracker's output: the 
             S["log"].append(line)
             if m := re.match(r"live/(.+): signal (on|off)$", line):
                 if m[1] in S["cells"]: S["cells"][m[1]]["signal"] = m[2] == "on"
+            elif m := re.match(r"live/(.+): lens (\S+) ", line):
+                if m[1] in S["cells"]: S["cells"][m[1]]["lens"] = m[2]
             elif m := re.search(r": receiving (.+)$", line): S["ndi"] = m[1]
             elif line == "listening" and S["phase"] == "loading": S["phase"] = "running"
     code = p.wait()
@@ -215,7 +218,7 @@ def sample():
 def state():
     now = time.time(); hz = lambda rows, solved: round(sum(1 for t, ok, _ in rows if t > now - 3 and (ok or not solved)) / 3, 1)
     with lock:
-        cells = {n: dict(cell=c["cell"], signal=c["signal"], hz=hz(c["rows"], False), solved=hz(c["rows"], True),
+        cells = {n: dict(cell=c["cell"], signal=c["signal"], lens=c["lens"], hz=hz(c["rows"], False), solved=hz(c["rows"], True),
                          last=c["last"] and dict(c["last"], age=round(now - c["last"]["t"], 1)),
                          trail=[[x, z, round(now - t, 1)] for t, x, z, _ in c["trail"] if now - t < 12], alt=c["trail"][-1][3] if c["trail"] else None)
                  for n, c in S["cells"].items()}
