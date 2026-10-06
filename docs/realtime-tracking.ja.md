@@ -406,7 +406,7 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   **21 W のときにドライバの suspend と resume を続けて書くと 7 W に戻る**（`echo suspend | sudo tee /proc/driver/nvidia/suspend && echo resume | sudo tee /proc/driver/nvidia/suspend`）。4 人ぶんの tracker（5 GB）が NDI を待つ合間に打つと 20.9 → 6.9 W、約 2 秒（プロセスが無ければ 0.8 秒）で、tracker は解き続け、次の 2 回のヒートの合間も 8 W だった（21 W から打った 4 回とも下がった）。
   効くのは打ったときに生きていたプロセスのあいだだけ：**tracker の起動前に打っても意味がなく**（読み込んだ時点で 21 W）、次に起動したプロセスはまた 21 W に戻る。
   **自動で打つのが `tools/dvr/rt_gpu_idle.sh`**（`ghostline-gpu-idle.service`、root で常駐、`rt_linux_setup.sh` が入れる）：P8 で 15 W 以上が 20 秒続いたら 1 回打つ（ヒート中は P2 なので発火しない。下がらなければ間隔を 60 秒から倍に）。記録は `journalctl -u ghostline-gpu-idle`。起動直後の CUDA 1 回で 20.6 → 6.9 W に自分で戻し、続く tracker は読み込み後も 3 回のヒートの合間も 7.2〜8.1 W。
-  平均への効果は約 8 W の見込み（合間が約 6 割・14 W ぶん。通しでは未測定、壁の電力でも未確認）。CUDA を使っても 10〜12 W のまま上がらない起動が 1 回あった（理由は未確認、発火しない）。合間の代わりに tracker を SIGSTOP で止めて測らない（GPU が P2 の 56 W に張り付く）。
+  **平均への効果は小さい。** 準決勝の通し（NDI、Mac Studio から）で 122.2 → 120.7 W、解けたフレーム 14,181 → 14,108。全マス空は約 74 秒が 2 回（録画の 32%）で、どの合間も最初の 20 秒は P2 の 56 W。1 回目の合間は発火まで 21 W・打った直後の約 10 秒が 54 W で、30.7 → 34.1 W とかえって増える。発火済みの 2 回目は 30.6 → 21.1 W。tracker をヒートの前から起動しておけば全部の合間が 2 回目の形になり、この録画で平均約 −3 W。合間が長い本番ほど効く（壁の電力では未確認）。CUDA を使っても 10〜12 W のまま上がらない起動が 1 回あった（理由は未確認、発火しない）。合間の代わりに tracker を SIGSTOP で止めて測らない（GPU が P2 の 56 W に張り付く）。
   効かなかった：persistence mode、`nvidia_uvm` の取り外し、`nvidia-smi -pl`、コンソールの消灯、測定の頻度、`--gpu-reset`（primary GPU なので拒否）、`options nvidia-drm fbdev=0`（コンソールが simpledrm に移り起動直後から 21 W。逆効果）。同じ症状の報告は NVIDIA のフォーラムの [3090・525 以降](https://forums.developer.nvidia.com/t/idle-power-usage-problem-p8-after-debian-driver-distupgrade-470-525-rtx-3090/257061)、[headless](https://forums.developer.nvidia.com/t/high-idle-power-consumption-in-headless-server-without-monitor-connected/311064)（suspend / resume の回避策はここ）、[570 で増えた](https://forums.developer.nvidia.com/t/increased-idle-consumption-with-driver-570/321460)
 
   受けるだけなら 1080p 30 fps を 1 枚も落とさず、送ってから届くまで 31.5 ms、1 枚の取り出し 0.6 ms
@@ -430,7 +430,7 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
 DELTA 2 Max の AC は変換効率 86%・AC を入れているだけで 23 W（[thesolarlab](https://www.thesolarlab.com/review/ecoflow-delta-2-max-review)、
 [diglloyd](https://windinmyface.com/blog/2025/20250116_1012-Ecoflow-Delta2Max-AC-conversion-efficiency.html)）なので、使えるのは約 1,760 Wh。
 本体の残り（マザーボード・メモリ・ファン）を 40 W、電源の効率を 90% と仮に置くと、4 人で 282 W → 約 360 W で 4.9 時間、208 W → 約 275 W で 6.4 時間。
-準決勝の流れ（ヒートのあいだに全マス空の時間がある）を `SIGNAL=1`・Linux・NDI で受けると 122 W → 約 180 W で 9.7 時間、合間が 7 W に戻れば約 114 W → 約 171 W で 10.3 時間の見込み
+準決勝の流れ（ヒートのあいだに全マス空の時間がある）を `SIGNAL=1`・Linux・NDI で受けると 122 W → 約 180 W で 9.7 時間（合間の GPU を戻す見張りで約 119 W になっても 9.9 時間）
 （モニターや受信機は別）。仮定の部分は、走らせながら DELTA の出力表示を読めば確かめられる。
 
 - **照合はまとめて呼ぶ。** LighterGlue は 1 組 14 ms、8 組を 1 回のバッチで 19 ms。命令を出す回数で時間が決まっている。
@@ -464,7 +464,7 @@ DELTA 2 Max の AC は変換効率 86%・AC を入れているだけで 23 W（[
 ## 残っていること
 
 - **会場の準備（4090 機を持ち込み、Linux で NDI を直接受ける）**：本物の Event VRX の NDI では未確認（送り手の名前、解像度、マスの並び）。
-  残り：tracker を systemd のサービスにして NDI の名前を渡して自動で立ち上げる、見張り（`rt_gpu_idle.sh`）ありで準決勝の全編を流して平均電力を測る、
+  残り：tracker を systemd のサービスにして NDI の名前を渡して自動で立ち上げる、合間の最初の 20 秒の P2（56 W）を縮められるか、
   DELTA の出力表示で本体の残りと GPU の待機の差（21 → 7 W）を壁の電力で確かめる、Linux の起動途中の約 20 秒の待ち（initramfs → systemd、電力には無関係）
 - **試験の送り手は Mac の `rt_send.py`（x265＋SRT）にしない**：送り手が遅れて解けるフレームが回ごとに揺れ、比較にならなかった。4090 機の中から `ffmpeg -re -c copy` で SRT に流すか、
   別の機械（有線の Mac Studio）から `ndi_send.py` で NDI を流す
