@@ -3,93 +3,172 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ghostline tracker</title>
+<title>ghostline</title>
 <style>
-  :root { --ink: #1c2024; --sub: #6b7480; --line: #dfe3e8; --bg: #f4f6f8; --card: #fff; --go: #1f8a4c; --stop: #c2362b; --warn: #b7791f; --blue: #2563c9; }
+  /* ghost: how alive a thing is shows only in how dark it is drawn - a value that stopped fades, a number keeps a faint copy of
+     what it was, a history line dissolves into the past. line: no boxes and no fills, hairlines and thin type.
+     Only fonts the device already has: the venue may have no internet. */
+  :root { --paper: #f3f4f6; --ink: #0c0f14; --dim: rgba(12, 15, 20, .58); --faint: rgba(12, 15, 20, .2); --hair: rgba(12, 15, 20, .82); --spirit: #5b4bff; --alarm: #d1301f;
+          --sans: "Helvetica Neue", -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 -apple-system, "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif; }
-  main { max-width: 860px; margin: 0 auto; padding: 16px; }
-  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
-  h1 { font-size: 18px; margin: 0; font-weight: 650; }
-  .badge { padding: 2px 10px; border-radius: 99px; font-size: 13px; font-weight: 600; color: #fff; background: var(--sub); }
-  .badge.running { background: var(--go); } .badge.loading, .badge.stopping { background: var(--warn); }
-  .spacer { flex: 1; }
-  button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 10px 22px; color: #fff; cursor: pointer; }
-  button:disabled { opacity: .4; cursor: default; }
-  #start { background: var(--go); } #stop { background: var(--stop); }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 12px; }
-  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
-  .stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; font-weight: 650; }
-  .stat span { color: var(--sub); font-size: 12px; }
-  svg.spark { display: block; width: 100%; height: 30px; margin-top: 6px; overflow: visible; }
-  svg.spark path { fill: none; stroke: var(--blue); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
-  svg.spark path.area { fill: var(--blue); opacity: .1; stroke: none; }
-  .cap { color: var(--sub); font-size: 12px; text-align: right; margin: -6px 2px 10px; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
-  .cell { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; }
-  .cell.off { opacity: .55; }
-  .cell .top { display: flex; align-items: center; gap: 8px; }
-  .cell .pos { color: var(--sub); font-size: 12px; width: 34px; }
-  .cell input[type=text] { flex: 1; min-width: 0; }
-  .live { margin-top: 8px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); display: inline-block; align-self: center; }
-  .dot.on { background: var(--go); } .dot.nosig { background: var(--sub); }
-  .live b { font-size: 20px; font-weight: 650; } .live small { color: var(--sub); }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
-  .row { display: grid; grid-template-columns: 130px 1fr; gap: 6px 10px; align-items: center; margin-bottom: 6px; }
-  .row label { color: var(--sub); font-size: 13px; }
-  input[type=text], select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); width: 100%; }
-  input:disabled, select:disabled { background: var(--bg); color: var(--sub); }
-  .checks { display: flex; gap: 18px; flex-wrap: wrap; }
-  .checks label { color: var(--ink); font-size: 14px; }
-  #err { color: var(--stop); font-weight: 600; min-height: 1.5em; }
-  pre { margin: 0; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; max-height: 260px; overflow: auto; color: #333; }
-  h2 { font-size: 13px; color: var(--sub); margin: 0 0 8px; font-weight: 600; }
-  @media (max-width: 520px) { .row { grid-template-columns: 1fr; } .grid { gap: 6px; } button { padding: 10px 16px; } }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 400 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  main { max-width: 940px; margin: 0 auto; padding: 30px 24px 64px; }
+
+  /* the name with its line drawn: ghost, a hairline across the page, line */
+  .mark { display: flex; align-items: center; gap: 16px; margin: 0; font: 200 21px/1 var(--sans); letter-spacing: .42em; }
+  .mark span:first-child { color: var(--faint); } .mark span:last-child { margin-right: -.42em; }
+  .mark i { flex: 1; height: 1px; background: var(--hair); transform: scaleY(.5); transform-origin: center; }
+
+  .ctl { display: flex; align-items: center; gap: 18px; margin-top: 26px; min-height: 64px; }
+  #phase { font-size: 12px; letter-spacing: .14em; display: flex; align-items: center; gap: 9px; white-space: nowrap; }
+  #phase::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--ink); }
+  #phase.running::before { background: var(--spirit); border-color: var(--spirit); animation: breathe 2.4s ease-in-out infinite; }
+  #phase.loading::before, #phase.stopping::before { background: var(--ink); animation: breathe .8s ease-in-out infinite; }
+  @keyframes breathe { 50% { opacity: .15; } }
+  #up { font: 400 11px var(--mono); color: var(--dim); white-space: nowrap; }
+  #src { flex: 1; min-width: 0; text-align: right; font: 400 11px/1.5 var(--mono); color: var(--dim); overflow: hidden; }
+  #src b { display: block; font-weight: 400; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* one control: a ring. A triangle starts, a square stops */
+  #go { flex: none; display: flex; flex-direction: column; align-items: center; gap: 5px; background: none; border: 0; padding: 0; cursor: pointer; color: var(--ink); font: 400 10px var(--sans); letter-spacing: .3em; }
+  #go::before { content: ""; width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--ink); transition: background .2s;
+                background: no-repeat center / 14px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3.5 1.5v11l9-5.5z' fill='%230c0f14'/%3E%3C/svg%3E"); }
+  #go.stop::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M2.5 2.5h9v9h-9z' fill='%235b4bff'/%3E%3C/svg%3E"); border-color: var(--spirit); }
+  #go:hover::before { background-color: rgba(12, 15, 20, .05); } #go:disabled { opacity: .3; cursor: default; }
+  #go-l { margin-right: -.3em; }
+  #err { color: var(--alarm); font: 400 12px var(--mono); min-height: 18px; }
+
+  /* a number and the copy of what it was a moment ago, up and to the right of it */
+  .num { position: relative; display: inline-block; font-weight: 100; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .num::after { content: attr(data-ghost); position: absolute; left: 0; top: 0; white-space: nowrap; opacity: .14; transform: translate(.1em, -.085em); pointer-events: none; }
+
+  /* a history: the line fades out towards the past; the point at its end is now */
+  .trail { position: absolute; left: 0; right: 0; pointer-events: none; color: var(--ink); }
+  .trail svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  .trail path { fill: none; stroke-width: 1; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+  .head { position: absolute; right: -2.5px; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: var(--ink); }
+
+  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 34px; margin-top: 10px; }
+  .m { position: relative; height: 128px; }
+  .m .num { font-size: 62px; line-height: 1; }
+  .m u { text-decoration: none; font: 300 14px var(--sans); color: var(--dim); margin-left: 6px; letter-spacing: .08em; }
+  .m > span { display: block; margin-top: 2px; font-size: 11px; letter-spacing: .1em; color: var(--dim); }
+  .m .trail { bottom: 0; height: 30px; }
+
+  /* the broadcast's 2x2 as a reticle: two hairlines crossing, each pilot's reading drawn up against the centre */
+  .quad { position: relative; display: grid; grid-template-columns: 1fr 1fr; margin-top: 44px; }
+  .quad::before, .quad::after { content: ""; position: absolute; background: var(--hair); pointer-events: none; }
+  .quad::before { left: 50%; top: -12px; bottom: -12px; width: 1px; transform: scaleX(.5); }
+  .quad::after { top: 50%; left: -12px; right: -12px; height: 1px; transform: scaleY(.5); }
+  .eye { position: absolute; left: 50%; top: 50%; width: 15px; height: 15px; margin: -7.5px; border-radius: 50%; background: var(--paper); border: 1px solid var(--ink); z-index: 2; }
+  body.running .eye { border-color: var(--spirit); box-shadow: 0 0 0 4px var(--paper), 0 0 0 4.5px var(--spirit); }
+  .q { position: relative; height: 232px; padding: 20px 26px; display: flex; flex-direction: column; transition: opacity .6s; }
+  .q.tl { align-items: flex-end; justify-content: flex-end; text-align: right; } .q.tr { align-items: flex-start; justify-content: flex-end; }
+  .q.bl { align-items: flex-end; justify-content: flex-start; text-align: right; } .q.br { align-items: flex-start; justify-content: flex-start; }
+  .q.tl .hd, .q.bl .hd, .q.tl .val, .q.bl .val, .q.tl .sub, .q.bl .sub { flex-direction: row-reverse; }
+  .q.tl .num::after, .q.bl .num::after { left: auto; right: 0; }
+  .q.tl .trail, .q.tr .trail { top: 14px; height: 54px; } .q.bl .trail, .q.br .trail { bottom: 14px; height: 54px; }
+  .q.tl .trail, .q.bl .trail { right: 26px; } .q.tr .trail, .q.br .trail { left: 26px; }
+  .hd { display: flex; align-items: center; gap: 10px; width: 100%; }
+  .hd input[type=text] { flex: 1; min-width: 0; border: 0; border-radius: 0; background: transparent; color: var(--ink); font: 300 17px/1.3 var(--sans); letter-spacing: .2em; padding: 0; outline: 0; text-align: inherit;
+                         border-bottom: 1px solid transparent; }
+  .hd input[type=text]:enabled { border-bottom-color: var(--faint); } .hd input[type=text]:focus { border-bottom-color: var(--ink); }
+  .hd input::placeholder { color: var(--faint); letter-spacing: .1em; }
+  .val { display: flex; align-items: flex-end; gap: 12px; margin-top: 4px; }
+  .val .num { font-size: 104px; line-height: .94; color: var(--faint); transition: color .6s; }
+  .q.live .val .num { color: var(--ink); }
+  .q:not(.live) .num::after { opacity: 0; }       /* a reading that is not alive is already faint: no copy behind it */
+  .val small { font-size: 10px; line-height: 1.5; letter-spacing: .08em; color: var(--dim); padding-bottom: 12px; }
+  .sub { display: flex; align-items: center; gap: 8px; font: 400 11px var(--mono); color: var(--dim); min-height: 17px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--dim); flex: none; }
+  .dot.on { background: var(--spirit); border-color: var(--spirit); } .dot.nosig { background: var(--faint); border-color: transparent; }
+  .q.live .head { background: var(--spirit); }
+  .q.off .val, .q.off .sub, .q.off .trail { opacity: .16; }
+  .cap { font: 400 10px var(--mono); letter-spacing: .1em; color: var(--dim); text-align: right; margin-top: 20px; }
+
+  /* the settings: a label and its value on a hairline */
+  h2 { font: 400 10px var(--sans); letter-spacing: .34em; color: var(--dim); margin: 44px 0 10px; }
+  .spec { display: grid; grid-template-columns: 180px 1fr; }
+  .spec > label, .spec > div { padding: 11px 0; border-bottom: 1px solid var(--faint); min-width: 0; }
+  .spec > label:first-of-type, .spec > div:first-of-type { border-top: 1px solid var(--faint); }
+  .spec > label { font-size: 11px; letter-spacing: .08em; color: var(--dim); }
+  .spec input[type=text], .spec select { width: 100%; border: 0; border-radius: 0; background: transparent; color: var(--ink); font: 400 12.5px var(--mono); padding: 0; outline: 0; }
+  .spec select { appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 18px;
+                 background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%230c0f14' stroke-width='1'/%3E%3C/svg%3E") no-repeat right 2px center; }
+  .spec input::placeholder { color: var(--faint); }
+  input:disabled, select:disabled { color: var(--dim); cursor: default; opacity: 1; -webkit-text-fill-color: currentColor; }
+  .checks { display: flex; gap: 26px; flex-wrap: wrap; font-size: 12.5px; }
+  .checks label { display: flex; align-items: center; gap: 9px; cursor: pointer; }
+  /* a choice is a ring; taken, it holds a point */
+  input[type=checkbox] { appearance: none; -webkit-appearance: none; width: 13px; height: 13px; margin: 0; border: 1px solid var(--ink); border-radius: 50%; background: transparent; cursor: pointer; flex: none; }
+  input[type=checkbox]:checked { background: radial-gradient(circle, var(--ink) 0 2.6px, transparent 3.2px); }
+  input[type=checkbox]:disabled { border-color: var(--dim); cursor: default; }
+  /* the log dissolves upwards: the newest line is at the bottom */
+  pre { margin: 0; font: 400 11px/1.6 var(--mono); white-space: pre-wrap; word-break: break-all; max-height: 230px; overflow: auto; color: var(--dim);
+        -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 70%); mask-image: linear-gradient(to bottom, transparent 0, #000 70%); }
+
+  @media (max-width: 640px) {
+    main { padding: 20px 16px 48px; } .mark { font-size: 17px; letter-spacing: .34em; gap: 10px; } .ctl { gap: 12px; margin-top: 18px; } #up { display: none; }
+    .metrics { gap: 14px; } .m { height: 104px; } .m .num { font-size: 42px; } .m u { font-size: 11px; margin-left: 3px; } .m > span { font-size: 10px; letter-spacing: .04em; }
+    .quad { margin-top: 32px; } .q { height: 178px; padding: 14px 12px; } .val .num { font-size: 60px; } .val { gap: 6px; } .val small { font-size: 9px; padding-bottom: 5px; letter-spacing: 0; }
+    .hd input[type=text] { font-size: 14px; letter-spacing: .12em; } .sub { font-size: 10px; }
+    .q.tl .trail, .q.tr .trail { top: 6px; height: 36px; } .q.bl .trail, .q.br .trail { bottom: 6px; height: 36px; } .q.tl .trail, .q.bl .trail { right: 12px; } .q.tr .trail, .q.br .trail { left: 12px; }
+    .spec { grid-template-columns: 1fr; } .spec > label { border-bottom: 0; padding-bottom: 0; } .spec > div:first-of-type { border-top: 0; } .spec > div { padding-top: 3px; }
+  }
 </style>
 </head>
 <body>
 <main>
-  <header>
-    <h1>ghostline tracker</h1><span id="phase" class="badge">…</span><span id="up" style="color:var(--sub)"></span>
-    <span class="spacer"></span>
-    <button id="start">開始</button><button id="stop">停止</button>
-  </header>
+  <h1 class="mark"><span>ghost</span><i></i><span>line</span></h1>
+
+  <div class="ctl">
+    <span id="phase">…</span><span id="up"></span>
+    <div id="src"><b id="ndi">–</b><span id="ndi-sub"></span></div>
+    <button id="go"><span id="go-l">開始</span></button>
+  </div>
   <div id="err"></div>
 
-  <div class="stats">
-    <div class="stat"><b id="gw">–</b><span>GPU の電力（W）</span><svg class="spark" id="sp-w" viewBox="0 0 100 30" preserveAspectRatio="none"><path class="area"/><path/></svg></div>
-    <div class="stat"><b id="gp">–</b><span>GPU の状態・温度</span><svg class="spark" id="sp-temp" viewBox="0 0 100 30" preserveAspectRatio="none"><path class="area"/><path/></svg></div>
-    <div class="stat"><b id="cyc">–</b><span>処理 1 回の時間（ms）</span><svg class="spark" id="sp-cycle" viewBox="0 0 100 30" preserveAspectRatio="none"><path class="area"/><path/></svg></div>
-    <div class="stat"><b id="ndi" style="font-size:14px;line-height:30px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">–</b><span id="ndi-sub">受けている NDI</span></div>
+  <div class="metrics">
+    <div class="m"><b class="num" id="gw">–</b><u>W</u><span>GPU の電力</span><div class="trail"><svg id="sp-w" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-w" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-w)"/></svg><i class="head" id="hd-w"></i></div></div>
+    <div class="m"><b class="num" id="gt">–</b><u>℃</u><span id="gp">GPU の温度</span><div class="trail"><svg id="sp-temp" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-temp" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-temp)"/></svg><i class="head" id="hd-temp"></i></div></div>
+    <div class="m"><b class="num" id="cyc">–</b><u>ms</u><span>処理 1 回の時間</span><div class="trail"><svg id="sp-cycle" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-cycle" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-cycle)"/></svg><i class="head" id="hd-cycle"></i></div></div>
   </div>
 
-  <div class="grid" id="cells"></div>
-  <div class="cap">グラフは直近 5 分</div>
+  <div class="quad" id="cells"><i class="eye"></i></div>
+  <div class="cap">線は直近 5 分、右端がいま</div>
 
-  <div class="card" id="form">
-    <h2>入力と設定</h2>
-    <div class="row"><label for="source">NDI の送り手</label><div><input type="text" id="source" list="sources" placeholder="名前の一部でよい" autocomplete="off"><datalist id="sources"></datalist></div></div>
-    <div class="row"><label for="map">地図（全マス共通）</label><select id="map"></select></div>
-    <div class="row"><label for="cam">カメラの定義</label><select id="cam"></select></div>
-    <div class="row"><label for="scene">シーン（.ply）</label><select id="scene"></select></div>
-    <div class="row"><label>処理</label><div class="checks">
+  <h2>入力と設定</h2>
+  <div class="spec" id="form">
+    <label for="source">NDI の送り手</label><div><input type="text" id="source" list="sources" placeholder="名前の一部でよい" autocomplete="off"><datalist id="sources"></datalist></div>
+    <label for="map">地図（全マス共通）</label><div><select id="map"></select></div>
+    <label for="cam">カメラの定義</label><div><select id="cam"></select></div>
+    <label for="scene">シーン（.ply）</label><div><select id="scene"></select></div>
+    <label>処理</label><div class="checks">
       <label><input type="checkbox" id="render" checked> 描いて照合（RENDER）</label>
-      <label><input type="checkbox" id="ba" checked> 束調整（屋外の設定）</label></div></div>
-    <div class="row"><label for="extra">追加の設定</label><input type="text" id="extra" placeholder="例: RELOC_MIN=30 NKF=2" autocomplete="off"></div>
+      <label><input type="checkbox" id="ba" checked> 束調整（屋外の設定）</label></div>
+    <label for="extra">追加の設定</label><div><input type="text" id="extra" placeholder="例: RELOC_MIN=30 NKF=2" autocomplete="off"></div>
   </div>
 
-  <div class="card"><h2>ログ</h2><pre id="log"></pre></div>
+  <h2>ログ</h2>
+  <pre id="log"></pre>
 </main>
 <script>
 const $ = id => document.getElementById(id), CELLS = [["tl", "左上"], ["tr", "右上"], ["bl", "左下"], ["br", "右下"]];
 let filled = false, phase = null, logAtEnd = true;
 
 // the four cells, in the grid's own layout: what to track there, and how it is going while the tracker runs
-$("cells").innerHTML = CELLS.map(([c, ja]) => `<div class="cell" id="c-${c}">
-  <div class="top"><input type="checkbox" id="on-${c}" checked><span class="pos">${ja}</span><input type="text" id="name-${c}" placeholder="${c}" maxlength="24"></div>
-  <div class="live"><span class="dot" id="dot-${c}"></span><b id="hz-${c}">–</b><small>回/秒 位置が出た</small><small id="sub-${c}"></small></div>
-  <svg class="spark" id="sp-${c}" viewBox="0 0 100 30" preserveAspectRatio="none"><path class="area"/><path/></svg></div>`).join("");
+const trail = id => `<div class="trail"><svg id="sp-${id}" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-${id}" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0">
+  <stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-${id})"/></svg><i class="head" id="hd-${id}"></i></div>`;
+$("cells").insertAdjacentHTML("afterbegin", CELLS.map(([c, ja]) => `<div class="q ${c}" id="c-${c}">
+  <div class="hd"><input type="checkbox" id="on-${c}" checked title="このマスを使う"><input type="text" id="name-${c}" placeholder="${ja}" maxlength="24"></div>
+  <div class="val"><b class="num" id="hz-${c}">–</b><small>回/秒<br>位置が出た</small></div>
+  <div class="sub"><i class="dot" id="dot-${c}"></i><span id="sub-${c}"></span></div>${trail(c)}</div>`).join(""));
+
+// a number, with the value it had before left behind it as a faint offset copy
+function num(id, text) {
+  const el = $(id); if (el.dataset.v === text) return;
+  if (el.dataset.v != null) el.dataset.ghost = el.dataset.v;
+  el.dataset.v = text; el.textContent = text;
+}
 
 function fillSelect(el, items, value, parts = 1) {   // parts: how much of the path's end to show (the cams all have the same file name)
   const want = value ?? el.value;
@@ -97,17 +176,16 @@ function fillSelect(el, items, value, parts = 1) {   // parts: how much of the p
   if (items.includes(want)) el.value = want;
 }
 
-// a value's last 5 minutes: the newest sample at the right edge, lo..hi over the height, a gap where there was no value
+// a value's last 5 minutes: the newest sample at the right edge (marked), the line fading out towards the past, a gap where there was no value
 function spark(id, vals, n, lo, hi) {
-  const [area, line] = $("sp-" + id).children; let d = "", a = "", open = false, x0 = 0, x = 0;
+  const line = $("sp-" + id).querySelector("path"), head = $("hd-" + id); let d = "", open = false, y = null;
   hi = Math.max(hi, ...vals.filter(v => v != null));
   vals.forEach((v, i) => {
-    if (v == null) { if (open) a += `L${x},30L${x0},30Z`; open = false; return; }
-    x = +(100 - (vals.length - 1 - i) / (n - 1) * 100).toFixed(2); const y = (29 - (Math.min(Math.max(v, lo), hi) - lo) / (hi - lo) * 28).toFixed(1);
-    if (!open) { x0 = x; d += `M${x},${y}`; a += `M${x},${y}`; open = true; } else { d += `L${x},${y}`; a += `L${x},${y}`; }
+    if (v == null) { open = false; return; }
+    const x = +(100 - (vals.length - 1 - i) / (n - 1) * 100).toFixed(2); y = 29 - (Math.min(Math.max(v, lo), hi) - lo) / (hi - lo) * 28;
+    d += (open ? "L" : "M") + x + "," + y.toFixed(1); open = true;
   });
-  if (open) a += `L${x},30L${x0},30Z`;
-  line.setAttribute("d", d); area.setAttribute("d", a);
+  line.setAttribute("d", d); head.style.display = open ? "" : "none"; if (open) head.style.top = y / 30 * 100 + "%";
 }
 
 function fillForm(s) {                              // once, from the last start; after that the fields are the operator's
@@ -125,24 +203,26 @@ function render(s) {
   if (!filled) { fillForm(s); filled = true; }
   else { fillSelect($("map"), s.options.maps); fillSelect($("cam"), s.options.cams, undefined, 2); fillSelect($("scene"), s.options.scenes); }
   $("sources").replaceChildren(...s.options.sources.map(v => new Option(v)));
-  const ja = { stopped: "停止中", loading: "読み込み中", running: "動作中", stopping: "停止処理中" };
-  $("phase").textContent = ja[s.phase] || s.phase; $("phase").className = "badge " + s.phase;
+  const ja = { stopped: "停止中", loading: "読み込み中", running: "動作中", stopping: "停止処理中" }; document.body.className = s.phase;
+  $("phase").textContent = ja[s.phase] || s.phase; $("phase").className = s.phase;
   $("up").textContent = s.up ? `${Math.floor(s.up / 60)} 分 ${s.up % 60} 秒` : (s.exit ? `前回は終了コード ${s.exit}` : "");
   const stopped = s.phase === "stopped";
-  $("start").disabled = !stopped; $("stop").disabled = stopped || s.phase === "stopping";
-  for (const el of document.querySelectorAll("#form input, #form select, .cell .top input")) el.disabled = !stopped;
-  $("gw").textContent = s.gpu.w != null ? s.gpu.w.toFixed(0) : "–";
-  $("gp").textContent = s.gpu.pstate ? `${s.gpu.pstate === "P8" ? "待機" : "動作中"} · ${s.gpu.temp} ℃` : "–";   // P8 is the idle state, P0-P2 working
-  $("cyc").textContent = !stopped && s.cycle != null ? s.cycle.toFixed(1) : "–";
-  $("ndi").textContent = (!stopped && s.ndi) || "–"; $("ndi-sub").textContent = "受けている NDI" + (!stopped && s.input ? `（${s.input}）` : "");
+  $("go-l").textContent = stopped ? "開始" : "停止"; $("go").className = stopped ? "" : "stop"; $("go").disabled = s.phase === "stopping";
+  for (const el of document.querySelectorAll("#form input, #form select, .q .hd input")) el.disabled = !stopped;
+  num("gw", s.gpu.w != null ? s.gpu.w.toFixed(0) : "–");
+  num("gt", s.gpu.temp != null ? String(s.gpu.temp) : "–");
+  $("gp").textContent = "GPU の温度" + (s.gpu.pstate ? ` · ${s.gpu.pstate === "P8" ? "待機" : "動作中"}` : "");   // P8 is the idle state, P0-P2 working
+  num("cyc", !stopped && s.cycle != null ? s.cycle.toFixed(1) : "–");
+  $("ndi").textContent = (!stopped && s.ndi) || ""; $("ndi-sub").textContent = (!stopped && s.input) || "";
   const byCell = Object.fromEntries(Object.entries(s.cells).map(([n, c]) => [c.cell, { n, ...c }]));
   for (const [cell] of CELLS) {
     const c = stopped ? null : byCell[cell];
     $("c-" + cell).classList.toggle("off", stopped ? !$("on-" + cell).checked : !c);
     $("dot-" + cell).className = "dot" + (c ? (c.signal === false ? " nosig" : c.solved > 0 ? " on" : "") : "");
-    $("hz-" + cell).textContent = c ? c.solved.toFixed(1) : "–";
+    $("c-" + cell).classList.toggle("live", !!c && c.signal !== false && c.solved > 0);
+    num("hz-" + cell, c ? c.solved.toFixed(0) : "–");
     $("sub-" + cell).textContent = !c ? "" : c.signal === false ? "映像なし" :
-      `映像 ${c.hz.toFixed(1)} 枚/秒` + (c.last ? ` · ${c.last.age < 2 ? "一致点 " + c.last.inl : "最後に位置が出てから " + c.last.age.toFixed(0) + " 秒"}` : " · まだ位置が出ない");
+      `映像 ${c.hz.toFixed(1)} 枚/秒` + (c.last ? ` · ${c.last.age < 2 ? "一致点 " + c.last.inl : "見失って " + c.last.age.toFixed(0) + " 秒"}` : " · まだ位置が出ない");
   }
   const h = s.hist; spark("w", h.w, h.n, 0, 150); spark("temp", h.temp, h.n, 25, 60); spark("cycle", h.cycle, h.n, 0, 20);
   for (const [cell] of CELLS) spark(cell, h.cells[cell], h.n, 0, 30);
@@ -159,11 +239,11 @@ async function post(path, body) {
   if (!r.ok) $("err").textContent = (await r.json()).error || r.statusText;
   poll();
 }
-$("start").onclick = () => post("/api/start", {
+const start = () => post("/api/start", {
   source: $("source").value, map: $("map").value, cam: $("cam").value, scene: $("scene").value,
   render: $("render").checked, ba: $("ba").checked, extra: $("extra").value,
   cells: CELLS.map(([cell]) => ({ cell, on: $("on-" + cell).checked, name: $("name-" + cell).value.trim() })) });
-$("stop").onclick = () => { if (confirm("tracker を止める？")) post("/api/stop"); };
+$("go").onclick = () => { if (phase === "stopped") start(); else if (confirm("tracker を止める？")) post("/api/stop"); };
 
 async function poll() {
   try { render(await (await fetch("/api/state")).json()); if ($("err").textContent === "サーバーに届かない") $("err").textContent = ""; }
