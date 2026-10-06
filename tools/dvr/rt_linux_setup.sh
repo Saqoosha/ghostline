@@ -93,7 +93,7 @@ UNIT
 sudo systemctl daemon-reload; sudo systemctl enable --now ghostline-gpu-idle.service
 
 step "the control page (rt_control.py): start / stop the tracker on an NDI source from a browser, http://<this box>:8080"
-cp "$(dirname "$0")/rt_control.py" "$(dirname "$0")/rt_control.html" ~/rt/
+cp "$(dirname "$0")/rt_control.py" "$(dirname "$0")/rt_control.html" "$(dirname "$0")/rt_topview.py" ~/rt/
 sudo tee /etc/systemd/system/ghostline-control.service > /dev/null <<UNIT
 [Unit]
 Description=ghostline: the live tracker's control page

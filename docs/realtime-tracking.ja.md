@@ -393,7 +393,7 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   `GRID=1920x1080` でマスは 960×540（`0:0:960:540` など）。送り手の試験用は `tools/dvr/ndi_send.py`（録画を 1080p 30 fps の NDI で流す）。
   **会場ではブラウザから操作する：`http://rt4090:8080`**（`tools/dvr/rt_control.py`＋`rt_control.html`、`ghostline-control.service` で常駐、`rt_linux_setup.sh` が入れる）。
   見えている NDI の送り手と地図（全マス共通）を選び、マスごとに使うか・名前を決めて開始 / 停止する（画面の大きさと fps は開始のとき送り手から読む）。動いているあいだはマスごとの信号・処理した枚数と位置が出た回数（毎秒）・一致点（inlier）、GPU の電力と状態（P8 を「待機」、それ以外を「動作中」と出す）、処理 1 回の時間、ログが 1 秒ごとに出る。電力・温度・処理時間・マスごとの位置が出た回数は直近 5 分の線も出る（履歴はサーバーが持つので、後から開いても見える）。
-  起動するのは `SIGNAL=1 PUSH=8765`＋TensorRT のエンジン、チェックで `RENDER=1 RCLIP=2 SCENE=…` と屋外の束調整。出力は `~/rt/live/<名前>.jsonl` など、前回の設定は `~/.ghostline-control.json`。ログインは無い（会場の LAN / Tailscale の中で使う）ので、追加の設定に書けるのは tracker の変数だけ（`rt_control.py` の `KNOBS`）。届いた映像のサムネイルは出ない。
+  起動するのは `SIGNAL=1 PUSH=8765`＋TensorRT のエンジン、チェックで `RENDER=1 RCLIP=2 SCENE=…` と屋外の束調整。出力は `~/rt/live/<名前>.jsonl` など、前回の設定は `~/.ghostline-control.json`。ログインは無い（会場の LAN / Tailscale の中で使う）ので、追加の設定に書けるのは tracker の変数だけ（`rt_control.py` の `KNOBS`）。届いた映像は照準の後ろに薄く出る（送り手の低帯域の映像を 1 秒に 2 枚、ページが開いているあいだだけ受ける。中心の輪で濃さを切り替え）。上から見た図は、シーンを真上から平行投影で 1 回描いた絵（`rt_topview.py`、2.6 秒、`live/topview-*.jpg` に残る。範囲は地図のキーフレームの位置の 99% ＋ 4 m）に、各マスの直近 12 秒の軌跡を重ねる。サーバーの負荷は 1 コアの約 4%、tracker の処理 1 回は 11.4 ms のまま。
 
   | 準決勝、1080p NDI、4 マス、`SIGNAL=1`、Linux | 解けたフレーム | GPU＋CPU 平均 / ヒート中 / あいだ |
   |---|---|---|

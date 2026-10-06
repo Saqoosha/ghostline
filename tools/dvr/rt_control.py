@@ -1,12 +1,13 @@
 """rt_control.py: the field box's control page. Serves rt_control.html and starts / stops rt_track.py on an NDI source
 (a 2x2 grid, one pilot per cell), so the box needs no keyboard at the venue: pick the source the Event VRX sends, name
 the cells, start (the frame size and rate are read off the source). While the tracker runs it reads its output (signal on / off per cell, cycle time), its PUSH stream
-(frames processed and solved per cell) and the GPU's power from nvidia-smi.
+(frames processed and solved per cell, the positions for the page's top view) and the GPU's power from nvidia-smi. The page also
+shows the source's picture: its low-bandwidth stream, two JPEGs a second, received only while a page asks for it.
 usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080
 env: PORT (8080), PUSH (8765: the tracker's answers, also what viewer/live.html reads), ENG (eng_linux),
      CONF (~/.ghostline-control.json: the last start, shown again when the page opens)
 No login: whoever reaches the port can start and stop the tracker. Keep it on the venue LAN / Tailscale."""
-import collections, glob, http.server, json, os, re, signal, subprocess, sys, threading, time, urllib.request
+import collections, glob, http.server, json, os, re, signal, subprocess, sys, threading, time, urllib.parse, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
 PORT, PUSH, ENG, CONF = int(E("PORT", 8080)), int(E("PUSH", 8765)), E("ENG", "eng_linux"), os.path.expanduser(E("CONF", "~/.ghostline-control.json"))
 CELLS = ("tl", "tr", "bl", "br")                    # the grid's cells, row by row
@@ -21,6 +22,70 @@ try:                                                # the same finder rt_track.p
     from cyndilib.finder import Finder
     finder = Finder(); finder.open()
 except Exception as e: finder = None; print("no NDI finder:", e, flush=True)
+
+class Preview:
+    """The picture behind the page's grid: the source's low-bandwidth stream (NDI senders always carry one, about 640 wide), a JPEG
+    twice a second. It runs only while a page keeps asking, and beside the tracker's own receiver, not through it."""
+    def __init__(self): self.name = self.have = self.jpg = None; self.asked = 0; threading.Thread(target=self.run, daemon=True).start()
+    def get(self, name): self.name, self.asked = name, time.time(); return self.jpg if self.have == name else None
+    def wanted(self, name): return self.name == name and time.time() - self.asked < 8
+    def run(self):
+        import cv2, numpy as np
+        from cyndilib.receiver import Receiver
+        from cyndilib.video_frame import VideoFrameSync
+        from cyndilib.wrapper.ndi_recv import RecvColorFormat, RecvBandwidth
+        while True:
+            name = self.name
+            src = next((s for s in finder.iter_sources() if name in s.name), None) if finder and name and self.wanted(name) else None
+            if src is None: self.jpg = None; time.sleep(1); continue
+            rx = Receiver(color_format=RecvColorFormat.BGRX_BGRA, bandwidth=RecvBandwidth.lowest)
+            vf = VideoFrameSync(); rx.frame_sync.set_video_frame(vf); rx.set_source(src)
+            try:
+                while self.wanted(name):
+                    rx.frame_sync.capture_video()
+                    if vf.xres:
+                        w, h = vf.get_resolution(); img = vf.get_array().reshape(h, w, 4)[..., :3]
+                        img = cv2.resize(img, (640, round(h * 640 / w)), interpolation=cv2.INTER_AREA) if w > 640 else np.ascontiguousarray(img)
+                        self.jpg, self.have = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])[1].tobytes(), name
+                    time.sleep(0.5)
+            except Exception as e: print("preview:", e, flush=True); time.sleep(2)
+            finally: rx.disconnect(); self.jpg = None
+preview = Preview()
+
+courses = {}
+def course(name):
+    """the map's keyframes seen from above: their positions ([x east, z south] in metres, thinned to about 700) show where the course
+    runs; box is the ground the page draws (x0, z0, width, height), ytop the height the scan is looked down on from"""
+    if name not in options()["maps"]: raise ValueError("地図が見つからない")
+    if name not in courses:
+        import numpy as np
+        pos = np.load(f"{HERE}/{name}")["pos"]; y = pos[:, 1]; pad = 4
+        # the smallest box around the flight paths: the middle 99% of the positions (a few stray ones widened it by 13 and 16 m) and 4 m around
+        (x0, x1), (z0, z1) = np.percentile(pos[:, 0], [0.5, 99.5]), np.percentile(pos[:, 2], [0.5, 99.5])
+        courses[name] = dict(pts=[[round(float(a), 2), round(float(b), 2)] for a, _, b in pos[::max(1, len(pos) // 700)]],
+                             box=[round(float(v), 1) for v in (x0 - pad, z0 - pad, x1 - x0 + 2 * pad, z1 - z0 + 2 * pad)],
+                             ytop=round(float(np.median(y)) + 30, 1))
+    return courses[name]
+
+rendering = set()
+def topview(name, scene):
+    """the scan from straight above over the course's box (rt_topview.py, a few seconds, once per scene and map; the file is kept
+    in live/). Returns the file, or None while it is being rendered."""
+    c = course(name)
+    if scene not in options()["scenes"]: raise ValueError("シーンが見つからない")
+    stem = lambda f: re.sub(r"[^A-Za-z0-9_.-]", "_", os.path.splitext(os.path.basename(f))[0]); out = f"{HERE}/live/topview-{stem(scene)}-{stem(name)}-{'_'.join(str(round(v)) for v in c['box'])}.jpg"
+    if os.path.exists(out): return out
+    with lock:
+        if out in rendering: return None
+        rendering.add(out)
+    def run():
+        os.makedirs(HERE + "/live", exist_ok=True); part = out[:-4] + ".part.jpg"
+        r = subprocess.run([sys.executable, "rt_topview.py", scene, part, *map(str, c["box"]), str(c["ytop"]), f"{min(16, 1600 / c['box'][2]):.2f}"], cwd=HERE, capture_output=True, text=True,
+                           env=dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}"))
+        if r.returncode == 0 and os.path.exists(part): os.replace(part, out)
+        else: print("topview failed:", r.stderr[-400:], flush=True); time.sleep(30)   # a broken scene is not retried on every poll
+        rendering.discard(out)
+    threading.Thread(target=run, daemon=True).start()
 
 def options():
     rel = lambda ps: sorted(os.path.relpath(p, HERE) for p in ps)
@@ -81,7 +146,7 @@ def start(c):
         os.makedirs(HERE + "/live", exist_ok=True)
         p = subprocess.Popen([sys.executable, "-u", "rt_track.py", *specs], cwd=HERE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         S.update(phase="loading", proc=p, since=time.time(), exit=None, cycle=None, ndi=None, config=c, input=f"{w}×{h} · {fps:g} fps",
-                 cells={n: dict(cell=x["cell"], signal=None, rows=collections.deque(maxlen=600), last=None) for x, n in zip(on, names)})
+                 cells={n: dict(cell=x["cell"], signal=None, rows=collections.deque(maxlen=600), last=None, trail=collections.deque(maxlen=150)) for x, n in zip(on, names)})
         S["log"].clear(); S["log"].append("$ rt_track.py " + " ".join(specs))
     json.dump(c, open(CONF, "w"), ensure_ascii=False)
     threading.Thread(target=watch, args=(p,), daemon=True).start(); threading.Thread(target=answers, args=(p,), daemon=True).start()
@@ -108,7 +173,10 @@ def answers(p):                                     # the PUSH stream: one row p
                 with lock:
                     if c := S["cells"].get(r.get("stream")):
                         c["rows"].append((now, "pos" in r))
-                        if "pos" in r: c["last"] = dict(t=now, inl=r.get("inl"), lat=r.get("lat"), how=r.get("how"))
+                        if "pos" in r:
+                            c["last"] = dict(t=now, inl=r.get("inl"), lat=r.get("lat"), how=r.get("how"))
+                            if not c["trail"] or now - c["trail"][-1][0] >= 0.1:   # ten points a second are enough for the top view
+                                x, y, z = r["pos"]; c["trail"].append((now, round(x, 2), round(z, 2), round(y, 1)))
         except Exception: time.sleep(1)             # not listening yet, or the tracker went away
 
 def stop():
@@ -143,7 +211,9 @@ def state():
     now = time.time(); hz = lambda rows, solved: round(sum(1 for t, ok in rows if t > now - 3 and (ok or not solved)) / 3, 1)
     with lock:
         cells = {n: dict(cell=c["cell"], signal=c["signal"], hz=hz(c["rows"], False), solved=hz(c["rows"], True),
-                         last=c["last"] and dict(c["last"], age=round(now - c["last"]["t"], 1))) for n, c in S["cells"].items()}
+                         last=c["last"] and dict(c["last"], age=round(now - c["last"]["t"], 1)),
+                         trail=[[x, z, round(now - t, 1)] for t, x, z, _ in c["trail"] if now - t < 12], alt=c["trail"][-1][3] if c["trail"] else None)
+                 for n, c in S["cells"].items()}
         conf = S["config"]
         if conf is None and os.path.exists(CONF):
             try: conf = json.load(open(CONF))
@@ -156,11 +226,24 @@ def state():
 class Handler(http.server.BaseHTTPRequestHandler):
     def send(self, code, body, ctype="application/json"):
         body = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
-        self.send_response(code); self.send_header("Content-Type", ctype + "; charset=utf-8"); self.send_header("Content-Length", str(len(body)))
+        self.send_response(code); self.send_header("Content-Type", ctype + ("; charset=utf-8" if ctype.startswith(("text", "application")) else "")); self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
     def do_GET(self):
-        if self.path == "/": self.send(200, open(HERE + "/rt_control.html", "rb").read(), "text/html")
-        elif self.path == "/api/state": self.send(200, state())
+        u = urllib.parse.urlsplit(self.path); q = dict(urllib.parse.parse_qsl(u.query))
+        if u.path == "/": self.send(200, open(HERE + "/rt_control.html", "rb").read(), "text/html")
+        elif u.path == "/api/state": self.send(200, state())
+        elif u.path == "/api/preview.jpg":
+            jpg = preview.get(q.get("source", "").strip()[:80])
+            if jpg: self.send(200, jpg, "image/jpeg")
+            else: self.send(204, b"")
+        elif u.path == "/api/map":
+            try: self.send(200, course(q.get("name", "")))
+            except ValueError as e: self.send(400, dict(error=str(e)))
+        elif u.path == "/api/topview.jpg":
+            try: f = topview(q.get("map", ""), q.get("scene", ""))
+            except ValueError as e: return self.send(400, dict(error=str(e)))
+            if f: self.send(200, open(f, "rb").read(), "image/jpeg")
+            else: self.send(202, dict(rendering=True))
         else: self.send(404, dict(error="not found"))
     def do_POST(self):
         # JSON only: a page on another site can post a form here from the operator's browser, but not this content type
