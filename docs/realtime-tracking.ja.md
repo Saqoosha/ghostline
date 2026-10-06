@@ -358,8 +358,10 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
 
   電力が下がって見えるのは、主に処理するフレームが減ったから。gsplat は Windows ではそのままではビルドできない（torch のヘッダの引数名 `small` が Windows のマクロとぶつかり、`-Wno-attributes` を MSVC が受けない）。
 - **Linux で直に動かすと、電力が下がって速くなる（2026-10-06）。** 4090 機の 750 EVO（SATA）の 143 GB に Ubuntu 24.04.5 を入れた（ホスト名 `rt4090`、LAN の DHCP、
-  起動の既定は Windows のまま、Linux は BIOS の起動メニュー（F8）で「Ubuntu (SATA6G_3 ...)」を選ぶ。WDC の古い「ubuntu」とは別。
-  Linux からなら `sudo efibootmgr -n 0004` で次の 1 回だけ Linux。Windows の `bcdedit /set {fwbootmgr} bootsequence` は効かなかった）。
+  起動は rEFInd（Linux の ESP に入れた起動の選択画面）：5 秒待って 750 EVO の Ubuntu、矢印キーで Windows も選べる。設定は `/boot/efi/EFI/refind/refind.conf` の最後の段。
+  セキュアブートは有効のまま（切ると BitLocker が回復キーを求めうる）なので、rEFInd は shim の上に載せ、この機械の鍵（`/etc/refind.d/keys/refind_local.*`）で署名し、MOK に登録した。
+  Ubuntu 24.04 の rEFInd 0.13.2 は SBAT の区画を持たず、shim 15.8 に `Verification failed: (0x1A) Security Violation` で拒まれる。本家の 0.14.2（SBAT あり）を `sbsign` で署名して
+  `EFI/refind/grubx64.efi` と `drivers_x64/ext4_x64.efi` を置き換え、`apt-mark hold refind` で古い版に戻されないようにした。BIOS の F8 の起動メニューも使える
   入り口は `ssh rt4090`（Tailscale、起動するだけでつながる。Windows の Tailscale はログインしないと立たない）。作業場所は `~/rt`、エンジンは `eng_linux/`、Windows の C: は `/mnt/c` に読み取り専用。
   環境は `tools/dvr/rt_linux_setup.sh`、電力は `tools/dvr/rt_power_linux.sh`（RAPL を `/sys/class/powercap` から読む）。
   ドライバ 595-server-open、gsplat 1.5.3 は手直しなしでビルドできる（最初の描画でビルドが走り、ninja と nvcc が PATH に要る）。

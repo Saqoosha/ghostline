@@ -21,7 +21,7 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 重い処理（MASt3R・gsplat の描画・束調整）は win4090 の WSL（`~/mastenv`）で回す。向こうの作業フォルダは
 `C:\Users\saqoosha\VDGS\dvr` と `VDGS\tools`（歴史的な名前。スクリプトがこのパスを直に書いている）。
 同じ機械の 750 EVO に会場用の Ubuntu 24.04（`ssh rt4090`、作業場所 `~/rt`）も入っていて、ライブの tracker はこちらのほうが速く電力も低い。
-起動の既定は Windows で、Linux は BIOS の F8 か Linux からの `sudo efibootmgr -n 0004`。画面と電源は JetKVM（app.jetkvm.com、ATX の Reset あり）。
+起動は rEFInd の画面で 5 秒待つと Linux、矢印キーで Windows（Windows から Linux に入るのも rEFInd で選ぶ）。画面と電源は JetKVM（app.jetkvm.com、ATX の Reset あり）。
 
 ## 踏むと高くつくこと
 
