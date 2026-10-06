@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ghostline</title>
 <style>
-  /* ghost: how alive a thing is shows only in how dark it is drawn - a value that stopped fades, a number keeps a faint copy of
-     what it was, a history line dissolves into the past. line: no boxes and no fills, hairlines and thin type.
-     Only fonts the device already has: the venue may have no internet. */
-  :root { --paper: #f3f4f6; --ink: #0c0f14; --dim: rgba(12, 15, 20, .58); --faint: rgba(12, 15, 20, .2); --hair: rgba(12, 15, 20, .82); --spirit: #5b4bff; --alarm: #d1301f;
+  /* ghost: how alive a thing is shows in how dark it is drawn - a reading that stopped fades, a history line dissolves into the past.
+     line: no boxes and no fills, hairlines and thin type. Colour says who: each quarter of the grid has its own, the tracker's own
+     values share one. Only fonts the device already has: the venue may have no internet. */
+  :root { --paper: #f3f4f6; --ink: #0c0f14; --dim: rgba(12, 15, 20, .58); --faint: rgba(12, 15, 20, .2); --hair: rgba(12, 15, 20, .82); --spirit: #5b4bff; --alarm: #d1301f; --tl: #ff2e63; --tr: #f59e0b; --bl: #12b76a; --br: #2f6bff;
           --sans: "Helvetica Neue", -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--paper); color: var(--ink); font: 400 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
@@ -17,7 +17,7 @@
   /* the name with its line drawn: ghost, a hairline across the page, line */
   .mark { display: flex; align-items: center; gap: 16px; margin: 0; font: 200 21px/1 var(--sans); letter-spacing: .42em; }
   .mark span:first-child { color: var(--faint); } .mark span:last-child { margin-right: -.42em; }
-  .mark i { flex: 1; height: 1px; background: var(--hair); transform: scaleY(.5); transform-origin: center; }
+  .mark i { flex: 1; height: 1.5px; background: linear-gradient(90deg, var(--tl), var(--tr), var(--bl), var(--br)); }
 
   .ctl { display: flex; align-items: center; gap: 18px; margin-top: 26px; min-height: 64px; }
   #phase { font-size: 12px; letter-spacing: .14em; display: flex; align-items: center; gap: 9px; white-space: nowrap; }
@@ -37,15 +37,13 @@
   #go-l { margin-right: -.3em; }
   #err { color: var(--alarm); font: 400 12px var(--mono); min-height: 18px; }
 
-  /* a number and the copy of what it was a moment ago, up and to the right of it */
-  .num { position: relative; display: inline-block; font-weight: 100; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
-  .num::after { content: attr(data-ghost); position: absolute; left: 0; top: 0; white-space: nowrap; opacity: .14; transform: translate(.1em, -.085em); pointer-events: none; }
+  .num { display: inline-block; font-weight: 100; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
 
   /* a history: the line fades out towards the past; the point at its end is now */
-  .trail { position: absolute; left: 0; right: 0; pointer-events: none; color: var(--ink); }
+  .trail { position: absolute; left: 0; right: 0; pointer-events: none; color: var(--c, var(--spirit)); }
   .trail svg { display: block; width: 100%; height: 100%; overflow: visible; }
-  .trail path { fill: none; stroke-width: 1; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
-  .head { position: absolute; right: -2.5px; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: var(--ink); }
+  .trail path { fill: none; stroke-width: 1.25; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+  .head { position: absolute; right: -2.5px; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: var(--c, var(--spirit)); }
 
   .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 34px; margin-top: 10px; }
   .m { position: relative; height: 128px; }
@@ -59,29 +57,30 @@
   .quad::before, .quad::after { content: ""; position: absolute; background: var(--hair); pointer-events: none; }
   .quad::before { left: 50%; top: -12px; bottom: -12px; width: 1px; transform: scaleX(.5); }
   .quad::after { top: 50%; left: -12px; right: -12px; height: 1px; transform: scaleY(.5); }
-  .eye { position: absolute; left: 50%; top: 50%; width: 15px; height: 15px; margin: -7.5px; border-radius: 50%; background: var(--paper); border: 1px solid var(--ink); z-index: 2; }
-  body.running .eye { border-color: var(--spirit); box-shadow: 0 0 0 4px var(--paper), 0 0 0 4.5px var(--spirit); }
+  /* the centre: a ring in the four colours, each towards its quarter; grey while nothing runs */
+  .eye { position: absolute; left: 50%; top: 50%; width: 19px; height: 19px; margin: -9.5px; border-radius: 50%; z-index: 2; box-shadow: 0 0 0 4px var(--paper); transition: filter .6s;
+         background: radial-gradient(circle, var(--paper) 0 6.5px, transparent 7px), conic-gradient(var(--tr) 0 25%, var(--br) 0 50%, var(--bl) 0 75%, var(--tl) 0); }
+  body:not(.running) .eye { filter: grayscale(1) opacity(.55); }
+  .q.tl { --c: var(--tl); } .q.tr { --c: var(--tr); } .q.bl { --c: var(--bl); } .q.br { --c: var(--br); }
   .q { position: relative; height: 232px; padding: 20px 26px; display: flex; flex-direction: column; transition: opacity .6s; }
   .q.tl { align-items: flex-end; justify-content: flex-end; text-align: right; } .q.tr { align-items: flex-start; justify-content: flex-end; }
   .q.bl { align-items: flex-end; justify-content: flex-start; text-align: right; } .q.br { align-items: flex-start; justify-content: flex-start; }
   .q.tl .hd, .q.bl .hd, .q.tl .val, .q.bl .val, .q.tl .sub, .q.bl .sub { flex-direction: row-reverse; }
-  .q.tl .num::after, .q.bl .num::after { left: auto; right: 0; }
   .q.tl .trail, .q.tr .trail { top: 14px; height: 54px; } .q.bl .trail, .q.br .trail { bottom: 14px; height: 54px; }
   .q.tl .trail, .q.bl .trail { right: 26px; } .q.tr .trail, .q.br .trail { left: 26px; }
   .hd { display: flex; align-items: center; gap: 10px; width: 100%; }
   .hd input[type=text] { flex: 1; min-width: 0; border: 0; border-radius: 0; background: transparent; color: var(--ink); font: 300 17px/1.3 var(--sans); letter-spacing: .2em; padding: 0; outline: 0; text-align: inherit;
                          border-bottom: 1px solid transparent; }
-  .hd input[type=text]:enabled { border-bottom-color: var(--faint); } .hd input[type=text]:focus { border-bottom-color: var(--ink); }
+  .hd input[type=text]:enabled { border-bottom-color: var(--faint); } .hd input[type=text]:focus { border-bottom-color: var(--c); }
   .hd input::placeholder { color: var(--faint); letter-spacing: .1em; }
   .val { display: flex; align-items: flex-end; gap: 12px; margin-top: 4px; }
   .val .num { font-size: 104px; line-height: .94; color: var(--faint); transition: color .6s; }
   .q.live .val .num { color: var(--ink); }
-  .q:not(.live) .num::after { opacity: 0; }       /* a reading that is not alive is already faint: no copy behind it */
   .val small { font-size: 10px; line-height: 1.5; letter-spacing: .08em; color: var(--dim); padding-bottom: 12px; }
   .sub { display: flex; align-items: center; gap: 8px; font: 400 11px var(--mono); color: var(--dim); min-height: 17px; }
   .dot { width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--dim); flex: none; }
-  .dot.on { background: var(--spirit); border-color: var(--spirit); } .dot.nosig { background: var(--faint); border-color: transparent; }
-  .q.live .head { background: var(--spirit); }
+  .dot.on { background: var(--c, var(--spirit)); border-color: var(--c, var(--spirit)); } .dot.nosig { background: var(--faint); border-color: transparent; }
+  .q .hd input[type=checkbox] { border-color: var(--c); border-width: 1.5px; } .q .hd input[type=checkbox]:checked { background: radial-gradient(circle, var(--c) 0 2.6px, transparent 3.2px); }
   .q.off .val, .q.off .sub, .q.off .trail { opacity: .16; }
   .cap { font: 400 10px var(--mono); letter-spacing: .1em; color: var(--dim); text-align: right; margin-top: 20px; }
 
@@ -163,12 +162,7 @@ $("cells").insertAdjacentHTML("afterbegin", CELLS.map(([c, ja]) => `<div class="
   <div class="val"><b class="num" id="hz-${c}">–</b><small>回/秒<br>位置が出た</small></div>
   <div class="sub"><i class="dot" id="dot-${c}"></i><span id="sub-${c}"></span></div>${trail(c)}</div>`).join(""));
 
-// a number, with the value it had before left behind it as a faint offset copy
-function num(id, text) {
-  const el = $(id); if (el.dataset.v === text) return;
-  if (el.dataset.v != null) el.dataset.ghost = el.dataset.v;
-  el.dataset.v = text; el.textContent = text;
-}
+const num = (id, text) => { const el = $(id); if (el.textContent !== text) el.textContent = text; };
 
 function fillSelect(el, items, value, parts = 1) {   // parts: how much of the path's end to show (the cams all have the same file name)
   const want = value ?? el.value;
