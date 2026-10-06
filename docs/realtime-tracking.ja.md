@@ -357,7 +357,7 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   | Windows で直に、`CUDA_SYNC=block` | 180＋46 W | 25.1 ms | 39 Hz / 37 ms | 29 Hz / 42〜44 ms |
 
   電力が下がって見えるのは、主に処理するフレームが減ったから。gsplat は Windows ではそのままではビルドできない（torch のヘッダの引数名 `small` が Windows のマクロとぶつかり、`-Wno-attributes` を MSVC が受けない）。
-- **Linux で直に動かすと、電力が下がって速くなる（2026-10-06）。** 4090 機の 750 EVO（SATA）の 143 GB に Ubuntu 24.04.5 を入れた（ホスト名 `rt4090`、LAN の DHCP、
+- **Linux で直に動かすと、電力が下がって速くなる（2026-10-06）。** 4090 機の 750 EVO（SATA）の 143 GB に Ubuntu 24.04.5 を入れた（ホスト名 `rt4090`、LAN の DHCP）。
   起動は rEFInd（Linux の ESP に入れた起動の選択画面）：5 秒待って 750 EVO の Ubuntu、矢印キーで Windows も選べる。設定は `/boot/efi/EFI/refind/refind.conf` の最後の段。
   セキュアブートは有効のまま（切ると BitLocker が回復キーを求めうる）なので、rEFInd は shim の上に載せ、この機械の鍵（`/etc/refind.d/keys/refind_local.*`）で署名し、MOK に登録した。
   Ubuntu 24.04 の rEFInd 0.13.2 は SBAT の区画を持たず、shim 15.8 に `Verification failed: (0x1A) Security Violation` で拒まれる。本家の 0.14.2（SBAT あり）を `sbsign` で署名して
