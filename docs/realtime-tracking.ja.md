@@ -392,7 +392,7 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   `receive()` で 1 枚ずつ取る形はライブラリが全部受けているのに 3 分の 1 を取りこぼした。Linux は avahi-daemon が動いていないと送り手が見つからない。
   `GRID=1920x1080` でマスは 960×540（`0:0:960:540` など）。送り手の試験用は `tools/dvr/ndi_send.py`（録画を 1080p 30 fps の NDI で流す）。
   **会場ではブラウザから操作する：`http://rt4090:8080`**（`tools/dvr/rt_control.py`＋`rt_control.html`、`ghostline-control.service` で常駐、`rt_linux_setup.sh` が入れる）。
-  見えている NDI の送り手から選び、マスごとに使うか・名前・地図を決めて開始 / 停止する。動いているあいだはマスごとの信号・処理と解けた Hz・inlier、GPU の電力と状態、1 周の時間、ログが 1 秒ごとに出る。
+  見えている NDI の送り手と地図（全マス共通）を選び、マスごとに使うか・名前を決めて開始 / 停止する。動いているあいだはマスごとの信号・処理と解けた Hz・inlier、GPU の電力と状態、1 周の時間、ログが 1 秒ごとに出る。
   起動するのは `SIGNAL=1 PUSH=8765`＋TensorRT のエンジン、チェックで `RENDER=1 RCLIP=2 SCENE=…` と屋外の束調整。出力は `~/rt/live/<名前>.jsonl` など、前回の設定は `~/.ghostline-control.json`。ログインは無い（会場の LAN / Tailscale の中で使う）ので、追加の設定に書けるのは tracker の変数だけ（`rt_control.py` の `KNOBS`）。届いた映像のサムネイルは出ない。
 
   | 準決勝、1080p NDI、4 マス、`SIGNAL=1`、Linux | 解けたフレーム | GPU＋CPU 平均 / ヒート中 / あいだ |

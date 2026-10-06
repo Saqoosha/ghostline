@@ -35,14 +35,15 @@ def start(c):
     if not g: raise ValueError("画面の大きさは 1920x1080 の形で")
     w, h = int(g[1]), int(g[2]); fps = int(c.get("fps", 30))
     if c.get("cam") not in o["cams"]: raise ValueError("カメラの定義が見つからない")
+    if c.get("map") not in o["maps"]: raise ValueError("地図が見つからない")   # one map for every cell: a venue has one course
     on = [x for x in c.get("cells", []) if x.get("on")]
     if not on: raise ValueError("使うマスが 1 つも無い")
     names = [re.sub(r"[^A-Za-z0-9_-]", "", str(x.get("name") or ""))[:24] or str(x.get("cell")) for x in on]
     if len(set(names)) < len(names): raise ValueError("マスの名前が重なっている")
     specs = []
     for x, n in zip(on, names):
-        if x.get("cell") not in CELLS or x.get("map") not in o["maps"]: raise ValueError(f"{n}: マスか地図の指定がおかしい")
-        k = CELLS.index(x["cell"]); specs.append(f"{x['map']},ndi://{src}|{k % 2 * (w // 2)}:{k // 2 * (h // 2)}:{w // 2}:{h // 2}|{c['cam']},live/{n}")
+        if x.get("cell") not in CELLS: raise ValueError(f"{n}: マスの指定がおかしい")
+        k = CELLS.index(x["cell"]); specs.append(f"{c['map']},ndi://{src}|{k % 2 * (w // 2)}:{k // 2 * (h // 2)}:{w // 2}:{h // 2}|{c['cam']},live/{n}")
     env = dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}",
                SIGNAL="1", GRID=f"{w}x{h}", GRID_FPS=str(fps), PUSH=str(PUSH))
     for k, f in (("GLUE", "glue_mix.engine"), ("XFEAT", "xfeat_fp32.engine")):

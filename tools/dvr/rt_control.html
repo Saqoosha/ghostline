@@ -27,7 +27,6 @@
   .cell .top { display: flex; align-items: center; gap: 8px; }
   .cell .pos { color: var(--sub); font-size: 12px; width: 34px; }
   .cell input[type=text] { flex: 1; min-width: 0; }
-  .cell select { width: 100%; margin-top: 6px; }
   .live { margin-top: 8px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); display: inline-block; align-self: center; }
   .dot.on { background: var(--go); } .dot.nosig { background: var(--sub); }
@@ -67,6 +66,7 @@
     <h2>入力と設定</h2>
     <div class="row"><label for="source">NDI の送り手</label><div><input type="text" id="source" list="sources" placeholder="名前の一部でよい" autocomplete="off"><datalist id="sources"></datalist></div></div>
     <div class="row"><label for="grid">画面の大きさ / fps</label><div style="display:flex;gap:8px"><input type="text" id="grid" value="1920x1080"><input type="text" id="fps" value="30" style="max-width:80px"></div></div>
+    <div class="row"><label for="map">地図（全マス共通）</label><select id="map"></select></div>
     <div class="row"><label for="cam">カメラの定義</label><select id="cam"></select></div>
     <div class="row"><label for="scene">シーン（.ply）</label><select id="scene"></select></div>
     <div class="row"><label>処理</label><div class="checks">
@@ -84,7 +84,6 @@ let filled = false, phase = null, logAtEnd = true;
 // the four cells, in the grid's own layout: what to track there, and how it is going while the tracker runs
 $("cells").innerHTML = CELLS.map(([c, ja]) => `<div class="cell" id="c-${c}">
   <div class="top"><input type="checkbox" id="on-${c}" checked><span class="pos">${ja}</span><input type="text" id="name-${c}" placeholder="${c}" maxlength="24"></div>
-  <select id="map-${c}"></select>
   <div class="live"><span class="dot" id="dot-${c}"></span><b id="hz-${c}">–</b><small>解けた Hz</small><small id="sub-${c}"></small></div></div>`).join("");
 
 function fillSelect(el, items, value, parts = 1) {   // parts: how much of the path's end to show (the cams all have the same file name)
@@ -95,26 +94,25 @@ function fillSelect(el, items, value, parts = 1) {   // parts: how much of the p
 
 function fillForm(s) {                              // once, from the last start; after that the fields are the operator's
   const c = s.config || {}, o = s.options;
-  fillSelect($("cam"), o.cams, c.cam, 2); fillSelect($("scene"), o.scenes, c.scene);
+  fillSelect($("map"), o.maps, c.map); fillSelect($("cam"), o.cams, c.cam, 2); fillSelect($("scene"), o.scenes, c.scene);
   for (const k of ["source", "grid", "fps", "extra"]) if (c[k] != null) $(k).value = c[k];
   for (const k of ["render", "ba"]) if (c[k] != null) $(k).checked = !!c[k];
   for (const [cell] of CELLS) {
     const x = (c.cells || []).find(x => x.cell === cell);
-    fillSelect($("map-" + cell), o.maps, x && x.map);
     if (x) { $("on-" + cell).checked = !!x.on; $("name-" + cell).value = x.name || ""; }
   }
 }
 
 function render(s) {
   if (!filled) { fillForm(s); filled = true; }
-  else { fillSelect($("cam"), s.options.cams, undefined, 2); fillSelect($("scene"), s.options.scenes); for (const [cell] of CELLS) fillSelect($("map-" + cell), s.options.maps); }
+  else { fillSelect($("map"), s.options.maps); fillSelect($("cam"), s.options.cams, undefined, 2); fillSelect($("scene"), s.options.scenes); }
   $("sources").replaceChildren(...s.options.sources.map(v => new Option(v)));
   const ja = { stopped: "停止中", loading: "読み込み中", running: "動作中", stopping: "停止処理中" };
   $("phase").textContent = ja[s.phase] || s.phase; $("phase").className = "badge " + s.phase;
   $("up").textContent = s.up ? `${Math.floor(s.up / 60)} 分 ${s.up % 60} 秒` : (s.exit ? `前回は終了コード ${s.exit}` : "");
   const stopped = s.phase === "stopped";
   $("start").disabled = !stopped; $("stop").disabled = stopped || s.phase === "stopping";
-  for (const el of document.querySelectorAll("#form input, #form select, .cell .top input, .cell > select")) el.disabled = !stopped;
+  for (const el of document.querySelectorAll("#form input, #form select, .cell .top input")) el.disabled = !stopped;
   $("gw").textContent = s.gpu.w != null ? s.gpu.w.toFixed(0) : "–";
   $("gp").textContent = s.gpu.pstate ? `${s.gpu.pstate} · ${s.gpu.temp} ℃` : "–";
   $("cyc").textContent = !stopped && s.cycle != null ? s.cycle.toFixed(1) : "–";
@@ -142,9 +140,9 @@ async function post(path, body) {
   poll();
 }
 $("start").onclick = () => post("/api/start", {
-  source: $("source").value, grid: $("grid").value, fps: +$("fps").value || 30, cam: $("cam").value, scene: $("scene").value,
+  source: $("source").value, grid: $("grid").value, fps: +$("fps").value || 30, map: $("map").value, cam: $("cam").value, scene: $("scene").value,
   render: $("render").checked, ba: $("ba").checked, extra: $("extra").value,
-  cells: CELLS.map(([cell]) => ({ cell, on: $("on-" + cell).checked, name: $("name-" + cell).value.trim(), map: $("map-" + cell).value })) });
+  cells: CELLS.map(([cell]) => ({ cell, on: $("on-" + cell).checked, name: $("name-" + cell).value.trim() })) });
 $("stop").onclick = () => { if (confirm("tracker を止める？")) post("/api/stop"); };
 
 async function poll() {
