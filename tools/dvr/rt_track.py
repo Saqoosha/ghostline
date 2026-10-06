@@ -612,3 +612,7 @@ def finish(s):
         print(f"frames with truth but nothing fresh (no answer within FRESH): {len(miss)}")
 for s in streams: finish(s)
 print("RT-DONE", flush=True)
+# A live input's reader thread is still inside the decoder or the NDI library here, and the interpreter's teardown around it
+# aborts now and then ("terminate called without an active exception", exit -6; 1 stop in 5 over NDI). Everything is
+# written by now, so leave without the teardown.
+if any(s.live for s in streams): os._exit(0)
