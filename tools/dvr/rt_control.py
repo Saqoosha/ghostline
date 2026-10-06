@@ -14,6 +14,7 @@ CELLS = ("tl", "tr", "bl", "br")                    # the grid's cells, row by r
 KNOBS = set("NKF MIN_INL LOST RELOC_TOPK RELOC_MIN TOPK MAPK BATCH FRESH PIPE BA BA_PX BA_ACC BA_ALPHA RENDER RNEAR RFALL RCLIP ROPA RBATCH REDGE "
             "REACH NEAR FLOW FLOW_EVERY SIGNAL INFO PNP PL_DYN".split())
 lock = threading.Lock(); gpu = {}
+HIST = 300; hist = collections.deque(maxlen=HIST)   # one sample a second, for the page's sparklines: it shows the last 5 minutes whenever it is opened
 S = dict(phase="stopped", proc=None, since=None, exit=None, cycle=None, ndi=None, input=None, config=None, cells={}, log=collections.deque(maxlen=400))
 
 try:                                                # the same finder rt_track.py uses; it keeps its list fresh on a thread
@@ -128,7 +129,15 @@ def poll_gpu():
                                                     capture_output=True, text=True, timeout=5).stdout.strip().split(", ")
             gpu.update(w=float(w), pstate=ps, mem=int(mem), temp=int(temp), util=int(util))
         except Exception: gpu.clear()
-        time.sleep(2)
+        time.sleep(1)
+
+def sample():
+    while True:
+        time.sleep(1); now = time.time()
+        with lock:
+            on = S["phase"] != "stopped"
+            hist.append(dict(w=gpu.get("w"), temp=gpu.get("temp"), cycle=S["cycle"] if on else None,
+                             cells={c["cell"]: round(sum(1 for t, ok in c["rows"] if ok and t > now - 1), 1) for c in S["cells"].values()} if on else {}))
 
 def state():
     now = time.time(); hz = lambda rows, solved: round(sum(1 for t, ok in rows if t > now - 3 and (ok or not solved)) / 3, 1)
@@ -140,7 +149,9 @@ def state():
             try: conf = json.load(open(CONF))
             except Exception: conf = None
         return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], cycle=S["cycle"], ndi=S["ndi"], input=S["input"],
-                    config=conf, cells=cells, log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH)
+                    config=conf, cells=cells, log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
+                    hist=dict(n=HIST, w=[h["w"] for h in hist], temp=[h["temp"] for h in hist], cycle=[h["cycle"] for h in hist],
+                              cells={c: [h["cells"].get(c) for h in hist] for c in CELLS}))
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def send(self, code, body, ctype="application/json"):
@@ -163,6 +174,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (ValueError, KeyError, TypeError) as e: self.send(400, dict(error=str(e)))
     def log_message(self, *a): pass
 
-threading.Thread(target=poll_gpu, daemon=True).start()
+threading.Thread(target=poll_gpu, daemon=True).start(); threading.Thread(target=sample, daemon=True).start()
 print(f"control page on :{PORT}", flush=True)
 http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
