@@ -1,8 +1,8 @@
-# rt_power_an.py <dir with rt_power.ps1 outputs> <tag...>: mean GPU / CPU-package power over the tracking window (first SPAN s after "tracking"), plus the run's summary
+# rt_power_an.py <dir with rt_power*.sh outputs> <tag...>: mean GPU / CPU-package power over the tracking window (first SPAN s after "tracking"), plus the run's summary
 import sys, re, datetime as dt, zoneinfo, numpy as np, os
-d = sys.argv[1]; SPAN = float(os.environ.get("SPAN", 74)); tz = zoneinfo.ZoneInfo("Asia/Tokyo")
+d = sys.argv[1]; SPAN = float(os.environ.get("SPAN", 74)); tz = zoneinfo.ZoneInfo(os.environ.get("TZ_LOG", "Asia/Tokyo"))
 for tag in sys.argv[2:]:
-    L = [l.split(" ", 1) for l in open(f"{d}/{tag}.log", errors="replace").read().splitlines() if " " in l]
+    L = [l.split(" ", 1) for l in open(f"{d}/{tag}.log", errors="replace", encoding="utf-8-sig").read().splitlines() if " " in l]
     t0 = next(float(t) for t, s in L if s.startswith("tracking")); t1 = min(t0 + SPAN, next(float(t) for t, s in L if s.startswith("PIPE")))
     g = [[x.strip() for x in l.split(",")] for l in open(f"{d}/{tag}.gpu.csv").read().splitlines() if l.strip()]; g = [r for r in g if len(r) >= 6 and all(r)]
     gt = np.array([dt.datetime.strptime(r[0], "%Y/%m/%d %H:%M:%S.%f").replace(tzinfo=tz).timestamp() for r in g]); gv = np.array([[float(x) for x in r[1:6]] for r in g])

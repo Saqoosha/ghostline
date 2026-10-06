@@ -13,7 +13,8 @@ sudo apt-get install -y build-essential git curl ffmpeg ntfs-3g \
 
 step "NVIDIA driver (headless, open kernel modules); reboot afterwards if nvidia-smi fails"
 if ! nvidia-smi >/dev/null 2>&1; then
-  sudo ubuntu-drivers install --gpgpu
+  sudo ubuntu-drivers install --gpgpu   # 595-server-open on 2026-10-06; --gpgpu leaves out nvidia-smi
+  sudo apt-get install -y "nvidia-utils-$(dpkg -l | grep -o "nvidia-headless-no-dkms-[0-9]*-server" | head -1 | sed "s/nvidia-headless-no-dkms-//")"
   echo "driver installed: reboot, then run this script again"; exit 0
 fi
 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
@@ -46,15 +47,16 @@ mkdir -p ~/.cache/torch && [ -d ~/.cache/torch/hub ] || cp -r /mnt/c/Users/saqoo
 step "working copy ~/rt: C: is read-only, so the tracker runs from a copy (about 3.5 GB: the test's maps and truths, the scene, the flights)"
 mkdir -p ~/rt/pw ~/scenes
 # not all of rt/ (39 GB of earlier runs): the scripts, the four maps, the truths
-(cd /mnt/c/Users/saqoosha/VDGS/dvr/rt && cp -n *.py map_fdf-r6b-d05.npz map_race-sf-*.npz truth-*.json race-sf-*.json scan_cameras.json ~/rt/)
-cp -n /mnt/c/Users/saqoosha/VDGS/scenes/FDF-2026-R6b-spirula-web-dvr2.ply ~/scenes/
+(cd /mnt/c/Users/saqoosha/VDGS/dvr/rt && cp --update=none *.py map_fdf-r6b-d05.npz map_race-sf-*.npz truth-*.json race-sf-*.json scan_cameras.json ~/rt/)
+cp --update=none /mnt/c/Users/saqoosha/VDGS/scenes/FDF-2026-R6b-spirula-web-dvr2.ply ~/scenes/
 for f in fdf-r6b-d05 race-sf-knt race-sf-saqoosha race-sf-sena; do
-  mkdir -p ~/$f && cp -n /mnt/c/Users/saqoosha/VDGS/dvr/$f/dvr_pinhole.mp4* ~/$f/
+  mkdir -p ~/$f && cp --update=none /mnt/c/Users/saqoosha/VDGS/dvr/$f/dvr_pinhole.mp4* ~/$f/
 done
 
 step "gsplat's first build (a few minutes) and TensorRT engines for this OS (eng_linux)"
 cd ~/rt
-~/mastenv/bin/python -c "import torch; from gsplat import rasterization; print('gsplat import ok')"
+# the build runs on the first render, not on import, and needs ninja (in the venv) and nvcc on PATH
+PATH=$HOME/mastenv/bin:$PATH ~/mastenv/bin/python -c "import torch; from gsplat import rasterization as r; d='cuda'; r(torch.zeros(1,3,device=d)+torch.tensor([0,0,5.],device=d), torch.tensor([[1.,0,0,0]],device=d), torch.full((1,3),.1,device=d), torch.ones(1,device=d), torch.ones(1,3,device=d), torch.eye(4,device=d)[None], torch.tensor([[[300.,0,320],[0,300,240],[0,0,1]]],device=d), 640, 480); print('gsplat built')"
 [ -f eng_linux/xfeat_fp32.engine ] || ~/mastenv/bin/python rt_trt.py build eng_linux glue_mix xfeat_fp32
 
 step "done: a paced 4-pilot run to compare with WSL"

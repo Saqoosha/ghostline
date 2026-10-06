@@ -357,11 +357,25 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   | Windows で直に、`CUDA_SYNC=block` | 180＋46 W | 25.1 ms | 39 Hz / 37 ms | 29 Hz / 42〜44 ms |
 
   電力が下がって見えるのは、主に処理するフレームが減ったから。gsplat は Windows ではそのままではビルドできない（torch のヘッダの引数名 `small` が Windows のマクロとぶつかり、`-Wno-attributes` を MSVC が受けない）。
-  残る候補は Linux で直に動かすこと：`tools/dvr/rt_linux_setup.sh`（4090 機の 750 EVO に 150 GiB 空けてある。BIOS の画面は 4K の HDMI ダミープラグ側に出るので、抜いてから入れる）
+- **Linux で直に動かすと、電力が下がって速くなる（2026-10-06）。** 4090 機の 750 EVO（SATA）の 143 GB に Ubuntu 24.04.5 を入れた（ホスト名 `rt4090`、LAN の DHCP、
+  起動の既定は Windows のまま、Linux は BIOS の起動メニュー（F8）で「Ubuntu (SATA6G_3 ...)」を選ぶ）。環境は `tools/dvr/rt_linux_setup.sh`、電力は `tools/dvr/rt_power_linux.sh`（RAPL を `/sys/class/powercap` から読む）。
+  ドライバ 595-server-open、gsplat 1.5.3 は手直しなしでビルドできる（最初の描画でビルドが走り、ninja と nvcc が PATH に要る）。
+
+  | | GPU＋CPU | 1 周 p50 | 遅延 p50 |
+  |---|---|---|---|
+  | 何もしていない：WSL（Windows） / Linux | 22＋31 W / 20＋9 W | | |
+  | 4 人、`RENDER=1`：WSL / Linux | 253 W / **243 W** | 15.5 / **11.5 ms** | 32〜37 / **27〜32 ms** |
+  | 同じく GPU 上限 150 W：WSL / Linux | 208 W / **195 W** | 16.6 / 12.1 ms | 35〜40 / 29〜34 ms |
+  | 1 人：WSL / Linux | 176 W / **149 W** | 10.4 / 9.1 ms | 14.4 / 12.6 ms |
+  | 準決勝をライブで、`SIGNAL=1`：WSL / Linux / Linux＋150 W | 129 W / **105 W** / 99 W | | |
+
+  答えの精度はどの行も同じ（d05 p50 0.11〜0.12 m）。ライブの準決勝では解けたフレームが 8,614 → 7,680（右上と右下のマスが少ない）で、1 回ずつしか測っていないので回ごとのぶれかは分からない。
+  `CUDA_SYNC=block` は Linux でも効く（4 人で CPU 49 → 16 W）が、1 周が 11.5 → 26 ms と倍以上になって 1 人あたりの Hz が落ちるので使わない
 
 DELTA 2 Max の AC は変換効率 86%・AC を入れているだけで 23 W（[thesolarlab](https://www.thesolarlab.com/review/ecoflow-delta-2-max-review)、
 [diglloyd](https://windinmyface.com/blog/2025/20250116_1012-Ecoflow-Delta2Max-AC-conversion-efficiency.html)）なので、使えるのは約 1,760 Wh。
-本体の残り（マザーボード・メモリ・ファン）を 40 W、電源の効率を 90% と仮に置くと、4 人で 282 W → 約 360 W で 4.9 時間、208 W → 約 275 W で 6.4 時間
+本体の残り（マザーボード・メモリ・ファン）を 40 W、電源の効率を 90% と仮に置くと、4 人で 282 W → 約 360 W で 4.9 時間、208 W → 約 275 W で 6.4 時間。
+準決勝の流れ（ヒートのあいだに全マス空の時間がある）で `SIGNAL=1` なら、WSL 129 W → 約 190 W で 9.3 時間、Linux＋150 W 99 W → 約 155 W で 11.4 時間
 （モニターや受信機は別）。仮定の部分は、走らせながら DELTA の出力表示を読めば確かめられる。
 
 - **照合はまとめて呼ぶ。** LighterGlue は 1 組 14 ms、8 組を 1 回のバッチで 19 ms。命令を出す回数で時間が決まっている。
