@@ -1,6 +1,6 @@
 """rt_control.py: the field box's control page. Serves rt_control.html and starts / stops rt_track.py on an NDI source
 (a 2x2 grid, one pilot per cell), so the box needs no keyboard at the venue: pick the source the Event VRX sends, name
-the cells, start (the frame size and rate are read off the source). While the tracker runs it reads its output (signal on / off per cell, cycle time), its PUSH stream
+the cells, start (the frame size and rate are read off the source). While the tracker runs it reads its output (signal on / off per cell), its PUSH stream
 (frames processed and solved per cell, the positions for the page's top view) and the GPU's power from nvidia-smi. The page also
 shows the source's picture: its low-bandwidth stream, two JPEGs a second, received only while a page asks for it.
 usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080
@@ -16,7 +16,7 @@ KNOBS = set("NKF MIN_INL LOST RELOC_TOPK RELOC_MIN TOPK MAPK BATCH FRESH PIPE BA
             "REACH NEAR FLOW FLOW_EVERY SIGNAL INFO PNP PL_DYN".split())
 lock = threading.Lock(); gpu = {}
 HIST = 300; hist = collections.deque(maxlen=HIST)   # one sample a second, for the page's sparklines: it shows the last 5 minutes whenever it is opened
-S = dict(phase="stopped", proc=None, since=None, exit=None, cycle=None, ndi=None, input=None, config=None, cells={}, log=collections.deque(maxlen=400))
+S = dict(phase="stopped", proc=None, since=None, exit=None, ndi=None, input=None, config=None, cells={}, log=collections.deque(maxlen=400))
 
 try:                                                # the same finder rt_track.py uses; it keeps its list fresh on a thread
     from cyndilib.finder import Finder
@@ -145,7 +145,7 @@ def start(c):
         if S["phase"] != "stopped": raise ValueError("もう動いている")
         os.makedirs(HERE + "/live", exist_ok=True)
         p = subprocess.Popen([sys.executable, "-u", "rt_track.py", *specs], cwd=HERE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
-        S.update(phase="loading", proc=p, since=time.time(), exit=None, cycle=None, ndi=None, config=c, input=f"{w}×{h} · {fps:g} fps",
+        S.update(phase="loading", proc=p, since=time.time(), exit=None, ndi=None, config=c, input=f"{w}×{h} · {fps:g} fps",
                  cells={n: dict(cell=x["cell"], signal=None, rows=collections.deque(maxlen=600), last=None, trail=collections.deque(maxlen=150)) for x, n in zip(on, names)})
         S["log"].clear(); S["log"].append("$ rt_track.py " + " ".join(specs))
     json.dump(c, open(CONF, "w"), ensure_ascii=False)
@@ -158,7 +158,6 @@ def watch(p):                                       # the tracker's output: the 
             S["log"].append(line)
             if m := re.match(r"live/(.+): signal (on|off)$", line):
                 if m[1] in S["cells"]: S["cells"][m[1]]["signal"] = m[2] == "on"
-            elif m := re.match(r"(\d+) steps, ([\d.]+) ms each", line): S["cycle"] = float(m[2])
             elif m := re.search(r": receiving (.+)$", line): S["ndi"] = m[1]
             elif line == "listening" and S["phase"] == "loading": S["phase"] = "running"
     code = p.wait()
@@ -172,7 +171,7 @@ def answers(p):                                     # the PUSH stream: one row p
                 r = json.loads(raw[6:]); now = time.time()
                 with lock:
                     if c := S["cells"].get(r.get("stream")):
-                        c["rows"].append((now, "pos" in r))
+                        c["rows"].append((now, "pos" in r, r.get("lat")))
                         if "pos" in r:
                             c["last"] = dict(t=now, inl=r.get("inl"), lat=r.get("lat"), how=r.get("how"))
                             if not c["trail"] or now - c["trail"][-1][0] >= 0.1:   # ten points a second are enough for the top view
@@ -199,16 +198,22 @@ def poll_gpu():
         except Exception: gpu.clear()
         time.sleep(1)
 
+def latency(now):
+    """ms from a frame's arrival to its position, the median over the last second's answers of every cell (None when there were none).
+    The tracker's own "ms each" line is the time since its start over the passes made: it grows through every gap without a picture."""
+    v = sorted(lat for c in S["cells"].values() for t, ok, lat in c["rows"] if ok and lat is not None and t > now - 1)
+    return round(v[len(v) // 2], 1) if v else None
+
 def sample():
     while True:
         time.sleep(1); now = time.time()
         with lock:
             on = S["phase"] != "stopped"
-            hist.append(dict(w=gpu.get("w"), temp=gpu.get("temp"), cycle=S["cycle"] if on else None,
-                             cells={c["cell"]: round(sum(1 for t, ok in c["rows"] if ok and t > now - 1), 1) for c in S["cells"].values()} if on else {}))
+            hist.append(dict(w=gpu.get("w"), temp=gpu.get("temp"), lat=latency(now) if on else None,
+                             cells={c["cell"]: round(sum(1 for t, ok, _ in c["rows"] if ok and t > now - 1), 1) for c in S["cells"].values()} if on else {}))
 
 def state():
-    now = time.time(); hz = lambda rows, solved: round(sum(1 for t, ok in rows if t > now - 3 and (ok or not solved)) / 3, 1)
+    now = time.time(); hz = lambda rows, solved: round(sum(1 for t, ok, _ in rows if t > now - 3 and (ok or not solved)) / 3, 1)
     with lock:
         cells = {n: dict(cell=c["cell"], signal=c["signal"], hz=hz(c["rows"], False), solved=hz(c["rows"], True),
                          last=c["last"] and dict(c["last"], age=round(now - c["last"]["t"], 1)),
@@ -218,9 +223,9 @@ def state():
         if conf is None and os.path.exists(CONF):
             try: conf = json.load(open(CONF))
             except Exception: conf = None
-        return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], cycle=S["cycle"], ndi=S["ndi"], input=S["input"],
+        return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], lat=latency(now) if S["phase"] != "stopped" else None, ndi=S["ndi"], input=S["input"],
                     config=conf, cells=cells, log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
-                    hist=dict(n=HIST, w=[h["w"] for h in hist], temp=[h["temp"] for h in hist], cycle=[h["cycle"] for h in hist],
+                    hist=dict(n=HIST, w=[h["w"] for h in hist], temp=[h["temp"] for h in hist], lat=[h["lat"] for h in hist],
                               cells={c: [h["cells"].get(c) for h in hist] for c in CELLS}))
 
 class Handler(http.server.BaseHTTPRequestHandler):
