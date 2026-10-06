@@ -8,7 +8,7 @@ step() { printf '\n== %s\n' "$*"; }
 
 step "packages (build tools, GStreamer with SRT for the live input, ffmpeg)"
 sudo apt-get update
-sudo apt-get install -y build-essential git curl ffmpeg ntfs-3g \
+sudo apt-get install -y build-essential git curl ffmpeg ntfs-3g avahi-daemon \   # avahi: NDI finds its sources over mDNS
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
 
 step "NVIDIA driver (headless, open kernel modules); reboot afterwards if nvidia-smi fails"
@@ -38,7 +38,7 @@ export PATH=$HOME/.local/bin:$PATH
 [ -d ~/mastenv ] || uv venv ~/mastenv --python 3.11
 uv pip install -p ~/mastenv torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
 uv pip install -p ~/mastenv numpy scipy opencv-python==5.0.0.93 kornia==0.8.3 plyfile poselib==2.0.5 \
-  tensorrt-cu12==11.3.0.99 onnx onnxscript ninja tqdm gsplat==1.5.3
+  tensorrt-cu12==11.3.0.99 onnx onnxscript ninja tqdm gsplat==1.5.3 cyndilib   # cyndilib: NDI input, bundles libndi
 
 step "XFeat (code and weights) and the torch hub cache (DINOv2) from WSL's copies on C:"
 [ -d ~/xfeat ] || cp -r /mnt/c/Users/saqoosha/VDGS/dvr/rt/pw/xfeat ~/xfeat

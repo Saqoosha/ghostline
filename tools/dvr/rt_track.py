@@ -112,6 +112,8 @@ class GridSource:                                   # one decoded live video; it
         self.url, self.cells, self.ended, self.n = url, [], False, 0
         self.W, self.H = [int(v) for v in GRID.split("x")]
     def start(self):
+        if self.url.startswith("ndi://"):           # an NDI source on the LAN (the EventVRX output at the venue), by (part of) its name
+            threading.Thread(target=self.run_ndi, daemon=True).start(); return
         # GRID_GST: receive RTP over SRT with GStreamer instead (rt_send.py GST=1). Mac-local, send -> decoded: ffmpeg + mpegts
         # ~200 ms, GStreamer + mpegts 164 ms, GStreamer + RTP 125 ms (all with SRT latency 80 ms); mpegts itself holds ~35 ms.
         # The url's port and latency are reused; the url field still names the source the cells share.
@@ -136,6 +138,34 @@ class GridSource:                                   # one decoded live video; it
             try: rc = self.proc.wait(timeout=1)
             except subprocess.TimeoutExpired: rc = None
             if rc: print(f"{self.url}: decoder exited with {rc}", flush=True)
+    def run_ndi(self):
+        try: self.read_ndi()
+        finally: self.ended = True
+    def read_ndi(self):
+        # cyndilib (pip; it bundles libndi) with the FrameSync API, polled every 2 ms: it hands over the newest frame, and a frame
+        # is new when its NDI timestamp changes. Polling VideoRecvFrame with receive() lost a third of the frames although the
+        # library had them all. 1920x1080 30 fps on the 4090 box (sender on the same box): 30.0 fps, none dropped, sent -> here
+        # 31.5 ms p50, 0.6 ms to copy a frame out. Linux needs avahi-daemon running or the source is never found.
+        from cyndilib.finder import Finder
+        from cyndilib.receiver import Receiver
+        from cyndilib.video_frame import VideoFrameSync
+        from cyndilib.wrapper.ndi_recv import RecvColorFormat, RecvBandwidth
+        name = self.url[len("ndi://"):]; finder = Finder(); finder.open(); src = None
+        while src is None:
+            finder.wait(1); src = next((s for s in finder.iter_sources() if name in s.name), None)
+        print(f"{self.url}: receiving {src.name}", flush=True)
+        rx = Receiver(color_format=RecvColorFormat.BGRX_BGRA, bandwidth=RecvBandwidth.highest)
+        vf = VideoFrameSync(); rx.frame_sync.set_video_frame(vf); rx.set_source(src); last = None
+        while True:
+            rx.frame_sync.capture_video()
+            ts = vf.get_timestamp_posix() if vf.xres else None
+            if ts and ts != last:
+                last = ts; t, tw = time.perf_counter(), time.time(); w, h = vf.get_resolution()
+                full = cv2.cvtColor(vf.get_array().reshape(h, w, 4), cv2.COLOR_BGRA2BGR)
+                if (w, h) != (self.W, self.H): full = cv2.resize(full, (self.W, self.H), interpolation=cv2.INTER_AREA)
+                for s in self.cells: s.push(self.n, full, t, tw)
+                self.n += 1
+            time.sleep(0.002)
     def read(self):
         size = self.W * self.H * 3
         while True:
@@ -486,6 +516,9 @@ def loop():
       if nxt is not None and PIPE == 1: nxt = middle(nxt)
       pending = nxt; clock = clock0 + (time.perf_counter() - t0); steps.append((time.perf_counter() - t0) * 1000)
       if len(steps) % 500 == 0: print(f"{len(steps)} steps, {(time.time() - t_all) / len(steps) * 1000:.1f} ms each", flush=True)
+# a background job of a non-interactive shell starts with SIGINT ignored, and Python then leaves it ignored: a live run started
+# that way never stopped. TERM (kill, systemd) also ends the loop and writes the summary.
+import signal; signal.signal(signal.SIGINT, signal.default_int_handler); signal.signal(signal.SIGTERM, signal.default_int_handler)
 try: loop()
 except KeyboardInterrupt: print("stopped", flush=True)   # a live feed never ends by itself; keep what was measured
 pc = lambda a, q: float(np.percentile(a, q)) if len(a) else float("nan")
