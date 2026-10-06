@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ghostline tracker</title>
+<style>
+  :root { --ink: #1c2024; --sub: #6b7480; --line: #dfe3e8; --bg: #f4f6f8; --card: #fff; --go: #1f8a4c; --stop: #c2362b; --warn: #b7791f; --blue: #2563c9; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 -apple-system, "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  h1 { font-size: 18px; margin: 0; font-weight: 650; }
+  .badge { padding: 2px 10px; border-radius: 99px; font-size: 13px; font-weight: 600; color: #fff; background: var(--sub); }
+  .badge.running { background: var(--go); } .badge.loading, .badge.stopping { background: var(--warn); }
+  .spacer { flex: 1; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 10px 22px; color: #fff; cursor: pointer; }
+  button:disabled { opacity: .4; cursor: default; }
+  #start { background: var(--go); } #stop { background: var(--stop); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+  .stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; font-weight: 650; }
+  .stat span { color: var(--sub); font-size: 12px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+  .cell { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+  .cell.off { opacity: .55; }
+  .cell .top { display: flex; align-items: center; gap: 8px; }
+  .cell .pos { color: var(--sub); font-size: 12px; width: 34px; }
+  .cell input[type=text] { flex: 1; min-width: 0; }
+  .cell select { width: 100%; margin-top: 6px; }
+  .live { margin-top: 8px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); display: inline-block; align-self: center; }
+  .dot.on { background: var(--go); } .dot.nosig { background: var(--sub); }
+  .live b { font-size: 20px; font-weight: 650; } .live small { color: var(--sub); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+  .row { display: grid; grid-template-columns: 130px 1fr; gap: 6px 10px; align-items: center; margin-bottom: 6px; }
+  .row label { color: var(--sub); font-size: 13px; }
+  input[type=text], select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); width: 100%; }
+  input:disabled, select:disabled { background: var(--bg); color: var(--sub); }
+  .checks { display: flex; gap: 18px; flex-wrap: wrap; }
+  .checks label { color: var(--ink); font-size: 14px; }
+  #err { color: var(--stop); font-weight: 600; min-height: 1.5em; }
+  pre { margin: 0; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; max-height: 260px; overflow: auto; color: #333; }
+  h2 { font-size: 13px; color: var(--sub); margin: 0 0 8px; font-weight: 600; }
+  @media (max-width: 520px) { .row { grid-template-columns: 1fr; } .grid { gap: 6px; } button { padding: 10px 16px; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>ghostline tracker</h1><span id="phase" class="badge">…</span><span id="up" style="color:var(--sub)"></span>
+    <span class="spacer"></span>
+    <button id="start">開始</button><button id="stop">停止</button>
+  </header>
+  <div id="err"></div>
+
+  <div class="stats">
+    <div class="stat"><b id="gw">–</b><span>GPU（W）</span></div>
+    <div class="stat"><b id="gp">–</b><span>GPU の状態・温度</span></div>
+    <div class="stat"><b id="cyc">–</b><span>1 周（ms）</span></div>
+    <div class="stat"><b id="ndi" style="font-size:14px;line-height:30px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">–</b><span>受けている NDI</span></div>
+  </div>
+
+  <div class="grid" id="cells"></div>
+
+  <div class="card" id="form">
+    <h2>入力と設定</h2>
+    <div class="row"><label for="source">NDI の送り手</label><div><input type="text" id="source" list="sources" placeholder="名前の一部でよい" autocomplete="off"><datalist id="sources"></datalist></div></div>
+    <div class="row"><label for="grid">画面の大きさ / fps</label><div style="display:flex;gap:8px"><input type="text" id="grid" value="1920x1080"><input type="text" id="fps" value="30" style="max-width:80px"></div></div>
+    <div class="row"><label for="cam">カメラの定義</label><select id="cam"></select></div>
+    <div class="row"><label for="scene">シーン（.ply）</label><select id="scene"></select></div>
+    <div class="row"><label>処理</label><div class="checks">
+      <label><input type="checkbox" id="render" checked> 描いて照合（RENDER）</label>
+      <label><input type="checkbox" id="ba" checked> 束調整（屋外の設定）</label></div></div>
+    <div class="row"><label for="extra">追加の設定</label><input type="text" id="extra" placeholder="例: RELOC_MIN=30 NKF=2" autocomplete="off"></div>
+  </div>
+
+  <div class="card"><h2>ログ</h2><pre id="log"></pre></div>
+</main>
+<script>
+const $ = id => document.getElementById(id), CELLS = [["tl", "左上"], ["tr", "右上"], ["bl", "左下"], ["br", "右下"]];
+let filled = false, phase = null, logAtEnd = true;
+
+// the four cells, in the grid's own layout: what to track there, and how it is going while the tracker runs
+$("cells").innerHTML = CELLS.map(([c, ja]) => `<div class="cell" id="c-${c}">
+  <div class="top"><input type="checkbox" id="on-${c}" checked><span class="pos">${ja}</span><input type="text" id="name-${c}" placeholder="${c}" maxlength="24"></div>
+  <select id="map-${c}"></select>
+  <div class="live"><span class="dot" id="dot-${c}"></span><b id="hz-${c}">–</b><small>解けた Hz</small><small id="sub-${c}"></small></div></div>`).join("");
+
+function fillSelect(el, items, value, parts = 1) {   // parts: how much of the path's end to show (the cams all have the same file name)
+  const want = value ?? el.value;
+  if (el.dataset.items !== items.join("|")) { el.replaceChildren(...items.map(v => new Option(v.split("/").slice(-parts).join("/"), v))); el.dataset.items = items.join("|"); }
+  if (items.includes(want)) el.value = want;
+}
+
+function fillForm(s) {                              // once, from the last start; after that the fields are the operator's
+  const c = s.config || {}, o = s.options;
+  fillSelect($("cam"), o.cams, c.cam, 2); fillSelect($("scene"), o.scenes, c.scene);
+  for (const k of ["source", "grid", "fps", "extra"]) if (c[k] != null) $(k).value = c[k];
+  for (const k of ["render", "ba"]) if (c[k] != null) $(k).checked = !!c[k];
+  for (const [cell] of CELLS) {
+    const x = (c.cells || []).find(x => x.cell === cell);
+    fillSelect($("map-" + cell), o.maps, x && x.map);
+    if (x) { $("on-" + cell).checked = !!x.on; $("name-" + cell).value = x.name || ""; }
+  }
+}
+
+function render(s) {
+  if (!filled) { fillForm(s); filled = true; }
+  else { fillSelect($("cam"), s.options.cams, undefined, 2); fillSelect($("scene"), s.options.scenes); for (const [cell] of CELLS) fillSelect($("map-" + cell), s.options.maps); }
+  $("sources").replaceChildren(...s.options.sources.map(v => new Option(v)));
+  const ja = { stopped: "停止中", loading: "読み込み中", running: "動作中", stopping: "停止処理中" };
+  $("phase").textContent = ja[s.phase] || s.phase; $("phase").className = "badge " + s.phase;
+  $("up").textContent = s.up ? `${Math.floor(s.up / 60)} 分 ${s.up % 60} 秒` : (s.exit ? `前回は終了コード ${s.exit}` : "");
+  const stopped = s.phase === "stopped";
+  $("start").disabled = !stopped; $("stop").disabled = stopped || s.phase === "stopping";
+  for (const el of document.querySelectorAll("#form input, #form select, .cell .top input, .cell > select")) el.disabled = !stopped;
+  $("gw").textContent = s.gpu.w != null ? s.gpu.w.toFixed(0) : "–";
+  $("gp").textContent = s.gpu.pstate ? `${s.gpu.pstate} · ${s.gpu.temp} ℃` : "–";
+  $("cyc").textContent = !stopped && s.cycle != null ? s.cycle.toFixed(1) : "–";
+  $("ndi").textContent = (!stopped && s.ndi) || "–";
+  const byCell = Object.fromEntries(Object.entries(s.cells).map(([n, c]) => [c.cell, { n, ...c }]));
+  for (const [cell] of CELLS) {
+    const c = stopped ? null : byCell[cell];
+    $("c-" + cell).classList.toggle("off", stopped ? !$("on-" + cell).checked : !c);
+    $("dot-" + cell).className = "dot" + (c ? (c.signal === false ? " nosig" : c.solved > 0 ? " on" : "") : "");
+    $("hz-" + cell).textContent = c ? c.solved.toFixed(1) : "–";
+    $("sub-" + cell).textContent = !c ? "" : c.signal === false ? "映像なし" :
+      `処理 ${c.hz.toFixed(1)} Hz` + (c.last ? ` · ${c.last.age < 2 ? "inlier " + c.last.inl : "最後の答えから " + c.last.age.toFixed(0) + " 秒"}` : " · まだ答えなし");
+  }
+  const log = $("log"); log.textContent = s.log.join("\n"); if (logAtEnd) log.scrollTop = log.scrollHeight;
+  phase = s.phase;
+}
+
+$("log").addEventListener("scroll", e => { const l = e.target; logAtEnd = l.scrollTop + l.clientHeight >= l.scrollHeight - 8; });
+for (const [cell] of CELLS) $("on-" + cell).addEventListener("change", () => $("c-" + cell).classList.toggle("off", !$("on-" + cell).checked));
+
+async function post(path, body) {
+  $("err").textContent = "";
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  if (!r.ok) $("err").textContent = (await r.json()).error || r.statusText;
+  poll();
+}
+$("start").onclick = () => post("/api/start", {
+  source: $("source").value, grid: $("grid").value, fps: +$("fps").value || 30, cam: $("cam").value, scene: $("scene").value,
+  render: $("render").checked, ba: $("ba").checked, extra: $("extra").value,
+  cells: CELLS.map(([cell]) => ({ cell, on: $("on-" + cell).checked, name: $("name-" + cell).value.trim(), map: $("map-" + cell).value })) });
+$("stop").onclick = () => { if (confirm("tracker を止める？")) post("/api/stop"); };
+
+async function poll() {
+  try { render(await (await fetch("/api/state")).json()); if ($("err").textContent === "サーバーに届かない") $("err").textContent = ""; }
+  catch { $("err").textContent = "サーバーに届かない"; }
+}
+poll(); setInterval(poll, 1000);
+</script>
+</body>
+</html>

@@ -92,6 +92,27 @@ WantedBy=multi-user.target
 UNIT
 sudo systemctl daemon-reload; sudo systemctl enable --now ghostline-gpu-idle.service
 
+step "the control page (rt_control.py): start / stop the tracker on an NDI source from a browser, http://<this box>:8080"
+cp "$(dirname "$0")/rt_control.py" "$(dirname "$0")/rt_control.html" ~/rt/
+sudo tee /etc/systemd/system/ghostline-control.service > /dev/null <<UNIT
+[Unit]
+Description=ghostline: the live tracker's control page
+After=network-online.target avahi-daemon.service nvidia-persistenced.service
+
+[Service]
+User=$USER
+WorkingDirectory=$HOME/rt
+ExecStart=$HOME/mastenv/bin/python -u rt_control.py
+Restart=always
+RestartSec=5
+# stopping the service stops the tracker it started; the tracker writes its files on TERM
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload; sudo systemctl enable --now ghostline-control.service
+
 step "done: a paced 4-pilot run to compare with WSL"
 echo 'cd ~/rt && GLUE=eng_linux/glue_mix.engine XFEAT=eng_linux/xfeat_fp32.engine RENDER=1 RCLIP=2 PACE=1 CUDA_SYNC=block \'
 echo '  SCENE=~/scenes/FDF-2026-R6b-spirula-web-dvr2.ply ~/mastenv/bin/python rt_track.py map_fdf-r6b-d05.npz,../fdf-r6b-d05/dvr_pinhole.mp4,pw/o_d05,truth-d05.json ...'
