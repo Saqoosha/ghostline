@@ -50,8 +50,7 @@
   .top { position: relative; aspect-ratio: 1.5; overflow: hidden; }   /* the box's own proportions once the course is known */
   .top svg { display: block; width: 100%; height: 100%; }
   #course { fill: none; stroke: var(--faint); stroke-width: 2.4; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-  #aerial { opacity: .7; filter: saturate(.55) brightness(1.06); }   /* washed out so the trails read */
-  #top.pic #course { display: none; } #top.pic #trails { filter: drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 1.2px #fff); }
+  #top.pic #course { display: none; } #top.pic #trails { filter: drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 2px #fff); }   /* a white edge: the scan keeps its own colours */
   #trails path { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
   #trails path.now { stroke-width: 10; }
   .tag { position: absolute; left: 0; top: 0; padding-left: 11px; transform: translateY(-50%); font: 500 12px/1 var(--sans); letter-spacing: .16em; white-space: nowrap; pointer-events: none;
