@@ -358,8 +358,14 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
 
   電力が下がって見えるのは、主に処理するフレームが減ったから。gsplat は Windows ではそのままではビルドできない（torch のヘッダの引数名 `small` が Windows のマクロとぶつかり、`-Wno-attributes` を MSVC が受けない）。
 - **Linux で直に動かすと、電力が下がって速くなる（2026-10-06）。** 4090 機の 750 EVO（SATA）の 143 GB に Ubuntu 24.04.5 を入れた（ホスト名 `rt4090`、LAN の DHCP、
-  起動の既定は Windows のまま、Linux は BIOS の起動メニュー（F8）で「Ubuntu (SATA6G_3 ...)」を選ぶ）。環境は `tools/dvr/rt_linux_setup.sh`、電力は `tools/dvr/rt_power_linux.sh`（RAPL を `/sys/class/powercap` から読む）。
+  起動の既定は Windows のまま、Linux は BIOS の起動メニュー（F8）で「Ubuntu (SATA6G_3 ...)」を選ぶ。WDC の古い「ubuntu」とは別。
+  Linux からなら `sudo efibootmgr -n 0004` で次の 1 回だけ Linux。Windows の `bcdedit /set {fwbootmgr} bootsequence` は効かなかった）。
+  入り口は `ssh rt4090`（Tailscale、起動するだけでつながる。Windows の Tailscale はログインしないと立たない）。作業場所は `~/rt`、エンジンは `eng_linux/`、Windows の C: は `/mnt/c` に読み取り専用。
+  環境は `tools/dvr/rt_linux_setup.sh`、電力は `tools/dvr/rt_power_linux.sh`（RAPL を `/sys/class/powercap` から読む）。
   ドライバ 595-server-open、gsplat 1.5.3 は手直しなしでビルドできる（最初の描画でビルドが走り、ninja と nvcc が PATH に要る）。
+  Ubuntu Pro（無料の個人枠）につないで ESM Apps / Infra を有効にした。ffmpeg・GStreamer・libsrt など universe の包みのセキュリティ修正は ESM からしか来ない。
+  自動更新は止めてあるので、会場の前に手で `sudo apt update && sudo apt full-upgrade`。26.04 には上げない（CUDA 12.9 と新しい GCC で gsplat の再ビルドが通るか、
+  NVIDIA の倉庫とドライバが揃うかが未確認で、24.04 は ESM で 2034 年まで保守される）
 
   | | GPU＋CPU | 1 周 p50 | 遅延 p50 |
   |---|---|---|---|
@@ -397,7 +403,7 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   1 度だけ Linux の再起動が終了処理の最後で固まった（JetKVM の ATX の Reset で戻した）。その後 3 回は再現しない
 - **裏で起動した tracker は止めの合図を受けなかった。** 非対話のシェルが裏で起動したプロセスは SIGINT を無視する設定で始まり、Python はそれを引き継ぐ。
   `rt_track.py` で SIGINT と SIGTERM を明示的に受けるようにした（止めると集計が書かれる）
-  `CUDA_SYNC=block` は Linux でも効く（4 人で CPU 49 → 16 W）が、1 周が 11.5 → 26 ms と倍以上になって 1 人あたりの Hz が落ちるので使わない
+- **`CUDA_SYNC=block` は Linux でも効く**（4 人で CPU 49 → 16 W）が、1 周が 11.5 → 26 ms と倍以上になって 1 人あたりの Hz が落ちるので使わない
 
 DELTA 2 Max の AC は変換効率 86%・AC を入れているだけで 23 W（[thesolarlab](https://www.thesolarlab.com/review/ecoflow-delta-2-max-review)、
 [diglloyd](https://windinmyface.com/blog/2025/20250116_1012-Ecoflow-Delta2Max-AC-conversion-efficiency.html)）なので、使えるのは約 1,760 Wh。
@@ -435,9 +441,11 @@ DELTA 2 Max の AC は変換効率 86%・AC を入れているだけで 23 W（[
 
 ## 残っていること
 
-- **会場での通し**：本物の NDI の 2×2 で試す。会場の上り回線は未計測。OBS は重いので、代わりは NDI SDK の Python バインディング（cyndilib など）で
-  受けて ffmpeg → SRT に流す小さな送り手（`rt_send.py` の入力を NDI に替える）、NDI Tools の NDI Bridge、専用の NDI→SRT 変換箱。ffmpeg は NDI を読めない
-  （ライセンスの問題で外された）。会場で NVIDIA のノートで処理するなら、tracker が NDI を直接読めば送り手ごと要らない
+- **会場の準備（4090 機を持ち込み、Linux で NDI を直接受ける）**：本物の Event VRX の NDI では未確認（送り手の名前、解像度、マスの並び）。
+  残り：起動の既定を Linux にするか、tracker を systemd のサービスにして NDI の名前を渡して自動で立ち上げるか、
+  Linux の起動途中の約 20 秒の待ち（initramfs → systemd、電力には無関係）。電池でもつ時間の見積もりは、DELTA の出力表示で本体の残りを測れば確かめられる
+- **試験の送り手は Mac の `rt_send.py`（x265＋SRT）にしない**：送り手が遅れて解けるフレームが回ごとに揺れ、比較にならなかった。4090 機の中から `ffmpeg -re -c copy` で SRT に流すか、
+  別の機械（有線の Mac Studio）から `ndi_send.py` で NDI を流す
 - **Mac で見失いが続く原因**（d05、1024 点・1 枚）：答えの出ない 0.33 秒超の区間は 2 種類。HDZero の電波が乱れてブロックノイズで画が崩れる区間
   （照合できなくて当然）と、画はきれいなのに全体検索が当たらない区間。後者は地図の抜けではない（30° 以内のキーフレームが p50 0.7 m にある）。
   1024 点だと inlier が全体検索の合格線（`RELOC_MIN` 50）に届かず、乱れが終わっても 2 秒以上戻れなかった（4090 の 2048 点は 1 秒以内に戻る）。
