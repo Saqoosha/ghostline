@@ -59,6 +59,22 @@ cd ~/rt
 PATH=$HOME/mastenv/bin:$PATH ~/mastenv/bin/python -c "import torch; from gsplat import rasterization as r; d='cuda'; r(torch.zeros(1,3,device=d)+torch.tensor([0,0,5.],device=d), torch.tensor([[1.,0,0,0]],device=d), torch.full((1,3),.1,device=d), torch.ones(1,device=d), torch.ones(1,3,device=d), torch.eye(4,device=d)[None], torch.tensor([[[300.,0,320],[0,300,240],[0,0,1]]],device=d), 640, 480); print('gsplat built')"
 [ -f eng_linux/xfeat_fp32.engine ] || ~/mastenv/bin/python rt_trt.py build eng_linux glue_mix xfeat_fp32
 
+step "a field box: local-time RTC (Windows shares the clock), and only what the tracker needs keeps running"
+# Linux writes the RTC as UTC by default and Windows then runs 9 h behind after every Linux boot
+sudo timedatectl set-timezone Asia/Tokyo; sudo timedatectl set-local-rtc 1
+# off, not removed (systemctl enable brings any back). No updates in the middle of an event; nothing here uses snaps, cloud-init,
+# multipath, iSCSI, LVM or RAID. Idle GPU + CPU package 30 -> 19 W on 2026-10-06 (GPU 22 -> 10 W; which unit woke it is not pinned down)
+sudo systemctl disable --now unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer \
+  snapd.service snapd.socket snapd.seeded.service snapd.apparmor.service snapd.autoimport.service snapd.core-fixup.service \
+  snapd.recovery-chooser-trigger.service snapd.system-shutdown.service snapd.snap-repair.timer lxd-installer.socket cloud-init-hotplugd.socket \
+  multipathd.service multipathd.socket open-iscsi.service iscsid.socket lvm2-monitor.service dm-event.socket lvm2-lvmpolld.socket \
+  blk-availability.service mdcheck_continue.timer mdcheck_start.timer mdmonitor-oneshot.timer udisks2.service ModemManager.service \
+  open-vm-tools.service vgauth.service apport.service apport-autoreport.path apport-autoreport.timer apport-forward.socket pollinate.service \
+  ubuntu-advantage.service ua-timer.timer ua-reboot-cmds.service motd-news.timer update-notifier-download.timer update-notifier-motd.timer \
+  fwupd-refresh.timer sysstat.service sysstat-collect.timer sysstat-summary.timer man-db.timer gpu-manager.service rsyslog.service \
+  systemd-networkd-wait-online.service 2>/dev/null || true
+sudo touch /etc/cloud/cloud-init.disabled
+
 step "done: a paced 4-pilot run to compare with WSL"
 echo 'cd ~/rt && GLUE=eng_linux/glue_mix.engine XFEAT=eng_linux/xfeat_fp32.engine RENDER=1 RCLIP=2 PACE=1 CUDA_SYNC=block \'
 echo '  SCENE=~/scenes/FDF-2026-R6b-spirula-web-dvr2.ply ~/mastenv/bin/python rt_track.py map_fdf-r6b-d05.npz,../fdf-r6b-d05/dvr_pinhole.mp4,pw/o_d05,truth-d05.json ...'

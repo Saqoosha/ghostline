@@ -391,6 +391,10 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   | **Mac Studio から有線の LAN で送る** | **14,081** | **122.8 / 163 / 46 W** | 30〜33 ms |
 
   受けるだけなら 1080p 30 fps を 1 枚も落とさず、送ってから届くまで 31.5 ms、1 枚の取り出し 0.6 ms
+- **会場用に Linux を絞った。** 時計は日本時間で持つ（`timedatectl set-local-rtc 1`。UTC のままだと Linux で起動したあと Windows が 9 時間遅れる）。
+  自動更新・snap・cloud-init・使わない記憶装置の仕組みなど 47 個を止めた（`rt_linux_setup.sh` の最後の段、消さずに止めるだけ）。何もしていないとき GPU＋CPU 30 → 19 W。
+  起動は 2 分 10 秒で、うち BIOS が 1 分 30 秒。Linux 側は initramfs から systemd に移る所で約 20 秒止まり、ログから原因は読めない（未調査）。
+  1 度だけ Linux の再起動が終了処理の最後で固まった（JetKVM の ATX の Reset で戻した）。その後 3 回は再現しない
 - **裏で起動した tracker は止めの合図を受けなかった。** 非対話のシェルが裏で起動したプロセスは SIGINT を無視する設定で始まり、Python はそれを引き継ぐ。
   `rt_track.py` で SIGINT と SIGTERM を明示的に受けるようにした（止めると集計が書かれる）
   `CUDA_SYNC=block` は Linux でも効く（4 人で CPU 49 → 16 W）が、1 周が 11.5 → 26 ms と倍以上になって 1 人あたりの Hz が落ちるので使わない
