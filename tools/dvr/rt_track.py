@@ -73,10 +73,10 @@ GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30),
 # pilot), LENS_N frames with each - the one it has for half of them, the other for all of its own, the one it has for the rest: a
 # trial starts when the inliers drop, often as the track is being lost, and with the two one after the other only the first scored
 # the dip (an upgrade cell went to stock on 0 / 105). After each change LENS_SKIP frames are not counted: from upgrade to stock the
-# track is lost and found again by relocalizing some 20 frames later (with 5, a stock cell scored 14 with stock). It keeps the one whose mean inliers are at least 1.3x the other's and 30 or more (an unsolved
-# frame counts 0) - otherwise it stays and tries later. Later means: the last 45 frames averaged under LENS_LOW, at most every
-# LENS_AGAIN s, doubling (up to 320 s) when the trial changes nothing. Not solving for 3 s' worth of frames after the picture came
-# on: the other definition gets its turn.
+# track is lost and found again by relocalizing some 20 frames later (with 5, a stock cell scored 14 with stock). It keeps the one
+# whose mean inliers are at least 1.3x the other's and 30 or more (an unsolved frame counts 0) - otherwise it stays and tries
+# later. Later means: the last 45 frames averaged under LENS_LOW, at most every LENS_AGAIN s, doubling (up to 320 s) when the trial
+# changes nothing. Not solving for 3 s' worth of frames after the picture came on: the other definition gets its turn.
 LENS_N, LENS_SKIP, LENS_LOW, LENS_AGAIN = int(E("LENS_N", 12)), int(E("LENS_SKIP", 20)), E("LENS_LOW", 100), E("LENS_AGAIN", 20)
 # MAXFPS (0 = all): an NDI source faster than this (the Event VRX sends 60 fps) is thinned to it by its timestamps. Every cycle takes the
 # newest frame, so a 60 fps feed would otherwise be processed at 43-54 Hz per cell for +35% GPU power (three cells 125 -> 172 W) and no
@@ -269,7 +269,8 @@ class Stream:
     def lens_plan(self):                             # [lens, frames] in order: this one, each other one, this one again
         return [[self.li, LENS_N // 2], *([j, LENS_N] for j in range(len(self.lenses)) if j != self.li), [self.li, LENS_N - LENS_N // 2]]
     def lens_step(self, inl):                        # main thread, after every processed frame: its inliers, 0 when it was not solved
-        if self.trial is None:
+        t = self.trial                                   # read once: the reader thread ends a trial when the picture goes
+        if t is None:
             self.recent.append(inl); self.okrun = self.okrun + 1 if inl else 0
             if self.want and time.perf_counter() - self.lens_t > self.again:   # (not while a trial is cooling down)
                 self.waited += 1
@@ -278,8 +279,7 @@ class Stream:
             elif time.perf_counter() - self.lens_t > self.again and len(self.recent) == self.recent.maxlen and np.mean(self.recent) < LENS_LOW:
                 self.trial = dict(skip=0, was=self.li, got=[[] for _ in self.lenses], plan=self.lens_plan())
             return
-        t = self.trial
-        if t["skip"]: t["skip"] -= 1; return             # frames mapped with the definition before are still on their way through
+        if t["skip"]: t["skip"] -= 1; return             # LENS_SKIP: the track is still coming back after the change
         t["got"][self.li].append(inl); t["plan"][0][1] -= 1
         if t["plan"][0][1] > 0: return
         t["plan"].pop(0)
