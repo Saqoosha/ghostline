@@ -203,7 +203,8 @@ async function pollPreview() {
 let courseKey = null, courseBox = null;
 async function loadCourse(name, scene) {
   const key = name + "|" + scene; if (!name || key === courseKey) return; courseKey = key;
-  const r = await fetch("/api/map?name=" + encodeURIComponent(name)); if (!r.ok) return;
+  const r = await fetch("/api/map?name=" + encodeURIComponent(name)).catch(() => null);
+  if (!r || !r.ok) { $("err").textContent = "地図を読めない: " + (r ? (await r.json().catch(() => ({}))).error || r.status : "サーバーに届かない"); return; }
   const c = await r.json(); if (key !== courseKey) return;
   courseBox = c.box; $("top").setAttribute("viewBox", c.box.join(" ")); $("top").parentElement.style.aspectRatio = c.box[2] / c.box[3];
   $("course").setAttribute("d", c.pts.map(p => `M${p[0]},${p[1]}h0`).join("")); scale();
@@ -213,7 +214,8 @@ async function loadCourse(name, scene) {
   const url = `/api/topview.jpg?map=${encodeURIComponent(name)}&scene=${encodeURIComponent(scene)}`;
   for (let i = 0; scene && i < 40 && key === courseKey; i++) {
     const t = await fetch(url); if (t.status === 200) { img.setAttribute("href", URL.createObjectURL(await t.blob())); $("top").classList.add("pic"); break; }
-    if (t.status !== 202) break; await new Promise(f => setTimeout(f, 2000));
+    if (t.status !== 202) { $("err").textContent = "真上からの絵: " + ((await t.json().catch(() => ({}))).error || t.status); break; }
+    await new Promise(f => setTimeout(f, 2000));
   }
 }
 function scale() {
@@ -222,7 +224,7 @@ function scale() {
 }
 addEventListener("resize", scale);
 // Positions as they are solved, straight from the tracker's own stream (its PUSH port): every answer, so the trails move at the video's
-// rate instead of once a second. If that port cannot be reached, the trail in the state is drawn instead.
+// rate instead of once a second. When no row has come for 2.5 s (the port unreachable, or a gap), the state's trail is drawn instead.
 const live = {}, names = {}, held = {}; let es = null, lastRow = 0, dirty = true;   // live: cell -> [[x, z, when it arrived (ms), cut?]], oldest first
 // An answer that would need more than VMAX from the last drawn point is held back: alone it is a stray answer and is dropped; if the
 // next one continues from it the pilot really is there (found again elsewhere), and the trail goes on from it without a line across.
@@ -336,8 +338,10 @@ for (const [cell] of CELLS) $("on-" + cell).addEventListener("change", () => $("
 
 async function post(path, body) {
   $("err").textContent = "";
-  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
-  if (!r.ok) $("err").textContent = (await r.json()).error || r.statusText;
+  try {
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    if (!r.ok) $("err").textContent = (await r.json().catch(() => ({}))).error || `${r.status} ${r.statusText}`;
+  } catch (e) { $("err").textContent = "サーバーに届かない: " + e.message; }
   poll();
 }
 const start = () => post("/api/start", {

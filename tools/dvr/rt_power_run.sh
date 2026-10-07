@@ -1,5 +1,6 @@
 #!/bin/bash
 # rt_power_run.sh (from rt_power.ps1) <tag> <mode: s1|s4|idle> [KEY=VAL ...] - the tracker with every output line stamped with epoch seconds
+export PACE=${PACE:-1}                           # a recording is walked at its own rate: without it the GPU is kept full and the power reads high
 cd /mnt/c/Users/saqoosha/VDGS/dvr/rt
 tag=$1; mode=$2; shift 2
 SC=/mnt/c/Users/saqoosha/VDGS/scenes/FDF-2026-R6b-spirula-web-dvr2.ply

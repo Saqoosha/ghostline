@@ -12,7 +12,7 @@ while sleep 5; do
   read_gpu; if high; then n=$((n + 5)); else n=0; fi
   [ $n -lt "$SECS" ] && continue
   before=$w; echo suspend > /proc/driver/nvidia/suspend && echo resume > /proc/driver/nvidia/suspend
-  sleep 30; read_gpu; n=0                # P0 at 56 W for about 10 s after the resume, then P8 again
+  sleep 30; read_gpu; n=0                # P0 for about 10 s after the resume, then P8 again
   if high; then echo "$before W in P8: suspend/resume did not help ($w W), next try in $hold s"; sleep $hold; hold=$((hold < 1800 ? hold * 2 : 3600))
   else echo "$before W in P8: suspend/resume -> $w W ($ps)"; hold=60; fi
 done

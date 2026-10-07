@@ -1,5 +1,6 @@
 #!/bin/bash
 # rt_power_linux.sh <tag> <powerlimit W> <s1|s4|idle> [KEY=VAL ...]: native Linux - GPU (nvidia-smi 200 ms) and CPU package (RAPL 1 s) power around a tracker run
+export PACE=${PACE:-1}                           # a recording is walked at its own rate: without it the GPU is kept full and the power reads high
 tag=$1; pl=$2; mode=$3; shift 3; cd ~/rt; mkdir -p pw; export PATH=$HOME/mastenv/bin:/usr/local/cuda-12.9/bin:$PATH
 sudo nvidia-smi -pl $pl >/dev/null; sleep 3
 nvidia-smi --query-gpu=timestamp,power.draw,clocks.gr,clocks.mem,utilization.gpu,temperature.gpu --format=csv,noheader,nounits -lms 200 -f pw/$tag.gpu.csv & G=$!

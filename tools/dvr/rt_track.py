@@ -10,7 +10,8 @@ arrived and the ones in between are dropped, as on a capture card. Scored agains
 poses60_pad.json; src ba / ba-fill / takeoff / ground). The page draws its own dot from the answers (viewer/src/live.ts,
 100 ms behind); the .json / _trail.json here are the extrapolated dot and trail, kept for scoring the replay.
 Live input (GRID=WxH): a 2x2 broadcast grid (the Event VRX over NDI -> OBS -> SRT) instead of files. The video field is
-"<url>|x:y:w:h|<cam.json>" (or "a.json+b.json": the lenses the pilots may fly, LENS_* below): one ffmpeg per url decodes it on a thread, and each frame's cell (the pilot's 4:3 fisheye
+"<url>|x:y:w:h|<cam.json>" (or "a.json+b.json": the lenses the pilots may fly, LENS_* below; rows then carry "lens", the index). One ffmpeg per url decodes it on a thread
+(ndi://<name> is received with cyndilib instead), and each frame's cell (the pilot's 4:3 fisheye
 stretched to the cell) is remapped straight to the map's pinhole size. Then the clock is the real one, each cycle takes
 the newest frame of every cell, and each answer records its latency from the frame's arrival (and, with SEND_T0 = the
 sender's wall-clock start and FRAME_CODE, from the moment it was sent - the two machines' clocks must agree).
@@ -39,7 +40,8 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import json, sys, time, math, collections, numpy as np, torch, cv2
 # CUDA_SYNC=block: a thread waiting on the GPU sleeps instead of spinning a core. Set on the primary context before torch
-# makes it (TensorRT shares it). Native Windows honours it (a .item() loop: 1.02 s of CPU in 1.04 s -> 0.00 s); WSL ignores it.
+# creates it. Native Windows honours it (CPU time 1.02 -> 0.00 s on a .item() loop); WSL ignores it; Linux honours it but the
+# cycle doubles (11.5 -> 26 ms for four pilots), so it is off there too - see docs/realtime-tracking.ja.md, "電池で回す".
 if os.environ.get("CUDA_SYNC"):
     import ctypes; _cu = ctypes.WinDLL("nvcuda.dll") if os.name == "nt" else ctypes.CDLL("libcuda.so.1"); _d = ctypes.c_int()
     assert _cu.cuInit(0) == 0 and _cu.cuDeviceGet(ctypes.byref(_d), 0) == 0
@@ -67,14 +69,15 @@ FLOW, FLOW_EVERY, FLOW_RESEED, FLOW_MIN = int(E("FLOW", 0)), int(E("FLOW_EVERY",
 GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30), E("SEND_T0", 0), os.environ.get("FRAME_CODE")
 # Two lenses (a live cell's camera field "a.json+b.json"): the HDZero Nano 90 flies with its stock lens or the upgrade one, and the
 # wrong definition leaves a third of the inliers and a wobble of 1-2 m (semifinal, first heat: 122 inliers and 0.72 m against 270 and
-# 0.11 m). So the cell tries them: once it is tracking after its picture came on (a new heat, maybe another pilot), LENS_N frames
-# with each, and keeps the one with more inliers. Later only when the last 45 frames averaged under LENS_LOW inliers (an unsolved
-# frame counts 0), at most every LENS_AGAIN s, twice as long each time the same one wins again. Not tracking for 3 s after the picture
-# came on: the other definition gets its turn.
+# 0.11 m). So the cell tries them: once it has solved 5 frames in a row after its picture came on (SIGNAL; a new heat, maybe another
+# pilot), LENS_N frames with each, and keeps the one whose mean inliers are at least 1.3x the other's and 30 or more (an unsolved
+# frame counts 0) - otherwise it stays and tries later. Later means: the last 45 frames averaged under LENS_LOW, at most every
+# LENS_AGAIN s, doubling (up to 320 s) when the trial changes nothing. Not solving for 3 s' worth of frames after the picture came
+# on: the other definition gets its turn.
 LENS_N, LENS_LOW, LENS_AGAIN = int(E("LENS_N", 12)), E("LENS_LOW", 100), E("LENS_AGAIN", 20)
 # MAXFPS (0 = all): an NDI source faster than this (the Event VRX sends 60 fps) is thinned to it by its timestamps. Every cycle takes the
-# newest frame, so a 60 fps feed would otherwise be processed at up to 60 Hz per cell for more power (one pilot: 110 W at 30, 149 W at 60)
-# and no better dot (the page draws 100 ms late, interpolated). GRID_FPS is then the thinned rate.
+# newest frame, so a 60 fps feed would otherwise be processed at 43-54 Hz per cell for +35% GPU power (three cells 125 -> 172 W) and no
+# better dot (the page draws 100 ms late, interpolated). The caller passes GRID_FPS as the thinned rate (rt_control.py does).
 MAXFPS = E("MAXFPS", 0)
 # PUSH (port): every answer goes out the moment it is solved, as server-sent events (one JSON object per event: the
 # .jsonl row plus "stream" and "fps"), for the live page (viewer/live.html). 0 = off.
@@ -153,6 +156,8 @@ class GridSource:                                   # one decoded live video; it
             if rc: print(f"{self.url}: decoder exited with {rc}", flush=True)
     def run_ndi(self):
         try: self.read_ndi()
+        except Exception:
+            import traceback; traceback.print_exc(); self.failed = True   # the loop then ends as if the feed had: say so in the exit code
         finally: self.ended = True
     def read_ndi(self):
         # cyndilib (pip; it bundles libndi) with the FrameSync API, polled every 2 ms: it hands over the newest frame, and a frame
@@ -174,7 +179,7 @@ class GridSource:                                   # one decoded live video; it
             ts = vf.get_timestamp_posix() if vf.xres else None
             if ts and ts != last:
                 last = ts
-                if MAXFPS and ts - kept < 0.9 / MAXFPS: continue   # too soon after the last frame kept: this one is thinned out
+                if MAXFPS and 0 <= ts - kept < 0.9 / MAXFPS: continue   # too soon after the last frame kept: this one is thinned out
                 kept = ts; t, tw = time.perf_counter(), time.time(); w, h = vf.get_resolution()
                 full = cv2.cvtColor(vf.get_array().reshape(h, w, 4), cv2.COLOR_BGRA2BGR)
                 if (w, h) != (self.W, self.H): full = cv2.resize(full, (self.W, self.H), interpolation=cv2.INTER_AREA)
@@ -224,7 +229,8 @@ class Stream:
         if self.live:                               # cell pixel for every pinhole pixel of the map's size: 4:3 fisheye stretched to the cell
             x0, y0, w, h = self.rect; Km = self.K; self.lenses = []   # per camera definition: (the cell's map, the valid mask, its name)
             for cj in camjs:
-                f2 = json.load(open(cj))["source_fisheye"]; K2 = np.array([[f2["fx"], 0, f2["cx"]], [0, f2["fy"], f2["cy"]], [0, 0, 1]]); k2 = np.array(f2["k"])
+                c2 = json.load(open(cj)); f2 = c2["source_fisheye"]; K2 = np.array([[f2["fx"], 0, f2["cx"]], [0, f2["fy"], f2["cy"]], [0, 0, 1]]); k2 = np.array(f2["k"])
+                if (c2["width"], c2["height"]) != (W, H): raise ValueError(f"{cj}: {c2['width']}x{c2['height']}, the first definition is {W}x{H}")
                 mx, my = cv2.fisheye.initUndistortRectifyMap(K2, k2, np.eye(3), Km, (RW, RH), cv2.CV_32FC1)
                 a1, a2 = cv2.fisheye.initUndistortRectifyMap(K2, k2, np.eye(3), Kfull, (W, H), cv2.CV_16SC2)
                 qv = T(cv2.resize((cv2.erode(cv2.remap(osd, a1, a2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST)).bool()
@@ -242,12 +248,14 @@ class Stream:
         self.N = len(self.frames)
         print(f"{self.prefix}: {self.N} frames at {self.fps} fps, {len(self.m['pos'])} keyframes", flush=True)
     def push(self, n, full, t, tw):                  # reader thread: a new frame of the source
-        if SIGNAL:                                  # no picture in the cell: no frame, so a quiet cell costs nothing
+        if SIGNAL:                                  # no picture in the cell: no frame, so a quiet cell costs only this test
             on = has_signal(full[self.rect[1]:self.rect[1] + self.rect[3], self.rect[0]:self.rect[0] + self.rect[2]])
             self.flip = self.flip + 1 if on != self.signal else 0   # logged once it has held 0.5 s; a weak signal flickers
             if self.flip >= self.fps / 2:
                 self.signal, self.flip = on, 0; print(f"{self.prefix}: signal {'on' if on else 'off'}", flush=True)
-                if on and len(self.lenses) > 1: self.want, self.waited, self.again = True, 0, LENS_AGAIN   # a new heat: the pilot in this cell may have changed
+                if len(self.lenses) > 1:                # a new heat: the pilot in this cell may have changed; a trial does not outlive the picture
+                    if on: self.want, self.waited, self.again = True, 0, LENS_AGAIN
+                    else: self.trial = None
             if not on: return
         mx, my = self.cellmap
         self.frames[n] = cv2.cvtColor(cv2.remap(full, mx, my, cv2.INTER_LINEAR), cv2.COLOR_BGR2RGB)
@@ -275,7 +283,7 @@ class Stream:
         shown = ' / '.join(f'{m:.0f}' for m in mean); self.trial, self.lens_t = None, time.perf_counter(); self.recent.clear()
         if mean[best] < 30 or mean[best] < 1.3 * mean[rank[1]]:   # nothing solved, or too close to call (76 / 84 once picked the wrong one): stay, try again once tracking
             if self.li != t["was"]: self.set_lens(t["was"])
-            self.want, self.waited = True, 0; print(f"{self.prefix}: lens? ({shown} inliers), stays {self.lenses[self.li][2]}", flush=True); return
+            self.again = min(max(5, self.again) * 2, 320); print(f"{self.prefix}: lens? ({shown} inliers), stays {self.lenses[self.li][2]}", flush=True); return
         self.again = LENS_AGAIN if best != t["was"] else min(self.again * 2, 320)
         if best != self.li: self.set_lens(best)
         print(f"{self.prefix}: lens {self.lenses[best][2]} ({shown} inliers)", flush=True)
@@ -665,4 +673,4 @@ print("RT-DONE", flush=True)
 # A live input's reader thread is still inside the decoder or the NDI library here, and the interpreter's teardown around it
 # aborts now and then ("terminate called without an active exception", exit -6; 1 stop in 5 over NDI). Everything is
 # written by now, so leave without the teardown.
-if any(s.live for s in streams): os._exit(0)
+if any(s.live for s in streams): os._exit(1 if any(getattr(s.src, "failed", False) for s in streams if s.live) else 0)

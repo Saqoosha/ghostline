@@ -1,9 +1,10 @@
 #!/bin/bash
 # rt_linux_setup.sh: the live tracker on native Ubuntu 24.04 (the 4090 box's 150 GiB on the 750 EVO), as WSL's ~/mastenv.
-# Run as saqoosha with sudo after a plain Ubuntu Server install. Steps are re-runnable; each says what it waits for.
+# Run as saqoosha with sudo after a plain Ubuntu Server install. Steps are re-runnable.
 # Why native: under WSL every blocking CUDA call spins a core (BLOCKING_SYNC is ignored) and each CUDA call crosses to
 # Windows as an ioctl - see docs/realtime-tracking.ja.md, "電池で回す".
 set -euo pipefail
+[ "$EUID" -ne 0 ] || { echo "run as the operator (it uses sudo where needed): as root the control page would run as root"; exit 1; }
 step() { printf '\n== %s\n' "$*"; }
 
 step "packages (build tools, GStreamer with SRT for the live input, ffmpeg, avahi so NDI finds its sources over mDNS)"
@@ -47,7 +48,7 @@ mkdir -p ~/.cache/torch && [ -d ~/.cache/torch/hub ] || cp -r /mnt/c/Users/saqoo
 step "working copy ~/rt: C: is read-only, so the tracker runs from a copy (about 3.5 GB: the test's maps and truths, the scene, the flights)"
 mkdir -p ~/rt/pw ~/scenes
 # not all of rt/ (39 GB of earlier runs): the scripts, the four maps, the truths
-(cd /mnt/c/Users/saqoosha/VDGS/dvr/rt && cp --update=none *.py map_fdf-r6b-d05.npz map_race-sf-*.npz truth-*.json race-sf-*.json scan_cameras.json ~/rt/)
+(cd /mnt/c/Users/saqoosha/VDGS/dvr/rt && cp --update=older *.py ~/rt/ && cp --update=none map_fdf-r6b-d05.npz map_race-sf-*.npz truth-*.json race-sf-*.json scan_cameras.json ~/rt/)   # a newer tracker replaces the old one
 cp --update=none /mnt/c/Users/saqoosha/VDGS/scenes/FDF-2026-R6b-spirula-web-dvr2.ply ~/scenes/
 for f in fdf-r6b-d05 race-sf-knt race-sf-saqoosha race-sf-sena; do
   mkdir -p ~/$f && cp --update=none /mnt/c/Users/saqoosha/VDGS/dvr/$f/dvr_pinhole.mp4* ~/$f/
@@ -94,7 +95,7 @@ sudo systemctl daemon-reload; sudo systemctl enable --now ghostline-gpu-idle.ser
 
 step "the control page (rt_control.py): start / stop the tracker on an NDI source from a browser, http://<this box>:8080"
 cp "$(dirname "$0")/rt_control.py" "$(dirname "$0")/rt_control.html" "$(dirname "$0")/rt_topview.py" ~/rt/
-cp -r "$(dirname "$0")/../../data/dvr/cams" ~/rt/   # the two lens definitions: the page offers them together and the tracker picks per cell
+cp -r "$(dirname "$0")/../../data/dvr/cams" ~/rt/   # the lens definitions: the page offers them together and the tracker picks per cell
 sudo tee /etc/systemd/system/ghostline-control.service > /dev/null <<UNIT
 [Unit]
 Description=ghostline: the live tracker's control page
@@ -106,8 +107,9 @@ WorkingDirectory=$HOME/rt
 ExecStart=$HOME/mastenv/bin/python -u rt_control.py
 Restart=always
 RestartSec=5
-# stopping the service stops the tracker it started; the tracker writes its files on TERM
-TimeoutStopSec=45
+# stopping the service: TERM to the page only (KillMode=mixed), which stops the tracker and waits for its files; the rest is killed after the timeout
+KillMode=mixed
+TimeoutStopSec=50
 
 [Install]
 WantedBy=multi-user.target
@@ -115,5 +117,5 @@ UNIT
 sudo systemctl daemon-reload; sudo systemctl enable --now ghostline-control.service
 
 step "done: a paced 4-pilot run to compare with WSL"
-echo 'cd ~/rt && GLUE=eng_linux/glue_mix.engine XFEAT=eng_linux/xfeat_fp32.engine RENDER=1 RCLIP=2 PACE=1 CUDA_SYNC=block \'
+echo 'cd ~/rt && GLUE=eng_linux/glue_mix.engine XFEAT=eng_linux/xfeat_fp32.engine RENDER=1 RCLIP=2 PACE=1 \'
 echo '  SCENE=~/scenes/FDF-2026-R6b-spirula-web-dvr2.ply ~/mastenv/bin/python rt_track.py map_fdf-r6b-d05.npz,../fdf-r6b-d05/dvr_pinhole.mp4,pw/o_d05,truth-d05.json ...'

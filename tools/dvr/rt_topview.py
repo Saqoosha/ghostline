@@ -3,7 +3,7 @@ and map and keeps the file). An orthographic camera looking down - x east to the
 so a pixel is a fixed length on the ground and the page lays positions over it without a projection.
 usage (mastenv): rt_topview.py scene.ply out.jpg x0 z0 width height y_top [pixels per metre, 10]
   x0 z0 width height: the ground rectangle, metres; y_top: the camera's height. Splats above it (sky, the tops of far trees) are
-  behind the camera and left out, so it should sit just over the highest flight."""
+  behind the camera and left out; rt_control.py uses the map's median keyframe height + 30 m."""
 import sys, numpy as np, torch, cv2
 from gsplat import rasterization
 from rt_render import Scene

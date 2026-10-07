@@ -2,12 +2,13 @@
 # rt_lenstest.sh <tag> <start s> <seconds> [KEY=VAL ...]: the semifinal grid from this box into four cells, each offered both lens
 # definitions - which one does every cell settle on in every heat, and how well does it track?
 tag=$1; ss=$2; dur=$3; shift 3; cd ~/rt; export PATH=$HOME/mastenv/bin:/usr/local/cuda-12.9/bin:$PATH; mkdir -p camvar; rm -f camvar/${tag}_*
-U="srt://0.0.0.0:9000?mode=listener&latency=80000"; C="cams/hdzero-nano90-upgrade-lens.json+cams/hdzero-nano90-stock-lens.json"; M=map_fdf-r6b-d05.npz
+U="srt://127.0.0.1:9000?mode=listener&latency=80000"; C="cams/hdzero-nano90-upgrade-lens.json+cams/hdzero-nano90-stock-lens.json"; M=map_fdf-r6b-d05.npz
 env "$@" SIGNAL=1 GRID=1280x720 GRID_FPS=30 GLUE=eng_linux/glue_mix.engine XFEAT=eng_linux/xfeat_fp32.engine RENDER=1 RCLIP=2 SCENE=$HOME/scenes/FDF-2026-R6b-spirula-web-dvr2.ply \
-  python -u rt_track.py "$M,$U|0:0:640:360|$C,camvar/${tag}_tl" "$M,$U|640:0:640:360|$C,camvar/${tag}_tr" "$M,$U|0:360:640:360|$C,camvar/${tag}_bl" "$M,$U|640:360:640:360|$C,camvar/${tag}_br" 2>&1 \
-  | while IFS= read -r l; do printf '%s %s\n' "$(date +%s.%N)" "$l"; done > camvar/$tag.log &
-until grep -q listening camvar/$tag.log 2>/dev/null; do sleep 2; done
-T=$(ps -eo pid,cmd | grep "[p]ython -u rt_track.py $M" | awk '{print $1}' | head -1); t0=$(date +%s.%N)
+  python -u rt_track.py "$M,$U|0:0:640:360|$C,camvar/${tag}_tl" "$M,$U|640:0:640:360|$C,camvar/${tag}_tr" "$M,$U|0:360:640:360|$C,camvar/${tag}_bl" "$M,$U|640:360:640:360|$C,camvar/${tag}_br" \
+  > >(while IFS= read -r l; do printf '%s %s\n' "$(date +%s.%N)" "$l"; done > camvar/$tag.log) 2>&1 &
+T=$!                                                 # the tracker itself (the timestamping reader is a process substitution)
+until grep -q listening camvar/$tag.log 2>/dev/null; do sleep 2; kill -0 $T 2>/dev/null || { tail -5 camvar/$tag.log; exit 1; }; done
+t0=$(date +%s.%N)
 ffmpeg -v error -re -ss $ss -t $dur -i ~/semi.MOV -an -c:v copy -f mpegts "srt://127.0.0.1:9000?pkt_size=1316&latency=80000"
 sleep 2; kill -TERM $T; sleep 6
 awk -v t0=$t0 -v ss=$ss '/ lens | signal o/ { printf "%6.1f s  %s\n", $1 - t0 + ss, substr($0, index($0, $2)) }' camvar/$tag.log

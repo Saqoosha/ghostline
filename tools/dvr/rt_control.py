@@ -7,7 +7,7 @@ usage (mastenv, from the folder with rt_track.py, the maps and the engines): pyt
 env: PORT (8080), PUSH (8765: the tracker's answers, also what viewer/live.html reads), ENG (eng_linux),
      CONF (~/.ghostline-control.json: the last start, shown again when the page opens)
 No login: whoever reaches the port can start and stop the tracker. Keep it on the venue LAN / Tailscale."""
-import collections, glob, http.server, json, os, re, signal, subprocess, sys, threading, time, urllib.parse, urllib.request
+import collections, glob, http.server, json, os, re, signal, subprocess, sys, threading, time, traceback, urllib.parse, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
 PORT, PUSH, ENG, CONF = int(E("PORT", 8080)), int(E("PUSH", 8765)), E("ENG", "eng_linux"), os.path.expanduser(E("CONF", "~/.ghostline-control.json"))
 CELLS = ("tl", "tr", "bl", "br")                    # the grid's cells, row by row
@@ -54,7 +54,7 @@ preview = Preview()
 
 courses = {}
 def course(name):
-    """the map's keyframes seen from above: their positions ([x east, z south] in metres, thinned to about 700) show where the course
+    """the map's keyframes seen from above: their positions ([x east, z south] in metres, thinned to 700-1,400) show where the course
     runs; box is the ground the page draws (x0, z0, width, height), ytop the height the scan is looked down on from"""
     if name not in options()["maps"]: raise ValueError("地図が見つからない")
     if name not in courses:
@@ -67,14 +67,15 @@ def course(name):
                              ytop=round(float(np.median(y)) + 30, 1))
     return courses[name]
 
-rendering = set()
+rendering, failed = set(), set()
 def topview(name, scene):
     """the scan from straight above over the course's box (rt_topview.py, a few seconds, once per scene and map; the file is kept
-    in live/). Returns the file, or None while it is being rendered."""
+    in live/). Returns the file, None while it is being rendered, and raises once a render has failed (not retried)."""
     c = course(name)
     if scene not in options()["scenes"]: raise ValueError("シーンが見つからない")
     stem = lambda f: re.sub(r"[^A-Za-z0-9_.-]", "_", os.path.splitext(os.path.basename(f))[0]); out = f"{HERE}/live/topview-{stem(scene)}-{stem(name)}-{'_'.join(str(round(v)) for v in c['box'])}.jpg"
     if os.path.exists(out): return out
+    if out in failed: raise ValueError("真上からの絵を描けなかった（ログ参照）")
     with lock:
         if out in rendering: return None
         rendering.add(out)
@@ -82,20 +83,24 @@ def topview(name, scene):
         os.makedirs(HERE + "/live", exist_ok=True); part = out[:-4] + ".part.jpg"
         r = subprocess.run([sys.executable, "rt_topview.py", scene, part, *map(str, c["box"]), str(c["ytop"]), f"{min(16, 1600 / c['box'][2]):.2f}"], cwd=HERE, capture_output=True, text=True,
                            env=dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}"))
-        if r.returncode == 0 and os.path.exists(part): os.replace(part, out)
-        else: print("topview failed:", r.stderr[-400:], flush=True); time.sleep(30)   # a broken scene is not retried on every poll
-        rendering.discard(out)
+        try:
+            if r.returncode == 0 and os.path.exists(part): os.replace(part, out)
+            else: failed.add(out); print("topview failed:", r.stderr[-400:], flush=True)
+        finally: rendering.discard(out)
     threading.Thread(target=run, daemon=True).start()
 
+_opt = [0.0, None]
 def options():
+    if time.time() - _opt[0] < 2 and _opt[1]: return _opt[1]   # every open page asks once a second: the globs and the finder are read at most every 2 s
     rel = lambda ps: sorted(os.path.relpath(p, HERE) for p in ps)
     try: src = sorted(finder.get_source_names()) if finder else []
     except Exception: src = []
     # the lenses the pilots may fly; offered together, the tracker picks per cell (LENS_* in rt_track.py). A cell starts on the first:
     # the upgrade lens, which most pilots fly (7 of 8 in the FDF semifinal)
     lenses = sorted(rel(glob.glob(HERE + "/cams/*.json")), key=lambda f: ("upgrade" not in f, f))
-    return dict(maps=rel(glob.glob(HERE + "/map_*.npz")), cams=(["+".join(lenses)] if len(lenses) > 1 else []) + lenses + rel(glob.glob(HERE + "/../*/dvr_pinhole.mp4.json")),
-                scenes=sorted(glob.glob(os.path.expanduser("~/scenes/*.ply"))), sources=src)
+    _opt[:] = [time.time(), dict(maps=rel(glob.glob(HERE + "/map_*.npz")), cams=(["+".join(lenses)] if len(lenses) > 1 else []) + lenses + rel(glob.glob(HERE + "/../*/dvr_pinhole.mp4.json")),
+                                  scenes=sorted(glob.glob(os.path.expanduser("~/scenes/*.ply"))), sources=src)]
+    return _opt[1]
 
 def probe(name):
     """the source's full name, frame size and rate, read off its first frame: the tracker's clock runs on the rate, so it is not typed in"""
@@ -116,6 +121,7 @@ def probe(name):
     return src.name, w, h, fps
 
 def start(c):
+    if not isinstance(c, dict) or not all(isinstance(x, dict) for x in c.get("cells", [])): raise ValueError("JSON の形がおかしい")
     o = options(); src = str(c.get("source", "")).strip()
     if not src or re.search(r"[,|]", src): raise ValueError("NDI の送り手の名前が要る（, と | は使えない）")
     if c.get("cam") not in o["cams"]: raise ValueError("カメラの定義が見つからない")
@@ -127,6 +133,7 @@ def start(c):
     with lock:
         if S["phase"] != "stopped": raise ValueError("もう動いている")
     full, w, h, fps = probe(src)
+    if not (fps > 0 and w > 0 and h > 0): raise ValueError(f"{full} の大きさか fps が読めない（{w}x{h}、{fps:g} fps）")
     if w % 2 or h % 2: raise ValueError(f"{full} は {w}x{h}：2×2 に割れない")
     cap = min(fps, 30)                                # the Event VRX sends 60 fps; 30 is what the accuracy and power were measured at, and all the dot needs
     specs = []
@@ -134,7 +141,7 @@ def start(c):
         if x.get("cell") not in CELLS: raise ValueError(f"{n}: マスの指定がおかしい")
         k = CELLS.index(x["cell"]); specs.append(f"{c['map']},ndi://{src}|{k % 2 * (w // 2)}:{k // 2 * (h // 2)}:{w // 2}:{h // 2}|{c['cam']},live/{n}")
     env = dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}",
-               SIGNAL="1", GRID=f"{w}x{h}", GRID_FPS=f"{cap:g}", MAXFPS=f"{cap:g}", PUSH=str(PUSH))
+               SIGNAL="1", GRID=f"{w}x{h}", GRID_FPS=f"{cap:g}", PUSH=str(PUSH), **({"MAXFPS": f"{cap:g}"} if cap < fps else {}))
     for k, f in (("GLUE", "glue_mix.engine"), ("XFEAT", "xfeat_fp32.engine")):
         if os.path.exists(f"{HERE}/{ENG}/{f}"): env[k] = f"{ENG}/{f}"
     if c.get("render"):
@@ -152,13 +159,18 @@ def start(c):
         S.update(phase="loading", proc=p, since=time.time(), exit=None, ndi=None, config=c, input=f"{w}×{h} · {fps:g} fps" + (f" → {cap:g}" if cap < fps else ""),
                  cells={n: dict(cell=x["cell"], signal=None, lens=None, rows=collections.deque(maxlen=600), last=None, trail=collections.deque(maxlen=150)) for x, n in zip(on, names)})
         S["log"].clear(); S["log"].append("$ rt_track.py " + " ".join(specs))
-    json.dump(c, open(CONF, "w"), ensure_ascii=False)
+    json.dump({k: c.get(k) for k in ("source", "map", "cam", "scene", "render", "ba", "extra", "cells")}, open(CONF, "w"), ensure_ascii=False)
     threading.Thread(target=watch, args=(p,), daemon=True).start(); threading.Thread(target=answers, args=(p,), daemon=True).start()
 
 def watch(p):                                       # the tracker's output: the log, and the lines that say how it is doing
-    for line in p.stdout:
-        line = line.rstrip()[:300]
-        with lock:
+    try:
+        for line in p.stdout: note(line.rstrip()[:300])
+    finally:
+        code = p.wait()
+        with lock: S.update(phase="stopped", proc=None, exit=code); S["log"].append(f"(終了、コード {code})")
+
+def note(line):
+    with lock:
             S["log"].append(line)
             if m := re.match(r"live/(.+): signal (on|off)$", line):
                 if m[1] in S["cells"]: S["cells"][m[1]]["signal"] = m[2] == "on"
@@ -166,8 +178,6 @@ def watch(p):                                       # the tracker's output: the 
                 if m[1] in S["cells"]: S["cells"][m[1]]["lens"] = m[2]
             elif m := re.search(r": receiving (.+)$", line): S["ndi"] = m[1]
             elif line == "listening" and S["phase"] == "loading": S["phase"] = "running"
-    code = p.wait()
-    with lock: S.update(phase="stopped", proc=None, exit=code); S["log"].append(f"(終了、コード {code})")
 
 def answers(p):                                     # the PUSH stream: one row per processed frame, "pos" when it was solved
     while p.poll() is None:
@@ -235,6 +245,7 @@ def state():
                               cells={c: [h["cells"].get(c) for h in hist] for c in CELLS}))
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    timeout = 10                                    # a client that stops sending does not hold a thread for ever
     def send(self, code, body, ctype="application/json"):
         body = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
         self.send_response(code); self.send_header("Content-Type", ctype + ("; charset=utf-8" if ctype.startswith(("text", "application")) else "")); self.send_header("Content-Length", str(len(body)))
@@ -259,15 +270,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         # JSON only: a page on another site can post a form here from the operator's browser, but not this content type
         if self.headers.get("Content-Type", "").split(";")[0] != "application/json": return self.send(415, dict(error="application/json only"))
+        n = int(self.headers.get("Content-Length", 0))
+        if n > 65536: return self.send(413, dict(error="too large"))
         try:
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            body = json.loads(self.rfile.read(n) or b"{}")
             if self.path == "/api/start": start(body)
             elif self.path == "/api/stop": stop()
             else: return self.send(404, dict(error="not found"))
             self.send(200, dict(ok=True))
         except (ValueError, KeyError, TypeError) as e: self.send(400, dict(error=str(e)))
+        except Exception as e: traceback.print_exc(); self.send(500, dict(error=f"{type(e).__name__}: {e}"))   # whatever it was, the page gets told
     def log_message(self, *a): pass
 
+def on_term(*_):                                   # systemctl stop: the tracker gets TERM and the time to write its files (KillMode=mixed in the unit)
+    p = S["proc"]
+    if p is not None:
+        try: p.send_signal(signal.SIGTERM); p.wait(40)
+        except Exception: pass
+    os._exit(0)
+signal.signal(signal.SIGTERM, on_term)
 threading.Thread(target=poll_gpu, daemon=True).start(); threading.Thread(target=sample, daemon=True).start()
 print(f"control page on :{PORT}", flush=True)
 http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

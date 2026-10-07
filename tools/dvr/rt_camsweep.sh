@@ -9,12 +9,12 @@ specs=()
 for v in "$@"; do
   python3 - "$v" <<'PY'
 import json, sys
-sx, sy, *ks = (float(a) for a in sys.argv[1].split(":")); c = json.load(open("../race-sf-sena/dvr_pinhole.mp4.json"))   # a third number scales the distortion's k1 (a fourth k2)
+sx, sy, *ks = (float(a) for a in sys.argv[1].split(":")); c = json.load(open("cams/hdzero-nano90-upgrade-lens.json"))   # a third number scales the distortion's k1 (a fourth k2)
 c["source_fisheye"]["fx"] *= sx; c["source_fisheye"]["fy"] *= sy
 for j, k in enumerate(ks): c["source_fisheye"]["k"][j] *= k
 json.dump(c, open(f"camvar/cam_{sys.argv[1].replace(':', '_')}.json", "w"))
 PY
-  n=${v//:/_}; specs+=("map_fdf-r6b-d05.npz,srt://0.0.0.0:9000?mode=listener&latency=80000|$rect|camvar/cam_$n.json,camvar/out_$n")
+  n=${v//:/_}; specs+=("map_fdf-r6b-d05.npz,srt://127.0.0.1:9000?mode=listener&latency=80000|$rect|camvar/cam_$n.json,camvar/out_$n")
 done
 SIGNAL=1 GRID=1280x720 GRID_FPS=30 GLUE=eng_linux/glue_mix.engine XFEAT=eng_linux/xfeat_fp32.engine RENDER=1 RCLIP=2 SCENE=$HOME/scenes/FDF-2026-R6b-spirula-web-dvr2.ply \
   python -u rt_track.py "${specs[@]}" > camvar/log.txt 2>&1 &
