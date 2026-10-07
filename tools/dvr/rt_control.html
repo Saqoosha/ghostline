@@ -204,8 +204,9 @@ let courseKey = null, courseBox = null;
 async function loadCourse(name, scene) {
   const key = name + "|" + scene; if (!name || key === courseKey) return; courseKey = key;
   const r = await fetch("/api/map?name=" + encodeURIComponent(name)).catch(() => null);
-  if (!r || !r.ok) { $("err").textContent = "地図を読めない: " + (r ? (await r.json().catch(() => ({}))).error || r.status : "サーバーに届かない"); return; }
+  if (!r || !r.ok) { courseKey = null; $("err").textContent = "地図を読めない: " + (r ? (await r.json().catch(() => ({}))).error || r.status : "サーバーに届かない"); return; }
   const c = await r.json(); if (key !== courseKey) return;
+  if ($("err").textContent.startsWith("地図を読めない")) $("err").textContent = "";
   courseBox = c.box; $("top").setAttribute("viewBox", c.box.join(" ")); $("top").parentElement.style.aspectRatio = c.box[2] / c.box[3];
   $("course").setAttribute("d", c.pts.map(p => `M${p[0]},${p[1]}h0`).join("")); scale();
   // under it, the scan seen from above: the server renders it once (a few seconds) and keeps it
@@ -213,7 +214,8 @@ async function loadCourse(name, scene) {
   for (const [k, v] of [["x", c.box[0]], ["y", c.box[1]], ["width", c.box[2]], ["height", c.box[3]]]) img.setAttribute(k, v);
   const url = `/api/topview.jpg?map=${encodeURIComponent(name)}&scene=${encodeURIComponent(scene)}`;
   for (let i = 0; scene && i < 40 && key === courseKey; i++) {
-    const t = await fetch(url); if (t.status === 200) { img.setAttribute("href", URL.createObjectURL(await t.blob())); $("top").classList.add("pic"); break; }
+    const t = await fetch(url).catch(() => null); if (!t) { courseKey = null; break; }
+    if (t.status === 200) { img.setAttribute("href", URL.createObjectURL(await t.blob())); $("top").classList.add("pic"); break; }
     if (t.status !== 202) { $("err").textContent = "真上からの絵: " + ((await t.json().catch(() => ({}))).error || t.status); break; }
     await new Promise(f => setTimeout(f, 2000));
   }

@@ -67,7 +67,7 @@ def course(name):
                              ytop=round(float(np.median(y)) + 30, 1))
     return courses[name]
 
-rendering, failed = set(), set()
+rendering, failed = set(), {}                    # failed: file -> when; tried again after 2 minutes (a render during a heat may hit a full GPU)
 def topview(name, scene):
     """the scan from straight above over the course's box (rt_topview.py, a few seconds, once per scene and map; the file is kept
     in live/). Returns the file, None while it is being rendered, and raises once a render has failed (not retried)."""
@@ -75,7 +75,7 @@ def topview(name, scene):
     if scene not in options()["scenes"]: raise ValueError("シーンが見つからない")
     stem = lambda f: re.sub(r"[^A-Za-z0-9_.-]", "_", os.path.splitext(os.path.basename(f))[0]); out = f"{HERE}/live/topview-{stem(scene)}-{stem(name)}-{'_'.join(str(round(v)) for v in c['box'])}.jpg"
     if os.path.exists(out): return out
-    if out in failed: raise ValueError("真上からの絵を描けなかった（ログ参照）")
+    if time.time() - failed.get(out, 0) < 120: raise ValueError("真上からの絵を描けなかった（ログ参照。2 分後にもう一度試す）")
     with lock:
         if out in rendering: return None
         rendering.add(out)
@@ -85,7 +85,7 @@ def topview(name, scene):
                            env=dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}"))
         try:
             if r.returncode == 0 and os.path.exists(part): os.replace(part, out)
-            else: failed.add(out); print("topview failed:", r.stderr[-400:], flush=True)
+            else: failed[out] = time.time(); print("topview failed:", r.stderr[-400:], flush=True)
         finally: rendering.discard(out)
     threading.Thread(target=run, daemon=True).start()
 
@@ -270,9 +270,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         # JSON only: a page on another site can post a form here from the operator's browser, but not this content type
         if self.headers.get("Content-Type", "").split(";")[0] != "application/json": return self.send(415, dict(error="application/json only"))
-        n = int(self.headers.get("Content-Length", 0))
-        if n > 65536: return self.send(413, dict(error="too large"))
         try:
+            n = int(self.headers.get("Content-Length", 0))
+            if n < 0 or n > 65536: return self.send(413, dict(error="bad size"))
             body = json.loads(self.rfile.read(n) or b"{}")
             if self.path == "/api/start": start(body)
             elif self.path == "/api/stop": stop()
@@ -285,7 +285,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 def on_term(*_):                                   # systemctl stop: the tracker gets TERM and the time to write its files (KillMode=mixed in the unit)
     p = S["proc"]
     if p is not None:
-        try: p.send_signal(signal.SIGTERM); p.wait(40)
+        try:
+            if S["phase"] != "stopping": p.send_signal(signal.SIGTERM)   # a second TERM would land in the tracker's write-out
+            p.wait(40)
         except Exception: pass
     os._exit(0)
 signal.signal(signal.SIGTERM, on_term)

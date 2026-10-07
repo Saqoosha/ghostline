@@ -153,7 +153,7 @@ class GridSource:                                   # one decoded live video; it
             self.ended = True
             try: rc = self.proc.wait(timeout=1)
             except subprocess.TimeoutExpired: rc = None
-            if rc: print(f"{self.url}: decoder exited with {rc}", flush=True)
+            if rc: print(f"{self.url}: decoder exited with {rc}", flush=True); self.failed = True   # and the exit code says so
     def run_ndi(self):
         try: self.read_ndi()
         except Exception:
@@ -235,7 +235,7 @@ class Stream:
                 a1, a2 = cv2.fisheye.initUndistortRectifyMap(K2, k2, np.eye(3), Kfull, (W, H), cv2.CV_16SC2)
                 qv = T(cv2.resize((cv2.erode(cv2.remap(osd, a1, a2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST)).bool()
                 self.lenses.append(((mx * w / W + x0, my * h / H + y0), qv, os.path.basename(cj)[:-5]))
-            self.trial, self.want, self.waited, self.okrun, self.lens_t, self.again, self.recent = None, len(camjs) > 1, 0, 0, 0.0, LENS_AGAIN, collections.deque(maxlen=45)
+            self.trial, self.want, self.waited, self.okrun, self.lens_t, self.again, self.recent = None, len(camjs) > 1, 0, 0, -1e9, LENS_AGAIN, collections.deque(maxlen=45)
             self.set_lens(0)
             self.frames, self.arrive, self.arrive_wall = {0: np.zeros((RH, RW, 3), np.uint8)}, {}, {}; self.N = 1; self.signal, self.flip = None, 0   # a blank frame for the warm-up
             src = sources.setdefault(url, GridSource(url)); src.cells.append(self); self.src = src
@@ -254,8 +254,8 @@ class Stream:
             if self.flip >= self.fps / 2:
                 self.signal, self.flip = on, 0; print(f"{self.prefix}: signal {'on' if on else 'off'}", flush=True)
                 if len(self.lenses) > 1:                # a new heat: the pilot in this cell may have changed; a trial does not outlive the picture
-                    if on: self.want, self.waited, self.again = True, 0, LENS_AGAIN
-                    else: self.trial = None
+                    if on: self.want, self.waited, self.again, self.lens_t, self.okrun = True, 0, LENS_AGAIN, -1e9, 0; self.recent.clear()
+                    elif self.trial is not None: self.set_lens(self.trial["was"]); self.trial = None
             if not on: return
         mx, my = self.cellmap
         self.frames[n] = cv2.cvtColor(cv2.remap(full, mx, my, cv2.INTER_LINEAR), cv2.COLOR_BGR2RGB)
@@ -266,7 +266,7 @@ class Stream:
     def lens_step(self, inl):                        # main thread, after every processed frame: its inliers, 0 when it was not solved
         if self.trial is None:
             self.recent.append(inl); self.okrun = self.okrun + 1 if inl else 0
-            if self.want:
+            if self.want and time.perf_counter() - self.lens_t > self.again:   # (not while a trial is cooling down)
                 self.waited += 1
                 if self.okrun >= 5: self.trial, self.want = dict(skip=0, was=self.li, got=[[] for _ in self.lenses]), False
                 elif self.waited > 3 * self.fps: self.set_lens((self.li + 1) % len(self.lenses)); self.waited = 0
@@ -283,7 +283,8 @@ class Stream:
         shown = ' / '.join(f'{m:.0f}' for m in mean); self.trial, self.lens_t = None, time.perf_counter(); self.recent.clear()
         if mean[best] < 30 or mean[best] < 1.3 * mean[rank[1]]:   # nothing solved, or too close to call (76 / 84 once picked the wrong one): stay, try again once tracking
             if self.li != t["was"]: self.set_lens(t["was"])
-            self.again = min(max(5, self.again) * 2, 320); print(f"{self.prefix}: lens? ({shown} inliers), stays {self.lenses[self.li][2]}", flush=True); return
+            self.again = min(max(5, self.again) * 2, 320); self.want, self.waited = True, 0   # again, once tracking and after the cool-down
+            print(f"{self.prefix}: lens? ({shown} inliers), stays {self.lenses[self.li][2]}", flush=True); return
         self.again = LENS_AGAIN if best != t["was"] else min(self.again * 2, 320)
         if best != self.li: self.set_lens(best)
         print(f"{self.prefix}: lens {self.lenses[best][2]} ({shown} inliers)", flush=True)
