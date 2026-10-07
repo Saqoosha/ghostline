@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ghostline top view</title>
+<style>
+  /* For an OBS browser source: the scan rendered from above with every pilot's trail and name on it, nothing else. The view fills
+     the source whatever its size, keeping the field's proportions (what does not fit is cut off the edges). Strokes and type are sized for 1080p.
+     Query: trail=<seconds kept, 12>, course=1 (the map's keyframes as dots over the picture). */
+  :root { --ink: #0c0f14; --tl: #ff2e63; --tr: #f59e0b; --bl: #12b76a; --br: #2f6bff;
+          --sans: "Helvetica Neue", -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body { font: 400 14px var(--sans); color: var(--ink); }
+  .top { position: absolute; overflow: hidden; }       /* sized by script: the box's proportions, covering the window, centred */
+  .top svg { display: block; width: 100%; height: 100%; }
+  #course { fill: none; stroke: rgba(255, 255, 255, .55); stroke-width: 3; stroke-linecap: round; vector-effect: non-scaling-stroke; display: none; }
+  body.course #course { display: block; }
+  #track { fill: none; stroke: rgba(255, 255, 255, .5); stroke-width: 5; stroke-dasharray: 18 14; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 2px rgba(0, 0, 0, .5)); }
+  #gate { fill: none; stroke: #fff; stroke-width: 12; stroke-linecap: round; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 3px rgba(0, 0, 0, .6)); }
+  #trails { filter: drop-shadow(0 0 1.5px #fff) drop-shadow(0 0 1.5px #fff) drop-shadow(0 0 3px #fff); }
+  #trails path { fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+  #trails path.now { stroke-width: 18; }
+  .tag { position: absolute; left: 0; top: 0; padding-left: 18px; transform: translateY(-50%); font: 600 26px/1 var(--sans); letter-spacing: .14em; white-space: nowrap;
+         pointer-events: none; opacity: 0; transition: opacity .4s; text-shadow: 0 0 3px #fff, 0 0 6px #fff, 0 0 12px #fff; }
+  .tag.on { opacity: 1; }
+  #err { position: absolute; left: 12px; bottom: 10px; font: 500 14px var(--sans); color: #d1301f; text-shadow: 0 0 3px #fff, 0 0 6px #fff; }
+</style>
+</head>
+<body>
+<div class="top" id="view"><svg id="top" preserveAspectRatio="xMidYMid meet"><image id="aerial" preserveAspectRatio="none"/><path id="course"/><path id="track"/><path id="gate"/><g id="trails"></g></svg><div id="tags"></div></div><div id="err"></div>
+<script src="rt_topview.js"></script>
+<script>
+const q = new URLSearchParams(location.search), $ = id => document.getElementById(id);
+if (q.get("course") === "1") document.body.classList.add("course");
+TopView.keep(1000 * (+q.get("trail") || 12));
+TopView.onError(m => { $("err").textContent = m; });
+// the view covers the window in the box's proportions, centred; the edges that do not fit are cut
+TopView.onFit(box => {
+  const W = innerWidth, H = innerHeight, a = box[2] / box[3], w = Math.max(W, H * a), h = w / a, v = $("view").style;
+  v.width = w + "px"; v.height = h + "px"; v.left = (W - w) / 2 + "px"; v.top = (H - h) / 2 + "px";
+});
+async function poll() {
+  try { const s = await (await fetch("/api/state")).json(); TopView.update(s, s.config && s.config.map, s.config && s.config.scene, s.config && s.config.track); $("err").textContent = $("err").textContent === "サーバーに届かない" ? "" : $("err").textContent; }
+  catch { $("err").textContent = "サーバーに届かない"; }
+}
+poll(); setInterval(poll, 1000);
+</script>
+</body>
+</html>
