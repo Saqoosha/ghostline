@@ -10,7 +10,7 @@ T=$!                                                 # the tracker itself (the t
 until grep -q listening camvar/$tag.log 2>/dev/null; do sleep 2; kill -0 $T 2>/dev/null || { tail -5 camvar/$tag.log; exit 1; }; done
 t0=$(date +%s.%N)
 ffmpeg -v error -re -ss $ss -t $dur -i ~/semi.MOV -an -c:v copy -f mpegts "srt://127.0.0.1:9000?pkt_size=1316&latency=80000"
-for i in $(seq 60); do kill -0 $T 2>/dev/null || break; sleep 1; done   # it ends by itself when the stream does; writing a long run takes a while
+for i in $(seq 300); do kill -0 $T 2>/dev/null || break; sleep 1; done   # it ends by itself when the stream does; writing a long run takes a while
 kill -TERM $T 2>/dev/null; wait $T 2>/dev/null; sleep 1
 awk -v t0=$t0 -v ss=$ss '/ lens\?? | signal o/ { printf "%6.1f s  %s\n", $1 - t0 + ss, substr($0, index($0, $2)) }' camvar/$tag.log
 python - $tag <<'PY'
