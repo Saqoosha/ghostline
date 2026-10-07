@@ -91,7 +91,9 @@ def options():
     rel = lambda ps: sorted(os.path.relpath(p, HERE) for p in ps)
     try: src = sorted(finder.get_source_names()) if finder else []
     except Exception: src = []
-    lenses = rel(glob.glob(HERE + "/cams/*.json"))  # the lenses the pilots may fly; offered together, the tracker picks per cell (LENS_* in rt_track.py)
+    # the lenses the pilots may fly; offered together, the tracker picks per cell (LENS_* in rt_track.py). A cell starts on the first:
+    # the upgrade lens, which most pilots fly (7 of 8 in the FDF semifinal)
+    lenses = sorted(rel(glob.glob(HERE + "/cams/*.json")), key=lambda f: ("upgrade" not in f, f))
     return dict(maps=rel(glob.glob(HERE + "/map_*.npz")), cams=(["+".join(lenses)] if len(lenses) > 1 else []) + lenses + rel(glob.glob(HERE + "/../*/dvr_pinhole.mp4.json")),
                 scenes=sorted(glob.glob(os.path.expanduser("~/scenes/*.ply"))), sources=src)
 
@@ -126,12 +128,13 @@ def start(c):
         if S["phase"] != "stopped": raise ValueError("もう動いている")
     full, w, h, fps = probe(src)
     if w % 2 or h % 2: raise ValueError(f"{full} は {w}x{h}：2×2 に割れない")
+    cap = min(fps, 30)                                # the Event VRX sends 60 fps; 30 is what the accuracy and power were measured at, and all the dot needs
     specs = []
     for x, n in zip(on, names):
         if x.get("cell") not in CELLS: raise ValueError(f"{n}: マスの指定がおかしい")
         k = CELLS.index(x["cell"]); specs.append(f"{c['map']},ndi://{src}|{k % 2 * (w // 2)}:{k // 2 * (h // 2)}:{w // 2}:{h // 2}|{c['cam']},live/{n}")
     env = dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}",
-               SIGNAL="1", GRID=f"{w}x{h}", GRID_FPS=f"{fps:g}", PUSH=str(PUSH))
+               SIGNAL="1", GRID=f"{w}x{h}", GRID_FPS=f"{cap:g}", MAXFPS=f"{cap:g}", PUSH=str(PUSH))
     for k, f in (("GLUE", "glue_mix.engine"), ("XFEAT", "xfeat_fp32.engine")):
         if os.path.exists(f"{HERE}/{ENG}/{f}"): env[k] = f"{ENG}/{f}"
     if c.get("render"):
@@ -146,7 +149,7 @@ def start(c):
         if S["phase"] != "stopped": raise ValueError("もう動いている")
         os.makedirs(HERE + "/live", exist_ok=True)
         p = subprocess.Popen([sys.executable, "-u", "rt_track.py", *specs], cwd=HERE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
-        S.update(phase="loading", proc=p, since=time.time(), exit=None, ndi=None, config=c, input=f"{w}×{h} · {fps:g} fps",
+        S.update(phase="loading", proc=p, since=time.time(), exit=None, ndi=None, config=c, input=f"{w}×{h} · {fps:g} fps" + (f" → {cap:g}" if cap < fps else ""),
                  cells={n: dict(cell=x["cell"], signal=None, lens=None, rows=collections.deque(maxlen=600), last=None, trail=collections.deque(maxlen=150)) for x, n in zip(on, names)})
         S["log"].clear(); S["log"].append("$ rt_track.py " + " ".join(specs))
     json.dump(c, open(CONF, "w"), ensure_ascii=False)

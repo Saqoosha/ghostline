@@ -25,7 +25,7 @@ env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s w
      side in its fit), PIPE (2, 1 with RENDER: overlap the next cycle's GPU work with this cycle's PnP, below),
      FLOW (0; 1 = carry points to the next frame with LK instead of matching, below), FLOW_EVERY (8), FLOW_RESEED (60), FLOW_MIN (30),
      PUSH (0; a port: answers out as server-sent events while it runs, for viewer/live.html),
-     INFO (0; 1 = rows carry H), BA (0; seconds of answers solved again together after every answer, below),
+     INFO (0; 1 = rows carry H), BA (0; seconds of answers solved again together after every answer, below), MAXFPS (0; thin a faster NDI source to this),
      GLUE / XFEAT (unset; TensorRT engines from rt_trt.py to match / find features with instead of PyTorch),
      PNP (poselib; magsac = OpenCV's USAC_MAGSAC, below),
      RENDER (0; 1 = while tracking, match a render of SCENE (.ply) at the prediction instead of keyframes, rt_render.py), RNEAR (1.0 m near plane),
@@ -72,6 +72,10 @@ GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30),
 # frame counts 0), at most every LENS_AGAIN s, twice as long each time the same one wins again. Not tracking for 3 s after the picture
 # came on: the other definition gets its turn.
 LENS_N, LENS_LOW, LENS_AGAIN = int(E("LENS_N", 12)), E("LENS_LOW", 100), E("LENS_AGAIN", 20)
+# MAXFPS (0 = all): an NDI source faster than this (the Event VRX sends 60 fps) is thinned to it by its timestamps. Every cycle takes the
+# newest frame, so a 60 fps feed would otherwise be processed at up to 60 Hz per cell for more power (one pilot: 110 W at 30, 149 W at 60)
+# and no better dot (the page draws 100 ms late, interpolated). GRID_FPS is then the thinned rate.
+MAXFPS = E("MAXFPS", 0)
 # PUSH (port): every answer goes out the moment it is solved, as server-sent events (one JSON object per event: the
 # .jsonl row plus "stream" and "fps"), for the live page (viewer/live.html). 0 = off.
 INFO = int(E("INFO", 0))                           # 1: every answer row carries "H", its 6x6 information (upper triangle, 21 numbers)
@@ -159,7 +163,7 @@ class GridSource:                                   # one decoded live video; it
         from cyndilib.receiver import Receiver
         from cyndilib.video_frame import VideoFrameSync
         from cyndilib.wrapper.ndi_recv import RecvColorFormat, RecvBandwidth
-        name = self.url[len("ndi://"):]; finder = Finder(); finder.open(); src = None
+        name = self.url[len("ndi://"):]; finder = Finder(); finder.open(); src = None; kept = -1e9
         while src is None:
             finder.wait(1); src = next((s for s in finder.iter_sources() if name in s.name), None)
         print(f"{self.url}: receiving {src.name}", flush=True)
@@ -169,7 +173,9 @@ class GridSource:                                   # one decoded live video; it
             rx.frame_sync.capture_video()
             ts = vf.get_timestamp_posix() if vf.xres else None
             if ts and ts != last:
-                last = ts; t, tw = time.perf_counter(), time.time(); w, h = vf.get_resolution()
+                last = ts
+                if MAXFPS and ts - kept < 0.9 / MAXFPS: continue   # too soon after the last frame kept: this one is thinned out
+                kept = ts; t, tw = time.perf_counter(), time.time(); w, h = vf.get_resolution()
                 full = cv2.cvtColor(vf.get_array().reshape(h, w, 4), cv2.COLOR_BGRA2BGR)
                 if (w, h) != (self.W, self.H): full = cv2.resize(full, (self.W, self.H), interpolation=cv2.INTER_AREA)
                 for s in self.cells: s.push(self.n, full, t, tw)
@@ -221,7 +227,7 @@ class Stream:
                 f2 = json.load(open(cj))["source_fisheye"]; K2 = np.array([[f2["fx"], 0, f2["cx"]], [0, f2["fy"], f2["cy"]], [0, 0, 1]]); k2 = np.array(f2["k"])
                 mx, my = cv2.fisheye.initUndistortRectifyMap(K2, k2, np.eye(3), Km, (RW, RH), cv2.CV_32FC1)
                 a1, a2 = cv2.fisheye.initUndistortRectifyMap(K2, k2, np.eye(3), Kfull, (W, H), cv2.CV_16SC2)
-                qv = T(cv2.resize((cv2.erode(cv2.remap(osd, a1, a2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST))
+                qv = T(cv2.resize((cv2.erode(cv2.remap(osd, a1, a2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST)).bool()
                 self.lenses.append(((mx * w / W + x0, my * h / H + y0), qv, os.path.basename(cj)[:-5]))
             self.trial, self.want, self.waited, self.okrun, self.lens_t, self.again, self.recent = None, len(camjs) > 1, 0, 0, 0.0, LENS_AGAIN, collections.deque(maxlen=45)
             self.set_lens(0)
@@ -265,11 +271,14 @@ class Stream:
         if len(t["got"][self.li]) < LENS_N: return
         todo = [j for j, g in enumerate(t["got"]) if not g]
         if todo: self.set_lens(todo[0]); t["skip"] = 5; return
-        mean = [float(np.mean(g)) for g in t["got"]]; best = int(np.argmax(mean))
+        mean = [float(np.mean(g)) for g in t["got"]]; rank = sorted(range(len(mean)), key=mean.__getitem__, reverse=True); best = rank[0]
+        shown = ' / '.join(f'{m:.0f}' for m in mean); self.trial, self.lens_t = None, time.perf_counter(); self.recent.clear()
+        if mean[best] < 30 or mean[best] < 1.3 * mean[rank[1]]:   # nothing solved, or too close to call (76 / 84 once picked the wrong one): stay, try again once tracking
+            if self.li != t["was"]: self.set_lens(t["was"])
+            self.want, self.waited = True, 0; print(f"{self.prefix}: lens? ({shown} inliers), stays {self.lenses[self.li][2]}", flush=True); return
         self.again = LENS_AGAIN if best != t["was"] else min(self.again * 2, 320)
         if best != self.li: self.set_lens(best)
-        print(f"{self.prefix}: lens {self.lenses[best][2]} ({' / '.join(f'{m:.0f}' for m in mean)} inliers)", flush=True)
-        self.trial, self.lens_t = None, time.perf_counter(); self.recent.clear()
+        print(f"{self.prefix}: lens {self.lenses[best][2]} ({shown} inliers)", flush=True)
     def nearest(self, R, p, n=None, max_ang=45, per_deg=15):   # keyframes near the predicted pose, looking about the same way
         d = np.linalg.norm(self.m["pos"] - p, axis=1); ang = np.degrees(np.arccos(np.clip(self.m["fwd"] @ R.as_matrix()[:, 2], -1, 1)))
         score = d / 1.5 + ang / per_deg; score[(d > 12) | (ang > max_ang)] = np.inf
