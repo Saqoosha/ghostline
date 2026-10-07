@@ -5,11 +5,12 @@ the cells, start (the frame size and rate are read off the source). While the tr
 shows the source's picture: its low-bandwidth stream, two JPEGs a second, received only while a page asks for it.
 usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080, the top view alone at /obs
 env: PORT (8080), PUSH (8765: the tracker's answers, also what viewer/live.html reads), ENG (eng_linux),
-     CONF (~/.ghostline-control.json: the last start, shown again when the page opens)
+     CONF (~/.ghostline-control.json: the last start, shown again when the page opens), VIEW (~/.ghostline-view.json: the trails' delay and smoothing)
 No login: whoever reaches the port can start and stop the tracker. Keep it on the venue LAN / Tailscale."""
 import collections, glob, http.server, json, os, re, signal, subprocess, sys, threading, time, traceback, urllib.parse, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
 PORT, PUSH, ENG, CONF = int(E("PORT", 8080)), int(E("PUSH", 8765)), E("ENG", "eng_linux"), os.path.expanduser(E("CONF", "~/.ghostline-control.json"))
+VIEW = os.path.expanduser(E("VIEW", "~/.ghostline-view.json"))   # how the trails are drawn (delay, smoothing): changed any time, read by every page
 CELLS = ("tl", "tr", "bl", "br")                    # the grid's cells, row by row
 # rt_track.py's knobs the page may set in "extra". Not any variable: the page has no login, and LD_PRELOAD is a variable too
 KNOBS = set("NKF MIN_INL LOST RELOC_TOPK RELOC_MIN TOPK MAPK BATCH FRESH PIPE BA BA_PX BA_ACC BA_ALPHA RENDER RNEAR RFALL RCLIP ROPA RBATCH REDGE "
@@ -53,10 +54,17 @@ class Preview:
 preview = Preview()
 
 courses = {}
-def course(name):
+def course(name, line=""):
     """the map's keyframes seen from above: their positions ([x east, z south] in metres, thinned to 700-1,400) show where the course
-    runs; box is the ground the page draws (x0, z0, width, height), ytop the height the scan is looked down on from"""
+    runs; box is the ground the page draws (x0, z0, width, height), ytop the height the scan is looked down on from. With a course
+    line the box keeps its size and is moved to have the line's middle (the centre of its bounds) in the middle."""
     if name not in options()["maps"]: raise ValueError("地図が見つからない")
+    if line:
+        c, t = dict(course(name)), track(line)["pts"]
+        if t:
+            xs, zs = [p[0] for p in t], [p[1] for p in t]; w, h = c["box"][2:]
+            c["box"] = [round((min(xs) + max(xs) - w) / 2, 1), round((min(zs) + max(zs) - h) / 2, 1), w, h]
+        return c
     if name not in courses:
         import numpy as np
         pos = np.load(f"{HERE}/{name}")["pos"]; y = pos[:, 1]; pad = 4
@@ -68,19 +76,19 @@ def course(name):
     return courses[name]
 
 def track(name):
-    """a race.json's course line (make_race.py: the anchor pilot's laps averaged, closed) seen from above, thinned to about 400 points,
-    and its start / finish gate as the segment across it"""
+    """a race.json's course line (make_race.py: the anchor pilot's laps averaged, closed, a point every 25 cm) seen from above, and its
+    start / finish gate as the segment across it"""
     if name not in options()["tracks"]: raise ValueError("コースの線が見つからない")
     r = json.load(open(f"{HERE}/{name}")); t = r.get("track") or []; g = r.get("gate")
-    pts = [[round(p[0], 2), round(p[2], 2)] for p in t[::max(1, len(t) // 400)]]
+    pts = [[round(p[0], 2), round(p[2], 2)] for p in t]
     gate = [[round(g["centre"][0] + k * g["half_width"] * g["width_dir"][0], 2), round(g["centre"][2] + k * g["half_width"] * g["width_dir"][2], 2)] for k in (-1, 1)] if g else None
     return dict(pts=pts, gate=gate)
 
 rendering, failed = set(), {}                    # failed: file -> when; tried again after 2 minutes (a render during a heat may hit a full GPU)
-def topview(name, scene):
+def topview(name, scene, line=""):
     """the scan from straight above over the course's box (rt_topview.py, a few seconds, once per scene and map; the file is kept
     in live/). Returns the file, None while it is being rendered, and raises once a render has failed (not retried)."""
-    c = course(name)
+    c = course(name, line)
     if scene not in options()["scenes"]: raise ValueError("シーンが見つからない")
     stem = lambda f: re.sub(r"[^A-Za-z0-9_.-]", "_", os.path.splitext(os.path.basename(f))[0]); out = f"{HERE}/live/topview-{stem(scene)}-{stem(name)}-{'_'.join(str(round(v)) for v in c['box'])}.jpg"
     if os.path.exists(out): return out
@@ -172,6 +180,16 @@ def start(c):
     json.dump({k: c.get(k) for k in ("source", "map", "cam", "scene", "track", "render", "ba", "extra", "cells")}, open(CONF, "w"), ensure_ascii=False)
     threading.Thread(target=watch, args=(p,), daemon=True).start(); threading.Thread(target=answers, args=(p,), daemon=True).start()
 
+def view():
+    try: v = json.load(open(VIEW))
+    except Exception: v = {}
+    return dict(delay=v.get("delay", 250), smooth=v.get("smooth", 80))   # σ 80 ms: the wobble mostly gone, the line within ~0.2 m of the answers; 250 ms covers 2.5σ and the solve
+
+def set_view(v):                                   # ms; the delay lets the smoothing see as far ahead of the drawn point as behind it
+    d, m = v.get("delay"), v.get("smooth")
+    if not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in (d, m)) or not (0 <= d <= 2000 and 0 <= m <= 1000): raise ValueError("遅らせる時間は 0〜2000 ms、なめらかさは 0〜1000 ms")
+    json.dump(dict(delay=round(d), smooth=round(m)), open(VIEW, "w"))
+
 def watch(p):                                       # the tracker's output: the log, and the lines that say how it is doing
     try:
         for line in p.stdout: note(line.rstrip()[:300])
@@ -250,7 +268,7 @@ def state():
             try: conf = json.load(open(CONF))
             except Exception: conf = None
         return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], lat=latency(now) if S["phase"] != "stopped" else None, ndi=S["ndi"], input=S["input"],
-                    config=conf, cells=cells, log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
+                    config=conf, view=view(), cells=cells, log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
                     hist=dict(n=HIST, w=[h["w"] for h in hist], temp=[h["temp"] for h in hist], lat=[h["lat"] for h in hist],
                               cells={c: [h["cells"].get(c) for h in hist] for c in CELLS}))
 
@@ -271,13 +289,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if jpg: self.send(200, jpg, "image/jpeg")
             else: self.send(204, b"")
         elif u.path == "/api/map":
-            try: self.send(200, course(q.get("name", "")))
+            try: self.send(200, course(q.get("name", ""), q.get("track", "")))
             except ValueError as e: self.send(400, dict(error=str(e)))
         elif u.path == "/api/track":
             try: self.send(200, track(q.get("name", "")))
             except ValueError as e: self.send(400, dict(error=str(e)))
         elif u.path == "/api/topview.jpg":
-            try: f = topview(q.get("map", ""), q.get("scene", ""))
+            try: f = topview(q.get("map", ""), q.get("scene", ""), q.get("track", ""))
             except ValueError as e: return self.send(400, dict(error=str(e)))
             if f: self.send(200, open(f, "rb").read(), "image/jpeg")
             else: self.send(202, dict(rendering=True))
@@ -291,6 +309,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b"{}")
             if self.path == "/api/start": start(body)
             elif self.path == "/api/stop": stop()
+            elif self.path == "/api/view": set_view(body)
             else: return self.send(404, dict(error="not found"))
             self.send(200, dict(ok=True))
         except (ValueError, KeyError, TypeError) as e: self.send(400, dict(error=str(e)))
