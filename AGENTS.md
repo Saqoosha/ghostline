@@ -42,7 +42,8 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 - **ライブ入力の比較に Mac の `rt_send.py`（x265＋SRT）を使わない。** 送り手が遅れて、解けるフレームが回ごとに 6,000〜8,600 と揺れた（同じ入力を 4090 機の中や有線の Mac Studio から流すと約 14,000 で揃う）。Mac Studio の `ndi_send.py` は `nohup` で切り離すと映像が届かない（ssh につないだまま裏で回す）。同じ名前の送り手を 2 つ同時に動かさない
 - **Linux で NDI を受けるには avahi-daemon が要る。** 動いていないと送り手が見つからない。tracker を裏で起動するなら SIGTERM で止める（SIGINT は非対話シェルの裏では無視される。`rt_track.py` は両方受ける）
 - **4090 は Linux で CUDA を一度使うと、待機が 7 W でなく 21 W に張り付く。** `/proc/driver/nvidia/suspend` に suspend、resume と続けて書くと戻る（`rt_gpu_idle.sh` が自動で打つ）。tracker の起動前に打っても効かない。`nvidia-drm fbdev=0` は逆効果
-- **HDZero Nano 90 はレンズが 2 種類で、カメラの定義も 2 つ**（`data/dvr/cams/`）。合わないほうを当てると一致点が 3 分の 1 になり、軌跡が 1〜2 m ぶれる。ライブで 1 人だけ線が乱れたら、tracker より先にレンズを疑う（`rt_camsweep.sh`）
+- **HDZero Nano 90 はレンズが 2 種類で、カメラの定義も 2 つ**（`data/dvr/cams/`）。合わないほうを当てると一致点が 3 分の 1 になり、軌跡が 1〜2 m ぶれる。ライブで 1 人だけ線が乱れたら、tracker より先にレンズを疑う（`rt_camsweep.sh`）。「自動」の見分けは、実際にレンズを切り替えて、そのレンズ自身に追わせてから採点する（1 回約 2 秒、うち約 1 秒は軌跡が乱れる）。切り替えずに予測姿勢を借りて他方を採点する形は、間違ったレンズに乗っている時に決められない（試して捨てた。数字は realtime 文書）。操作ページのログに `lens stock (0 / 105 inliers)` のように片方が 0 の決定が出たら、見失いの最中に採点した疑い
+- **上から見た図（`rt_topview.js`）の点の時刻は、届いた時刻でなくフレーム番号（`i / fps`）で置く。** 届いた時刻だと処理の 30〜40 ms の揺れで点の間隔が乱れ、軌跡がカクつく（ページは 60 fps で軽いのに、動きだけが不揃いに見える）。操作ページと OBS ページ（`/obs`）は描く部分とスライダーの設定を共有する
 - **ライブの速度や精度をいじる前に、設計の報告書を読む**（`docs/realtime-architecture.html`。オフラインの通しは `docs/offline-architecture.html`）。解像度は効かない、1 人 60 fps・4 人で 1 周 9 ms など、測り直しになる数字がそこにある
 - **race ページの splat がぼやける**：PlayCanvas の CPU ソートは走行中の依頼を捨てる。カメラが止まったら `resortWhenIdle` がソートを頼み直す
   （PlayCanvas の内部フィールドを読んでいるので、上げたら確かめる）
