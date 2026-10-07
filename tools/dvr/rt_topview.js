@@ -34,7 +34,7 @@ const TopView = (() => {
     if (!name) { $("track").removeAttribute("d"); $("gate").removeAttribute("d"); return; }
     const r = await fetch("/api/track?name=" + encodeURIComponent(name)).catch(() => null);
     if (!r || !r.ok) { trackKey = null; onError("コースの線を読めない: " + (r ? (await r.json().catch(() => ({}))).error || r.status : "サーバーに届かない")); return; }
-    const t = await r.json(); if ((name || "") !== trackKey) return;
+    const t = await r.json(); if ((name || "") !== trackKey) return; onError("");
     $("track").setAttribute("d", smoothLoop(t.pts));
     $("gate").setAttribute("d", t.gate ? `M${t.gate[0].join(",")}L${t.gate[1].join(",")}` : "");
   }
@@ -56,7 +56,7 @@ const TopView = (() => {
   addEventListener("resize", fit);
   // Positions as they are solved, straight from the tracker's own stream (its PUSH port): every answer, so the trails move at the video's
   // rate instead of once a second. When no row has come for 2.5 s (the port unreachable, or a gap), the state's trail is drawn instead.
-  const live = {}, names = {}, held = {}, clock = {}; let es = null, lastRow = 0, dirty = true;   // live: cell -> [[x, z, when it arrived (ms), cut?]], oldest first
+  const live = {}, names = {}, held = {}, clock = {}; let es = null, lastRow = 0, dirty = true;   // live: cell -> [[x, z, its time on the page clock (ms, when()), cut?]], oldest first
   // An answer that would need more than VMAX from the last drawn point is held back: alone it is a stray answer and is dropped; if the
   // next one continues from it the pilot really is there (found again elsewhere), and the trail goes on from it without a line across.
   const VMAX = 60;                                     // m/s, 216 km/h: above what the quads fly
@@ -67,17 +67,19 @@ const TopView = (() => {
     else if (h && near(h)) { pts.push([h[0], h[1], h[2], true], [x, z, t]); held[cell] = null; }
     else held[cell] = [x, z, t];
   }
-  // An answer's time is its frame's time in the video (i / fps), put on the page's clock by the earliest any answer of that stream
+  // An answer's time is its frame's time in the video (i / fps), put on the page's clock by the earliest any answer of that cell
   // arrived after its frame: the solving time (30-40 ms, uneven) then no longer spaces the points out unevenly. The offset creeps
   // up slowly in case the clocks drift, and starts again when the frames jump (a new run of the tracker, a long gap).
   function when(cell, r, now) {
     if (!(r.fps > 0) || r.i == null) return now;
     const f = r.i * 1000 / r.fps, o = now - f, c = clock[cell];
-    if (!c || f < c.f - 1000 || f - c.f > 2000) clock[cell] = { o, f }; else { c.o = o < c.o ? o : c.o + (o - c.o) * 0.002; c.f = Math.max(c.f, f); }
-    return f + clock[cell].o;
+    // a stall of the source does not skip frame numbers (only frames received are counted): over a second late also starts again
+    if (!c || f < c.f - 1000 || f - c.f > 2000 || o > c.o + 1000) clock[cell] = { o, f, t: -Infinity };
+    else { c.o = o < c.o ? o : c.o + (o - c.o) * 0.002; c.f = Math.max(c.f, f); }
+    const k = clock[cell]; return k.t = Math.max(f + k.o, k.t);   // never before the last one: the trail is drawn in time order
   }
   function listen(s) {
-    if (s.phase === "stopped") { if (es) { es.close(); es = null; } for (const k in live) delete live[k]; dirty = true; return; }
+    if (s.phase === "stopped") { if (es) { es.close(); es = null; } for (const o of [live, clock, held]) for (const k in o) delete o[k]; dirty = true; return; }
     for (const [n, c] of Object.entries(s.cells)) names[n] = c.cell;
     if (!es) {
       es = new EventSource(`http://${location.hostname}:${s.push}/`);
@@ -104,7 +106,7 @@ const TopView = (() => {
       for (let j = i + 1; j < pts.length && pts[j][2] - pts[i][2] <= 2.5 * sg && pts[j][2] - pts[j - 1][2] < 700 && !pts[j][3]; j++) { const k = Math.exp(-(((pts[j][2] - pts[i][2]) / sg) ** 2) / 2); x += k * pts[j][0]; z += k * pts[j][1]; w += k; }
       out.push([x / w, z / w, pts[i][2], pts[i][3]]);
     }
-    if (upto > n) {                                   // the head where the pilot was at tEnd exactly, between the answers either side
+    if (upto > n) {                                   // the head at tEnd, between the smoothed points either side
       const a = out[n - 1], b = out[n], u = (tEnd - a[2]) / (b[2] - a[2]);
       out[n] = [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, tEnd];
     }
@@ -124,7 +126,8 @@ const TopView = (() => {
   }
   (function frame() {                                  // redrawn when a position arrived, and a few times a second anyway so the trails fade
     requestAnimationFrame(frame); const now = performance.now();
-    if (!dirty && !(view.delay > 0) && now - frame.t < 250) return;   // delayed, the head moves between the answers: every frame dirty = false; frame.t = now;
+    if (!dirty && !(view.delay > 0) && now - frame.t < 250) return;   // delayed, the head moves between the answers: every frame
+    dirty = false; frame.t = now;
     for (const cell of CELLS) { const pts = live[cell] || []; while (pts.length && now - pts[0][2] > keep + view.delay) pts.shift(); drawTrail(cell, pts, now); }
   })();
 

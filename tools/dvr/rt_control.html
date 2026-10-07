@@ -170,7 +170,7 @@
     <label for="map">地図（全マス共通）</label><div><select id="map"></select></div>
     <label for="cam">カメラの定義</label><div><select id="cam"></select></div>
     <label for="scene">シーン（.ply）</label><div><select id="scene"></select></div>
-    <label for="track">コースの線</label><div><select id="track"></select></div>
+    <label for="trackfile">コースの線</label><div><select id="trackfile"></select></div>
     <label>処理</label><div class="checks">
       <label><input type="checkbox" id="render" checked> 描いて照合（RENDER）</label>
       <label><input type="checkbox" id="ba" checked> 束調整（屋外の設定）</label></div>
@@ -183,7 +183,7 @@
 <script src="rt_topview.js"></script>
 <script>
 const $ = id => document.getElementById(id), CELLS = [["tl", "左上"], ["tr", "右上"], ["bl", "左下"], ["br", "右下"]];
-TopView.onError(m => { const e = $("err"); if (m || e.textContent.startsWith("地図") || e.textContent.startsWith("真上")) e.textContent = m; });
+TopView.onError(m => { const e = $("err"); if (m || e.textContent.startsWith("地図") || e.textContent.startsWith("真上") || e.textContent.startsWith("コースの線")) e.textContent = m; });
 let filled = false, phase = null, logAtEnd = true;
 
 // the grid's four cells (top row, then bottom row): what to track there, and how it is going while the tracker runs
@@ -232,7 +232,7 @@ function spark(id, vals, n, lo, hi) {
 
 function fillForm(s) {                              // once, from the last start; after that the fields are the operator's
   const c = s.config || {}, o = s.options;
-  fillSelect($("map"), o.maps, c.map); fillSelect($("cam"), o.cams, c.cam, 2); fillSelect($("scene"), o.scenes, c.scene); fillSelect($("track"), ["", ...o.tracks], c.track || "");
+  fillSelect($("map"), o.maps, c.map); fillSelect($("cam"), o.cams, c.cam, 2); fillSelect($("scene"), o.scenes, c.scene); fillSelect($("trackfile"), ["", ...o.tracks], c.track || "");
   for (const k of ["source", "extra"]) if (c[k] != null) $(k).value = c[k];
   for (const k of ["render", "ba"]) if (c[k] != null) $(k).checked = !!c[k];
   for (const [cell] of CELLS) {
@@ -255,7 +255,7 @@ function render(s) {
   if (s.view && !viewBusy) { $("v-smooth").value = s.view.smooth; $("v-delay").value = s.view.delay; showView(s.view); }
   if (viewBusy) delete s.view;
   if (!filled) { fillForm(s); filled = true; }
-  else { fillSelect($("map"), s.options.maps); fillSelect($("cam"), s.options.cams, undefined, 2); fillSelect($("scene"), s.options.scenes); fillSelect($("track"), ["", ...s.options.tracks]); }
+  else { fillSelect($("map"), s.options.maps); fillSelect($("cam"), s.options.cams, undefined, 2); fillSelect($("scene"), s.options.scenes); fillSelect($("trackfile"), ["", ...s.options.tracks]); }
   $("sources").replaceChildren(...s.options.sources.map(v => new Option(v)));
   const ja = { stopped: "停止中", loading: "読み込み中", running: "動作中", stopping: "停止処理中" }; document.body.className = s.phase;
   $("phase").textContent = ja[s.phase] || s.phase; $("phase").className = s.phase;
@@ -279,7 +279,7 @@ function render(s) {
       (c.lens ? c.lens.replace("hdzero-nano90-", "").replace("-lens", "") + " · " : "") + `映像 ${c.hz.toFixed(1)} 枚/秒` + (c.last ? ` · ${c.last.age < 2 ? "一致点 " + c.last.inl : "見失って " + c.last.age.toFixed(0) + " 秒"}` : " · まだ位置が出ない");
   }
   pvName = (stopped ? $("source").value : (s.config && s.config.source) || "").trim();
-  TopView.update(s, ...(stopped ? [$("map").value, $("scene").value, $("track").value] : [s.config && s.config.map, (s.config && s.config.scene) || "", (s.config && s.config.track) || ""]));
+  TopView.update(s, ...(stopped ? [$("map").value, $("scene").value, $("trackfile").value] : [s.config && s.config.map, (s.config && s.config.scene) || "", (s.config && s.config.track) || ""]));
   const h = s.hist; spark("w", h.w, h.n, 0, 150); spark("temp", h.temp, h.n, 25, 60); spark("cycle", h.lat, h.n, 0, 40);
   for (const [cell] of CELLS) spark(cell, h.cells[cell], h.n, 0, 30);
   const log = $("log"); log.textContent = s.log.join("\n"); if (logAtEnd) log.scrollTop = log.scrollHeight;
@@ -298,7 +298,7 @@ async function post(path, body) {
   poll();
 }
 const start = () => post("/api/start", {
-  source: $("source").value, map: $("map").value, cam: $("cam").value, scene: $("scene").value, track: $("track").value,
+  source: $("source").value, map: $("map").value, cam: $("cam").value, scene: $("scene").value, track: $("trackfile").value,
   render: $("render").checked, ba: $("ba").checked, extra: $("extra").value,
   cells: CELLS.map(([cell]) => ({ cell, on: $("on-" + cell).checked, name: $("name-" + cell).value.trim() })) });
 $("go").onclick = () => { if (phase === "stopped") start(); else if (confirm("tracker を止める？")) post("/api/stop"); };

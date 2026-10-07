@@ -59,7 +59,7 @@ def course(name, line=""):
     runs; box is the ground the page draws (x0, z0, width, height), ytop the height the scan is looked down on from. With a course
     line the box keeps its size and is moved to have the line's middle (the centre of its bounds) in the middle."""
     if name not in options()["maps"]: raise ValueError("地図が見つからない")
-    if line:
+    if line in options()["tracks"]:                # an unknown line only loses the centring; /api/track reports it
         c, t = dict(course(name)), track(line)["pts"]
         if t:
             xs, zs = [p[0] for p in t], [p[1] for p in t]; w, h = c["box"][2:]
@@ -76,7 +76,7 @@ def course(name, line=""):
     return courses[name]
 
 def track(name):
-    """a race.json's course line (make_race.py: the anchor pilot's laps averaged, closed, a point every 25 cm) seen from above, and its
+    """a race.json's course line (make_race.py: the anchor pilot's laps averaged, 1,600 points along a lap, about 25 cm apart on the FDF course; the page closes it) seen from above, and its
     start / finish gate as the segment across it"""
     if name not in options()["tracks"]: raise ValueError("コースの線が見つからない")
     r = json.load(open(f"{HERE}/{name}")); t = r.get("track") or []; g = r.get("gate")
@@ -86,8 +86,8 @@ def track(name):
 
 rendering, failed = set(), {}                    # failed: file -> when; tried again after 2 minutes (a render during a heat may hit a full GPU)
 def topview(name, scene, line=""):
-    """the scan from straight above over the course's box (rt_topview.py, a few seconds, once per scene and map; the file is kept
-    in live/). Returns the file, None while it is being rendered, and raises once a render has failed (not retried)."""
+    """the scan from straight above over the course's box (rt_topview.py, a few seconds, once per scene, map and course line; the file is kept
+    in live/). Returns the file, None while it is being rendered, and raises for 2 minutes after a render failed."""
     c = course(name, line)
     if scene not in options()["scenes"]: raise ValueError("シーンが見つからない")
     stem = lambda f: re.sub(r"[^A-Za-z0-9_.-]", "_", os.path.splitext(os.path.basename(f))[0]); out = f"{HERE}/live/topview-{stem(scene)}-{stem(name)}-{'_'.join(str(round(v)) for v in c['box'])}.jpg"
@@ -188,7 +188,8 @@ def view():
 def set_view(v):                                   # ms; the delay lets the smoothing see as far ahead of the drawn point as behind it
     d, m = v.get("delay"), v.get("smooth")
     if not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in (d, m)) or not (0 <= d <= 2000 and 0 <= m <= 1000): raise ValueError("遅らせる時間は 0〜2000 ms、なめらかさは 0〜1000 ms")
-    json.dump(dict(delay=round(d), smooth=round(m)), open(VIEW, "w"))
+    with open(VIEW + ".tmp", "w") as f: json.dump(dict(delay=round(d), smooth=round(m)), f)
+    os.replace(VIEW + ".tmp", VIEW)                # whole: /api/state reads it on other threads
 
 def watch(p):                                       # the tracker's output: the log, and the lines that say how it is doing
     try:
