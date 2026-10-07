@@ -471,7 +471,7 @@ ul.tight li { margin: 3px 0; }
 
 <!-- ============================================================ 11 (field) -->
 <h2 id="s13"><span class="n">11</span>会場に持ち込む：電池と NDI</h2>
-<p>会場には 4090 機を持ち込み、ポータブル電源（EcoFlow DELTA 2 Max、2,048 Wh）で回し、Event VRX の NDI（1080p の 2×2）を同じ LAN で直接受ける。電力は GPU（<code>nvidia-smi</code>）と CPU パッケージ（RAPL）の和で、マザーボード・メモリ・ファン・電源の損失は入らない。録画で測るときは <code>PACE=1</code>（実時間で歩かせる。付けないと GPU が埋まって高く出る）。</p>
+<p>会場には 4090 機を持ち込み、ポータブル電源（EcoFlow DELTA 2 Max、2,048 Wh）で回し、Event VRX の NDI（1080p の 2×2）を同じ LAN で直接受ける。電力は GPU（<code>nvidia-smi</code>）と CPU パッケージ（RAPL）の和で、マザーボード・メモリ・ファン・電源の損失は入らない。録画で測るときは <code>PACE=1</code>（実時間で歩かせる。付けないと GPU が埋まって高く出る）。箱の操作はブラウザの操作ページ（<code>rt_control.py</code>、<code>http://rt4090:8080</code>）：NDI の送り手とマスを選んで開始 / 停止、各マスの映像と位置の回数、真上から描いたスキャンの上に軌跡と名前。HDZero Nano 90 はレンズが 2 種類で、マスごとに tracker が両方を短く試して一致点の多いほうに決める（合わない定義では一致点が 3 分の 1、軌跡が 1〜2 m ぶれる）。60 fps の NDI は 30 に間引く。</p>
 <div class="grid2">
   <div class="card">
     <h4>4 人・<code>RENDER=1</code> の GPU＋CPU</h4>
@@ -528,7 +528,7 @@ ul.tight li { margin: 3px 0; }
   <div class="card">
     <h4>残っていること</h4>
     <ul class="tight">
-      <li>会場での通し：本物の Event VRX の NDI では未確認（送り手の名前、マスの並び）。tracker を systemd で自動起動する仕組みと、壁の電力での確認もこれから</li>
+      <li>会場での通し：本物の Event VRX の NDI では未確認（送り手の名前、マスの並び）。電源を入れたら前回の設定で自動開始する仕組み、壁の電力での確認、パイロット名をレース管理の仕組みから取ることもこれから</li>
       <li>ライブページは 1 人ぶんしか描かない：複数人の答えが 1 本に混ざる（issue #3）。race ページで 4 人の軌跡＋ライブの点を重ねるのもこれから</li>
       <li>送り手が立ち上がり直すと、録画の映像と答えがずれる（issue #4）</li>
       <li>本物のライブ入力で束調整と <code>sync=false</code> を通す（どちらも録画を流し直して測った）。4 人ぶんのライブ入力も未確認</li>
