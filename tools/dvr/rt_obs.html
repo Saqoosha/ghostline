@@ -16,6 +16,8 @@
   .top svg { display: block; width: 100%; height: 100%; }
   #course { fill: none; stroke: rgba(255, 255, 255, .55); stroke-width: 3; stroke-linecap: round; vector-effect: non-scaling-stroke; display: none; }
   body.course #course { display: block; }
+  #track { fill: none; stroke: rgba(255, 255, 255, .85); stroke-width: 5; stroke-linejoin: round; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 2px rgba(0, 0, 0, .5)); }
+  #gate { fill: none; stroke: #fff; stroke-width: 12; stroke-linecap: round; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 3px rgba(0, 0, 0, .6)); }
   #trails { filter: drop-shadow(0 0 1.5px #fff) drop-shadow(0 0 1.5px #fff) drop-shadow(0 0 3px #fff); }
   #trails path { fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
   #trails path.now { stroke-width: 18; }
@@ -26,7 +28,7 @@
 </style>
 </head>
 <body>
-<div class="top" id="view"><svg id="top" preserveAspectRatio="xMidYMid meet"><image id="aerial" preserveAspectRatio="none"/><path id="course"/><g id="trails"></g></svg><div id="tags"></div><div id="err"></div></div>
+<div class="top" id="view"><svg id="top" preserveAspectRatio="xMidYMid meet"><image id="aerial" preserveAspectRatio="none"/><path id="course"/><path id="track"/><path id="gate"/><g id="trails"></g></svg><div id="tags"></div><div id="err"></div></div>
 <script src="rt_topview.js"></script>
 <script>
 const q = new URLSearchParams(location.search), $ = id => document.getElementById(id);
@@ -39,7 +41,7 @@ TopView.onFit(box => {
   v.width = w + "px"; v.height = h + "px"; v.left = (W - w) / 2 + "px"; v.top = (H - h) / 2 + "px";
 });
 async function poll() {
-  try { const s = await (await fetch("/api/state")).json(); TopView.update(s, s.config && s.config.map, s.config && s.config.scene); $("err").textContent = $("err").textContent === "サーバーに届かない" ? "" : $("err").textContent; }
+  try { const s = await (await fetch("/api/state")).json(); TopView.update(s, s.config && s.config.map, s.config && s.config.scene, s.config && s.config.track); $("err").textContent = $("err").textContent === "サーバーに届かない" ? "" : $("err").textContent; }
   catch { $("err").textContent = "サーバーに届かない"; }
 }
 poll(); setInterval(poll, 1000);

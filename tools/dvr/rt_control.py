@@ -67,6 +67,15 @@ def course(name):
                              ytop=round(float(np.median(y)) + 30, 1))
     return courses[name]
 
+def track(name):
+    """a race.json's course line (make_race.py: the anchor pilot's laps averaged, closed) seen from above, thinned to about 400 points,
+    and its start / finish gate as the segment across it"""
+    if name not in options()["tracks"]: raise ValueError("コースの線が見つからない")
+    r = json.load(open(f"{HERE}/{name}")); t = r.get("track") or []; g = r.get("gate")
+    pts = [[round(p[0], 2), round(p[2], 2)] for p in t[::max(1, len(t) // 400)]]
+    gate = [[round(g["centre"][0] + k * g["half_width"] * g["width_dir"][0], 2), round(g["centre"][2] + k * g["half_width"] * g["width_dir"][2], 2)] for k in (-1, 1)] if g else None
+    return dict(pts=pts, gate=gate)
+
 rendering, failed = set(), {}                    # failed: file -> when; tried again after 2 minutes (a render during a heat may hit a full GPU)
 def topview(name, scene):
     """the scan from straight above over the course's box (rt_topview.py, a few seconds, once per scene and map; the file is kept
@@ -99,7 +108,7 @@ def options():
     # the upgrade lens, which most pilots fly (7 of 8 in the FDF semifinal)
     lenses = sorted(rel(glob.glob(HERE + "/cams/*.json")), key=lambda f: ("upgrade" not in f, f))
     _opt[:] = [time.time(), dict(maps=rel(glob.glob(HERE + "/map_*.npz")), cams=(["+".join(lenses)] if len(lenses) > 1 else []) + lenses + rel(glob.glob(HERE + "/../*/dvr_pinhole.mp4.json")),
-                                  scenes=sorted(glob.glob(os.path.expanduser("~/scenes/*.ply"))), sources=src)]
+                                  scenes=sorted(glob.glob(os.path.expanduser("~/scenes/*.ply"))), tracks=rel(glob.glob(HERE + "/tracks/*.json")), sources=src)]   # tracks: race.json files (make_race.py), the course line
     return _opt[1]
 
 def probe(name):
@@ -126,6 +135,7 @@ def start(c):
     if not src or re.search(r"[,|]", src): raise ValueError("NDI の送り手の名前が要る（, と | は使えない）")
     if c.get("cam") not in o["cams"]: raise ValueError("カメラの定義が見つからない")
     if c.get("map") not in o["maps"]: raise ValueError("地図が見つからない")   # one map for every cell: a venue has one course
+    if c.get("track") and c["track"] not in o["tracks"]: raise ValueError("コースの線が見つからない")
     on = [x for x in c.get("cells", []) if x.get("on")]
     if not on: raise ValueError("使うマスが 1 つも無い")
     names = [re.sub(r"[^A-Za-z0-9_-]", "", str(x.get("name") or ""))[:24] or str(x.get("cell")) for x in on]
@@ -159,7 +169,7 @@ def start(c):
         S.update(phase="loading", proc=p, since=time.time(), exit=None, ndi=None, config=c, input=f"{w}×{h} · {fps:g} fps" + (f" → {cap:g}" if cap < fps else ""),
                  cells={n: dict(cell=x["cell"], signal=None, lens=None, rows=collections.deque(maxlen=600), last=None, trail=collections.deque(maxlen=150)) for x, n in zip(on, names)})
         S["log"].clear(); S["log"].append("$ rt_track.py " + " ".join(specs))
-    json.dump({k: c.get(k) for k in ("source", "map", "cam", "scene", "render", "ba", "extra", "cells")}, open(CONF, "w"), ensure_ascii=False)
+    json.dump({k: c.get(k) for k in ("source", "map", "cam", "scene", "track", "render", "ba", "extra", "cells")}, open(CONF, "w"), ensure_ascii=False)
     threading.Thread(target=watch, args=(p,), daemon=True).start(); threading.Thread(target=answers, args=(p,), daemon=True).start()
 
 def watch(p):                                       # the tracker's output: the log, and the lines that say how it is doing
@@ -262,6 +272,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else: self.send(204, b"")
         elif u.path == "/api/map":
             try: self.send(200, course(q.get("name", "")))
+            except ValueError as e: self.send(400, dict(error=str(e)))
+        elif u.path == "/api/track":
+            try: self.send(200, track(q.get("name", "")))
             except ValueError as e: self.send(400, dict(error=str(e)))
         elif u.path == "/api/topview.jpg":
             try: f = topview(q.get("map", ""), q.get("scene", ""))

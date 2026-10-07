@@ -1,10 +1,10 @@
 // rt_topview.js: the top view shared by the control page and the OBS page (rt_control.py serves it). x east to the right,
-// z south downwards, so north is up. Expects svg#top (image#aerial, path#course, g#trails) and div#tags; a div#scale, if present,
+// z south downwards, so north is up. Expects svg#top (image#aerial, path#course, path#track, path#gate, g#trails) and div#tags; a div#scale, if present,
 // gets its first child's width set to 10 m. Positions come straight from the tracker's own stream (its PUSH port): every answer, so
 // the trails move at the video's rate; when no row has come for 2.5 s, the state's trail (once a second) is drawn instead.
 const TopView = (() => {
   const $ = id => document.getElementById(id), CELLS = ["tl", "tr", "bl", "br"];
-  let courseKey = null, courseBox = null, keep = 12000, onError = () => {}, onFit = () => {};
+  let courseKey = null, courseBox = null, trackKey = null, keep = 12000, onError = () => {}, onFit = () => {};
   $("trails").innerHTML = CELLS.map(c => `<g id="tr-${c}" style="stroke: var(--${c})">${[1, .5, .25, .1].map(o => `<path opacity="${o}"/>`).join("")}<path class="now"/></g>`).join("");
   $("tags").innerHTML = CELLS.map(c => `<div class="tag" id="tag-${c}"></div>`).join("");
 
@@ -26,6 +26,16 @@ const TopView = (() => {
       if (t.status !== 202) { onError("真上からの絵: " + ((await t.json().catch(() => ({}))).error || t.status)); break; }
       await new Promise(f => setTimeout(f, 2000));
     }
+  }
+  // the course line (a race.json's averaged laps) and its start / finish gate, or none
+  async function loadTrack(name) {
+    if ((name || "") === trackKey) return; trackKey = name || "";
+    if (!name) { $("track").removeAttribute("d"); $("gate").removeAttribute("d"); return; }
+    const r = await fetch("/api/track?name=" + encodeURIComponent(name)).catch(() => null);
+    if (!r || !r.ok) { trackKey = null; onError("コースの線を読めない: " + (r ? (await r.json().catch(() => ({}))).error || r.status : "サーバーに届かない")); return; }
+    const t = await r.json(); if ((name || "") !== trackKey) return;
+    $("track").setAttribute("d", t.pts.length ? "M" + t.pts.map(p => p.join(",")).join("L") + "Z" : "");
+    $("gate").setAttribute("d", t.gate ? `M${t.gate[0].join(",")}L${t.gate[1].join(",")}` : "");
   }
   function fit() {                                  // the page may size the view to the box; then the 10 m bar, if there is one
     if (!courseBox) return; onFit(courseBox); const r = $("top").getBoundingClientRect(), bar = $("scale");
@@ -76,11 +86,11 @@ const TopView = (() => {
     for (const cell of CELLS) { const pts = live[cell] || []; while (pts.length && now - pts[0][2] > keep) pts.shift(); drawTrail(cell, pts, now); }
   })();
 
-  // one state a second from /api/state: the names on the tags, the stream, and the course for the map and scene given
-  function update(s, map, scene) {
+  // one state a second from /api/state: the names on the tags, the stream, the course for the map and scene given, the track line
+  function update(s, map, scene, track) {
     listen(s); const stopped = s.phase === "stopped";
     for (const c of CELLS) $("tag-" + c).textContent = stopped ? "" : (Object.entries(s.cells).find(([, x]) => x.cell === c) || [""])[0];
-    loadCourse(map, scene || "");
+    loadCourse(map, scene || ""); loadTrack(track);
   }
   return { update, fit, box: () => courseBox, onError: f => { onError = f; }, onFit: f => { onFit = f; }, keep: ms => { keep = ms; } };
 })();
