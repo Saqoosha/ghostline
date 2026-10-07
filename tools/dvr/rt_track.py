@@ -70,11 +70,14 @@ GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30),
 # Two lenses (a live cell's camera field "a.json+b.json"): the HDZero Nano 90 flies with its stock lens or the upgrade one, and the
 # wrong definition leaves a third of the inliers and a wobble of 1-2 m (semifinal, first heat: 122 inliers and 0.72 m against 270 and
 # 0.11 m). So the cell tries them: once it has solved 5 frames in a row after its picture came on (SIGNAL; a new heat, maybe another
-# pilot), LENS_N frames with each, and keeps the one whose mean inliers are at least 1.3x the other's and 30 or more (an unsolved
+# pilot), LENS_N frames with each - the one it has for half of them, the other for all of its own, the one it has for the rest: a
+# trial starts when the inliers drop, often as the track is being lost, and with the two one after the other only the first scored
+# the dip (an upgrade cell went to stock on 0 / 105). After each change LENS_SKIP frames are not counted: from upgrade to stock the
+# track is lost and found again by relocalizing some 20 frames later (with 5, a stock cell scored 14 with stock). It keeps the one whose mean inliers are at least 1.3x the other's and 30 or more (an unsolved
 # frame counts 0) - otherwise it stays and tries later. Later means: the last 45 frames averaged under LENS_LOW, at most every
 # LENS_AGAIN s, doubling (up to 320 s) when the trial changes nothing. Not solving for 3 s' worth of frames after the picture came
 # on: the other definition gets its turn.
-LENS_N, LENS_LOW, LENS_AGAIN = int(E("LENS_N", 12)), E("LENS_LOW", 100), E("LENS_AGAIN", 20)
+LENS_N, LENS_SKIP, LENS_LOW, LENS_AGAIN = int(E("LENS_N", 12)), int(E("LENS_SKIP", 20)), E("LENS_LOW", 100), E("LENS_AGAIN", 20)
 # MAXFPS (0 = all): an NDI source faster than this (the Event VRX sends 60 fps) is thinned to it by its timestamps. Every cycle takes the
 # newest frame, so a 60 fps feed would otherwise be processed at 43-54 Hz per cell for +35% GPU power (three cells 125 -> 172 W) and no
 # better dot (the page draws 100 ms late, interpolated). The caller passes GRID_FPS as the thinned rate (rt_control.py does).
@@ -263,22 +266,24 @@ class Stream:
         self.arrive[n], self.arrive_wall[n] = t, tw; self.N = n + 1
         for k in [k for k in self.frames if k < n - 30]: del self.frames[k]   # codes skip on drops; 30 outlasts a slow cycle
     def set_lens(self, j): self.li = j; self.cellmap, self.qvalid = self.lenses[j][:2]
+    def lens_plan(self):                             # [lens, frames] in order: this one, each other one, this one again
+        return [[self.li, LENS_N // 2], *([j, LENS_N] for j in range(len(self.lenses)) if j != self.li), [self.li, LENS_N - LENS_N // 2]]
     def lens_step(self, inl):                        # main thread, after every processed frame: its inliers, 0 when it was not solved
         if self.trial is None:
             self.recent.append(inl); self.okrun = self.okrun + 1 if inl else 0
             if self.want and time.perf_counter() - self.lens_t > self.again:   # (not while a trial is cooling down)
                 self.waited += 1
-                if self.okrun >= 5: self.trial, self.want = dict(skip=0, was=self.li, got=[[] for _ in self.lenses]), False
+                if self.okrun >= 5: self.trial, self.want = dict(skip=0, was=self.li, got=[[] for _ in self.lenses], plan=self.lens_plan()), False
                 elif self.waited > 3 * self.fps: self.set_lens((self.li + 1) % len(self.lenses)); self.waited = 0
             elif time.perf_counter() - self.lens_t > self.again and len(self.recent) == self.recent.maxlen and np.mean(self.recent) < LENS_LOW:
-                self.trial = dict(skip=0, was=self.li, got=[[] for _ in self.lenses])
+                self.trial = dict(skip=0, was=self.li, got=[[] for _ in self.lenses], plan=self.lens_plan())
             return
         t = self.trial
         if t["skip"]: t["skip"] -= 1; return             # frames mapped with the definition before are still on their way through
-        t["got"][self.li].append(inl)
-        if len(t["got"][self.li]) < LENS_N: return
-        todo = [j for j, g in enumerate(t["got"]) if not g]
-        if todo: self.set_lens(todo[0]); t["skip"] = 5; return
+        t["got"][self.li].append(inl); t["plan"][0][1] -= 1
+        if t["plan"][0][1] > 0: return
+        t["plan"].pop(0)
+        if t["plan"]: self.set_lens(t["plan"][0][0]); t["skip"] = LENS_SKIP; return
         mean = [float(np.mean(g)) for g in t["got"]]; rank = sorted(range(len(mean)), key=mean.__getitem__, reverse=True); best = rank[0]
         shown = ' / '.join(f'{m:.0f}' for m in mean); self.trial, self.lens_t = None, time.perf_counter(); self.recent.clear()
         if mean[best] < 30 or mean[best] < 1.3 * mean[rank[1]]:   # nothing solved, or too close to call (76 / 84 once picked the wrong one): stay, try again once tracking
