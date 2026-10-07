@@ -94,7 +94,7 @@ UNIT
 sudo systemctl daemon-reload; sudo systemctl enable --now ghostline-gpu-idle.service
 
 step "the control page (rt_control.py): start / stop the tracker on an NDI source from a browser, http://<this box>:8080"
-cp "$(dirname "$0")/rt_control.py" "$(dirname "$0")/rt_control.html" "$(dirname "$0")/rt_topview.py" ~/rt/
+cp "$(dirname "$0")/rt_control.py" "$(dirname "$0")/rt_control.html" "$(dirname "$0")/rt_obs.html" "$(dirname "$0")/rt_topview.js" "$(dirname "$0")/rt_topview.py" ~/rt/
 cp -r "$(dirname "$0")/../../data/dvr/cams" ~/rt/   # the lens definitions: the page offers them together and the tracker picks per cell
 sudo tee /etc/systemd/system/ghostline-control.service > /dev/null <<UNIT
 [Unit]

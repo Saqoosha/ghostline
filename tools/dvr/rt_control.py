@@ -3,7 +3,7 @@
 the cells, start (the frame size and rate are read off the source). While the tracker runs it reads its output (signal on / off per cell), its PUSH stream
 (frames processed and solved per cell, the positions for the page's top view) and the GPU's power from nvidia-smi. The page also
 shows the source's picture: its low-bandwidth stream, two JPEGs a second, received only while a page asks for it.
-usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080
+usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080, the top view alone at /obs
 env: PORT (8080), PUSH (8765: the tracker's answers, also what viewer/live.html reads), ENG (eng_linux),
      CONF (~/.ghostline-control.json: the last start, shown again when the page opens)
 No login: whoever reaches the port can start and stop the tracker. Keep it on the venue LAN / Tailscale."""
@@ -253,6 +253,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         u = urllib.parse.urlsplit(self.path); q = dict(urllib.parse.parse_qsl(u.query))
         if u.path == "/": self.send(200, open(HERE + "/rt_control.html", "rb").read(), "text/html")
+        elif u.path == "/obs": self.send(200, open(HERE + "/rt_obs.html", "rb").read(), "text/html")   # the top view alone, for an OBS browser source
+        elif u.path == "/rt_topview.js": self.send(200, open(HERE + "/rt_topview.js", "rb").read(), "text/javascript")
         elif u.path == "/api/state": self.send(200, state())
         elif u.path == "/api/preview.jpg":
             jpg = preview.get(q.get("source", "").strip()[:80])
