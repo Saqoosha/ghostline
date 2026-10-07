@@ -611,10 +611,10 @@ def finish(s):
     out = []                                        # the viewer indexes poses by frame, so every frame gets one
     for j in range(N if first < N else 0):
         R, p, age = drawn[max(j, first)]
-        out.append({"i": j, "t": round(cam["t0"] + j / fps, 4), "pos": np.round(p, 3).tolist(), "quat": np.round(R.as_quat(), 6).tolist(),
+        out.append({"i": j, "t": round(cam.get("t0", 0.0) + j / fps, 4), "pos": np.round(p, 3).tolist(), "quat": np.round(R.as_quat(), 6).tolist(),
                     # live, the newest answer is always a few frames old (latency), so "fresh" means within FRESH
                     "src": "rt-wait" if j < first else "rt" if age <= FRESH else "rt-carry"})
-    json.dump({"frame": FRAME, "t0": cam["t0"], "fps": fps, "poses": out}, open(s.prefix + ".json", "w"))
+    json.dump({"frame": FRAME, "t0": cam.get("t0", 0.0), "fps": fps, "poses": out}, open(s.prefix + ".json", "w"))
     # the trail behind the live dot can be redrawn: frame j is drawn once the answers up to TRAIL_L later are in - a
     # quadratic over the answers within TRAIL_W, weighted by inliers; rotation slerped between the answers around it.
     # d05, on the answer log: 200 ms late -> 0.28 m p50 / 1.8 cm wobble (the live dot: 0.71 m / 11 cm).
@@ -632,8 +632,8 @@ def finish(s):
             R = Rot.from_quat(sol[a]["quat"]) if a == b else Slerp([fi[a], fi[b]], Rot.from_quat([sol[a]["quat"], sol[b]["quat"]]))([j])[0]
             trail.append((R, p))
     else: trail = [None] * N
-    json.dump({"frame": FRAME, "t0": cam["t0"], "fps": fps,
-               "poses": [{"i": j, "t": round(cam["t0"] + j / fps, 4), **({"pos": np.round(trail[j][1], 3).tolist(), "quat": np.round(trail[j][0].as_quat(), 6).tolist(), "src": "rt"}
+    json.dump({"frame": FRAME, "t0": cam.get("t0", 0.0), "fps": fps,
+               "poses": [{"i": j, "t": round(cam.get("t0", 0.0) + j / fps, 4), **({"pos": np.round(trail[j][1], 3).tolist(), "quat": np.round(trail[j][0].as_quat(), 6).tolist(), "src": "rt"}
                          if trail[j] else {"pos": o["pos"], "quat": o["quat"], "src": "rt-carry" if o["src"] == "rt" else o["src"]})} for j, o in enumerate(out)]},
               open(s.prefix + "_trail.json", "w"))
     # summary
