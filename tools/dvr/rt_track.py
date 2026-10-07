@@ -281,7 +281,7 @@ class Stream:
             return
         if t["skip"]: t["skip"] -= 1; return             # LENS_SKIP: the track is still coming back after the change
         t["got"][self.li].append(inl); t["plan"][0][1] -= 1
-        if t["plan"][0][1] > 0: return
+        if t["plan"][0][1] > 0 or self.trial is not t: return   # (ended by the reader meanwhile: it has put the lens back)
         t["plan"].pop(0)
         if t["plan"]: self.set_lens(t["plan"][0][0]); t["skip"] = LENS_SKIP; return
         mean = [float(np.mean(g)) for g in t["got"]]; rank = sorted(range(len(mean)), key=mean.__getitem__, reverse=True); best = rank[0]
