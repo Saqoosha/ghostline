@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ghostline</title>
+<style>
+  /* ghost: how alive a thing is shows in how dark it is drawn - a reading that stopped fades, a history line dissolves into the past.
+     line: no boxes and no fills, hairlines and thin type. Colour says who: each quarter of the grid has its own, the tracker's own
+     values share one. Only fonts the device already has: the venue may have no internet. */
+  :root { --paper: #f3f4f6; --ink: #0c0f14; --dim: rgba(12, 15, 20, .58); --faint: rgba(12, 15, 20, .2); --hair: rgba(12, 15, 20, .82); --spirit: #5b4bff; --alarm: #d1301f; --tl: #ff2e63; --tr: #f59e0b; --bl: #12b76a; --br: #2f6bff;
+          --sans: "Helvetica Neue", -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 400 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  main { max-width: 1080px; margin: 0 auto; padding: 30px 24px 64px; }
+
+  /* the name with its line drawn: ghost, a hairline across the page, line */
+  .mark { display: flex; align-items: center; gap: 16px; margin: 0; font: 200 21px/1 var(--sans); letter-spacing: .42em; }
+  .mark span:first-child { color: rgba(12, 15, 20, .45); }   /* the ghost: paler than the line, but still there */
+  .mark span:last-child { margin-right: -.42em; }
+  .mark i { flex: 1; height: 1.5px; background: linear-gradient(90deg, var(--tl), var(--tr), var(--bl), var(--br)); }
+
+  .ctl { display: flex; align-items: center; gap: 18px; margin-top: 20px; min-height: 64px; }
+  #phase { font-size: 12px; letter-spacing: .14em; display: flex; align-items: center; gap: 9px; white-space: nowrap; }
+  #phase::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--ink); }
+  #phase.running::before { background: var(--spirit); border-color: var(--spirit); animation: breathe 2.4s ease-in-out infinite; }
+  #phase.loading::before, #phase.stopping::before { background: var(--ink); animation: breathe .8s ease-in-out infinite; }
+  @keyframes breathe { 50% { opacity: .15; } }
+  #up { font: 400 11px var(--mono); color: var(--dim); white-space: nowrap; }
+  #src { flex: 1; min-width: 0; text-align: right; font: 400 11px/1.5 var(--mono); color: var(--dim); overflow: hidden; }
+  #src b { display: block; font-weight: 400; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* one control: a ring. A triangle starts, a square stops */
+  #go { flex: none; display: flex; flex-direction: column; align-items: center; gap: 5px; background: none; border: 0; padding: 0; cursor: pointer; color: var(--ink); font: 400 10px var(--sans); letter-spacing: .3em; }
+  #go::before { content: ""; width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--ink); transition: background .2s;
+                background: no-repeat center / 14px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3.5 1.5v11l9-5.5z' fill='%230c0f14'/%3E%3C/svg%3E"); }
+  #go.stop::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M2.5 2.5h9v9h-9z' fill='%235b4bff'/%3E%3C/svg%3E"); border-color: var(--spirit); }
+  #go:hover::before { background-color: rgba(12, 15, 20, .05); } #go:disabled { opacity: .3; cursor: default; }
+  #go-l { margin-right: -.3em; }
+  #err { color: var(--alarm); font: 400 12px var(--mono); min-height: 18px; }
+
+  .num { display: inline-block; font-weight: 100; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+
+  /* a history: the line fades out towards the past; the point at its end is now */
+  .trail { position: absolute; left: 0; right: 0; pointer-events: none; color: var(--c, var(--spirit)); }
+  .trail svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  .trail path { fill: none; stroke-width: 1.25; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+  .head { position: absolute; right: -2.5px; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: var(--c, var(--spirit)); }
+
+
+  /* the main thing: the scan from above, each pilot's last 12 seconds on it in their colour and their name at the point where they are now */
+  .top { position: relative; aspect-ratio: 1.5; overflow: hidden; }   /* the box's own proportions once the course is known */
+  .top svg { display: block; width: 100%; height: 100%; }
+  #course { fill: none; stroke: var(--faint); stroke-width: 2.4; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+  #top.pic #course { display: none; } #top.pic #trails { filter: drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 2px #fff); }   /* a white edge: the scan keeps its own colours */
+  #trails path { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+  #trails path.now { stroke-width: 10; }
+  .tag { position: absolute; left: 0; top: 0; padding-left: 11px; transform: translateY(-50%); font: 500 12px/1 var(--sans); letter-spacing: .16em; white-space: nowrap; pointer-events: none;
+         opacity: 0; transition: opacity .4s; text-shadow: 0 0 2px #fff, 0 0 4px #fff, 0 0 8px #fff; }
+  .tag.on { opacity: 1; }
+  .scale, .north { position: absolute; font: 400 10px var(--mono); letter-spacing: .08em; text-shadow: 0 0 2px #fff, 0 0 5px #fff; }
+  .scale { left: 10px; bottom: 8px; } .scale i { display: block; height: 1px; background: var(--ink); margin-bottom: 4px; } .north { right: 10px; top: 8px; }
+
+  /* the broadcast's four cells in a row: who is in each, how many positions a second, its part of the picture behind */
+  .pilots { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--faint); }
+  .q.tl { --c: var(--tl); } .q.tr { --c: var(--tr); } .q.bl { --c: var(--bl); } .q.br { --c: var(--br); }
+  .q { position: relative; height: 140px; padding: 12px 14px 0; overflow: hidden; }
+  .q + .q { border-left: 1px solid var(--faint); }
+  .q .trail { z-index: 1; left: 14px; right: 14px; bottom: 7px; height: 24px; }
+  /* the source's picture behind each cell - its quarter of the frame, covering it; faint and grey until the ring below is tapped */
+  .pv { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .pv img { position: absolute; left: 50%; top: 50%; min-width: 200%; min-height: 200%; max-width: none; aspect-ratio: auto 16 / 9; opacity: 0;
+            filter: grayscale(1) contrast(.8) brightness(1.2); transition: opacity .5s, filter .5s; }
+  .q.tl .pv img { transform: translate(-25%, -25%); } .q.tr .pv img { transform: translate(-75%, -25%); }
+  .q.bl .pv img { transform: translate(-25%, -75%); } .q.br .pv img { transform: translate(-75%, -75%); }
+  .pilots.pic .pv img { opacity: .2; } .pilots.pic.see .pv img { opacity: 1; filter: none; }
+  .pilots.pic.see .q { text-shadow: 0 0 2px var(--paper), 0 0 7px var(--paper), 0 0 14px var(--paper); }
+  .hd, .val, .sub { position: relative; z-index: 1; }
+  .hd { display: flex; align-items: center; gap: 9px; }
+  .hd input[type=text] { flex: 1; min-width: 0; border: 0; border-radius: 0; background: transparent; color: var(--ink); font: 300 15px/1.3 var(--sans); letter-spacing: .18em; padding: 0; outline: 0;
+                         border-bottom: 1px solid transparent; }
+  .hd input[type=text]:enabled { border-bottom-color: var(--faint); } .hd input[type=text]:focus { border-bottom-color: var(--c); }
+  .hd input::placeholder { color: var(--faint); letter-spacing: .1em; }
+  .val { display: flex; align-items: flex-end; gap: 9px; margin-top: 6px; }
+  .val .num { font-size: 54px; line-height: .95; color: var(--faint); transition: color .6s; }
+  .q.live .val .num { color: var(--ink); }
+  .val small { font-size: 9.5px; line-height: 1.45; letter-spacing: .06em; color: var(--dim); padding-bottom: 5px; }
+  .sub { display: flex; align-items: center; gap: 7px; margin-top: 3px; font: 400 10px var(--mono); color: var(--dim); min-height: 15px; white-space: nowrap; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--dim); flex: none; }
+  .dot.on { background: var(--c, var(--spirit)); border-color: var(--c, var(--spirit)); } .dot.nosig { background: var(--faint); border-color: transparent; }
+  .q .hd input[type=checkbox] { border-color: var(--c); border-width: 1.5px; } .q .hd input[type=checkbox]:checked { background: radial-gradient(circle, var(--c) 0 2.6px, transparent 3.2px); }
+  .q.off .val, .q.off .sub, .q.off .trail { opacity: .16; }
+  .cap { display: flex; justify-content: flex-end; align-items: center; gap: 9px; font: 400 10px var(--mono); letter-spacing: .1em; color: var(--dim); margin-top: 10px; }
+  /* the picture's switch: a ring in the four colours, grey while nothing runs */
+  .eye { width: 16px; height: 16px; border: 0; padding: 0; border-radius: 50%; cursor: pointer; transition: filter .6s;
+         background: radial-gradient(circle, var(--paper) 0 5px, transparent 5.5px), conic-gradient(var(--tl) 0 25%, var(--tr) 0 50%, var(--bl) 0 75%, var(--br) 0); }
+  body:not(.running) .eye { filter: grayscale(1) opacity(.55); }
+
+  /* the tracker's own values, small: the pilots come first */
+  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 34px; margin-top: 30px; }
+  .m { position: relative; height: 96px; }
+  .m .num { font-size: 40px; line-height: 1; }
+  .m u { text-decoration: none; font: 300 13px var(--sans); color: var(--dim); margin-left: 5px; letter-spacing: .08em; }
+  .m > span { display: block; margin-top: 2px; font-size: 11px; letter-spacing: .1em; color: var(--dim); }
+  .m .trail { bottom: 0; height: 24px; }
+
+  /* the settings: a label and its value on a hairline */
+  h2 { font: 400 10px var(--sans); letter-spacing: .34em; color: var(--dim); margin: 44px 0 10px; }
+  .spec { display: grid; grid-template-columns: 180px 1fr; }
+  .spec > label, .spec > div { padding: 11px 0; border-bottom: 1px solid var(--faint); min-width: 0; }
+  .spec > label:first-of-type, .spec > div:first-of-type { border-top: 1px solid var(--faint); }
+  .spec > label { font-size: 11px; letter-spacing: .08em; color: var(--dim); }
+  .spec input[type=text], .spec select { width: 100%; border: 0; border-radius: 0; background: transparent; color: var(--ink); font: 400 12.5px var(--mono); padding: 0; outline: 0; }
+  .spec select { appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 18px;
+                 background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%230c0f14' stroke-width='1'/%3E%3C/svg%3E") no-repeat right 2px center; }
+  .spec input::placeholder { color: var(--faint); }
+  input:disabled, select:disabled { color: var(--dim); cursor: default; opacity: 1; -webkit-text-fill-color: currentColor; }
+  .checks { display: flex; gap: 26px; flex-wrap: wrap; font-size: 12.5px; }
+  .checks label { display: flex; align-items: center; gap: 9px; cursor: pointer; }
+  /* a choice is a ring; taken, it holds a point */
+  input[type=checkbox] { appearance: none; -webkit-appearance: none; width: 13px; height: 13px; margin: 0; border: 1px solid var(--ink); border-radius: 50%; background: transparent; cursor: pointer; flex: none; }
+  input[type=checkbox]:checked { background: radial-gradient(circle, var(--ink) 0 2.6px, transparent 3.2px); }
+  input[type=checkbox]:disabled { border-color: var(--dim); cursor: default; }
+  /* the log dissolves upwards: the newest line is at the bottom */
+  pre { margin: 0; font: 400 11px/1.6 var(--mono); white-space: pre-wrap; word-break: break-all; max-height: 230px; overflow: auto; color: var(--dim);
+        -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 70%); mask-image: linear-gradient(to bottom, transparent 0, #000 70%); }
+
+  @media (max-width: 640px) {
+    main { padding: 20px 16px 48px; } .mark { font-size: 17px; letter-spacing: .34em; gap: 10px; } .ctl { gap: 12px; margin-top: 14px; } #up { display: none; }
+    .pilots { grid-template-columns: 1fr 1fr; } .q { height: 126px; padding: 10px 10px 0; } .q:nth-child(3) { border-left: 0; } .q:nth-child(-n+2) { border-bottom: 1px solid var(--faint); }
+    .val .num { font-size: 44px; } .hd input[type=text] { font-size: 14px; letter-spacing: .12em; } .q .trail { left: 10px; right: 10px; } .tag { font-size: 10px; padding-left: 8px; }
+    .metrics { gap: 14px; } .m { height: 84px; } .m .num { font-size: 32px; } .m u { font-size: 11px; margin-left: 3px; } .m > span { font-size: 10px; letter-spacing: .04em; }
+    .spec { grid-template-columns: 1fr; } .spec > label { border-bottom: 0; padding-bottom: 0; } .spec > div:first-of-type { border-top: 0; } .spec > div { padding-top: 3px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1 class="mark"><span>ghost</span><i></i><span>line</span></h1>
+
+  <div class="ctl">
+    <span id="phase">…</span><span id="up"></span>
+    <div id="src"><b id="ndi">–</b><span id="ndi-sub"></span></div>
+    <button id="go"><span id="go-l">開始</span></button>
+  </div>
+  <div id="err"></div>
+
+  <div class="top"><svg id="top" preserveAspectRatio="xMidYMid meet"><image id="aerial" preserveAspectRatio="none"/><path id="course"/><g id="trails"></g></svg>
+    <div id="tags"></div><div class="scale" id="scale"><i></i>10 m</div><div class="north">↑ 北 · 軌跡は直近 12 秒</div></div>
+  <div class="pilots" id="cells"></div>
+  <div class="cap">線は直近 5 分、右端がいま · 映像の濃さ <button class="eye" id="eye" title="映像の濃さを切り替え"></button></div>
+
+  <div class="metrics">
+    <div class="m"><b class="num" id="gw">–</b><u>W</u><span>GPU の電力</span><div class="trail"><svg id="sp-w" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-w" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-w)"/></svg><i class="head" id="hd-w"></i></div></div>
+    <div class="m"><b class="num" id="gt">–</b><u>℃</u><span id="gp">GPU の温度</span><div class="trail"><svg id="sp-temp" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-temp" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-temp)"/></svg><i class="head" id="hd-temp"></i></div></div>
+    <div class="m"><b class="num" id="cyc">–</b><u>ms</u><span>映像が届いてから位置が出るまで</span><div class="trail"><svg id="sp-cycle" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-cycle" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-cycle)"/></svg><i class="head" id="hd-cycle"></i></div></div>
+  </div>
+
+  <h2>入力と設定</h2>
+  <div class="spec" id="form">
+    <label for="source">NDI の送り手</label><div><input type="text" id="source" list="sources" placeholder="名前の一部でよい" autocomplete="off"><datalist id="sources"></datalist></div>
+    <label for="map">地図（全マス共通）</label><div><select id="map"></select></div>
+    <label for="cam">カメラの定義</label><div><select id="cam"></select></div>
+    <label for="scene">シーン（.ply）</label><div><select id="scene"></select></div>
+    <label>処理</label><div class="checks">
+      <label><input type="checkbox" id="render" checked> 描いて照合（RENDER）</label>
+      <label><input type="checkbox" id="ba" checked> 束調整（屋外の設定）</label></div>
+    <label for="extra">追加の設定</label><div><input type="text" id="extra" placeholder="例: RELOC_MIN=30 NKF=2" autocomplete="off"></div>
+  </div>
+
+  <h2>ログ</h2>
+  <pre id="log"></pre>
+</main>
+<script>
+const $ = id => document.getElementById(id), CELLS = [["tl", "左上"], ["tr", "右上"], ["bl", "左下"], ["br", "右下"]];
+let filled = false, phase = null, logAtEnd = true;
+
+// the grid's four cells (top row, then bottom row): what to track there, and how it is going while the tracker runs
+const trail = id => `<div class="trail"><svg id="sp-${id}" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-${id}" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0">
+  <stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-${id})"/></svg><i class="head" id="hd-${id}"></i></div>`;
+$("cells").innerHTML = CELLS.map(([c, ja]) => `<div class="q ${c}" id="c-${c}"><div class="pv"><img id="pv-${c}" alt=""></div>
+  <div class="hd"><input type="checkbox" id="on-${c}" checked title="このマスを使う"><input type="text" id="name-${c}" placeholder="${ja}" maxlength="24"></div>
+  <div class="val"><b class="num" id="hz-${c}">–</b><small>回/秒<br>位置が出た</small></div>
+  <div class="sub"><i class="dot" id="dot-${c}"></i><span id="sub-${c}"></span></div>${trail(c)}</div>`).join("");
+$("tags").innerHTML = CELLS.map(([c]) => `<div class="tag" id="tag-${c}"></div>`).join("");
+
+$("trails").innerHTML = CELLS.map(([c]) => `<g id="tr-${c}" style="stroke: var(--${c})">${[1, .5, .25, .1].map(o => `<path opacity="${o}"/>`).join("")}<path class="now"/></g>`).join("");
+$("eye").onclick = () => $("cells").classList.toggle("see");
+
+// the source's picture: one small JPEG twice a second, shared by the four quarters; nothing is asked for while the page is hidden
+let pvName = "", pvUrl = null, pvBusy = false;
+async function pollPreview() {
+  if (pvBusy || document.hidden) return; pvBusy = true;
+  try {
+    const r = pvName ? await fetch("/api/preview.jpg?source=" + encodeURIComponent(pvName)) : null;
+    if (r && r.status === 200) {
+      const u = URL.createObjectURL(await r.blob()); for (const [c] of CELLS) $("pv-" + c).src = u;
+      if (pvUrl) setTimeout(u0 => URL.revokeObjectURL(u0), 1500, pvUrl); pvUrl = u; $("cells").classList.add("pic");
+    } else $("cells").classList.remove("pic");
+  } catch { $("cells").classList.remove("pic"); } finally { pvBusy = false; }
+}
+
+// the top view: x east to the right, z south downwards, so north is up
+let courseKey = null, courseBox = null;
+async function loadCourse(name, scene) {
+  const key = name + "|" + scene; if (!name || key === courseKey) return; courseKey = key;
+  const r = await fetch("/api/map?name=" + encodeURIComponent(name)).catch(() => null);
+  if (!r || !r.ok) { courseKey = null; $("err").textContent = "地図を読めない: " + (r ? (await r.json().catch(() => ({}))).error || r.status : "サーバーに届かない"); return; }
+  const c = await r.json(); if (key !== courseKey) return;
+  if ($("err").textContent.startsWith("地図を読めない")) $("err").textContent = "";
+  courseBox = c.box; $("top").setAttribute("viewBox", c.box.join(" ")); $("top").parentElement.style.aspectRatio = c.box[2] / c.box[3];
+  $("course").setAttribute("d", c.pts.map(p => `M${p[0]},${p[1]}h0`).join("")); scale();
+  // under it, the scan seen from above: the server renders it once (a few seconds) and keeps it
+  const img = $("aerial"); img.removeAttribute("href"); $("top").classList.remove("pic");
+  for (const [k, v] of [["x", c.box[0]], ["y", c.box[1]], ["width", c.box[2]], ["height", c.box[3]]]) img.setAttribute(k, v);
+  const url = `/api/topview.jpg?map=${encodeURIComponent(name)}&scene=${encodeURIComponent(scene)}`;
+  for (let i = 0; scene && i < 40 && key === courseKey; i++) {
+    const t = await fetch(url).catch(() => null); if (!t) { courseKey = null; break; }
+    if (t.status === 200) { img.setAttribute("href", URL.createObjectURL(await t.blob())); $("top").classList.add("pic"); break; }
+    if (t.status !== 202) { $("err").textContent = "真上からの絵: " + ((await t.json().catch(() => ({}))).error || t.status); break; }
+    await new Promise(f => setTimeout(f, 2000));
+  }
+}
+function scale() {
+  if (!courseBox) return; const r = $("top").getBoundingClientRect();
+  $("scale").firstElementChild.style.width = 10 * Math.min(r.width / courseBox[2], r.height / courseBox[3]) + "px";
+}
+addEventListener("resize", scale);
+// Positions as they are solved, straight from the tracker's own stream (its PUSH port): every answer, so the trails move at the video's
+// rate instead of once a second. When no row has come for 2.5 s (the port unreachable, or a gap), the state's trail is drawn instead.
+const live = {}, names = {}, held = {}; let es = null, lastRow = 0, dirty = true;   // live: cell -> [[x, z, when it arrived (ms), cut?]], oldest first
+// An answer that would need more than VMAX from the last drawn point is held back: alone it is a stray answer and is dropped; if the
+// next one continues from it the pilot really is there (found again elsewhere), and the trail goes on from it without a line across.
+const VMAX = 60;                                     // m/s, 216 km/h: above what the quads fly
+function add(cell, x, z, t) {
+  const pts = live[cell] ||= [], last = pts[pts.length - 1], h = held[cell];
+  const near = a => Math.hypot(x - a[0], z - a[1]) <= VMAX * Math.max((t - a[2]) / 1000, 1 / 30);
+  if (!last || t - last[2] > 700 || near(last)) { pts.push([x, z, t]); held[cell] = null; }
+  else if (h && near(h)) { pts.push([h[0], h[1], h[2], true], [x, z, t]); held[cell] = null; }
+  else held[cell] = [x, z, t];
+}
+function listen(s) {
+  if (s.phase === "stopped") { if (es) { es.close(); es = null; } for (const k in live) delete live[k]; dirty = true; return; }
+  for (const [n, c] of Object.entries(s.cells)) names[n] = c.cell;
+  if (!es) {
+    es = new EventSource(`http://${location.hostname}:${s.push}/`);
+    es.onmessage = e => {
+      const r = JSON.parse(e.data), cell = names[r.stream]; if (!cell || !r.pos) return;
+      add(cell, r.pos[0], r.pos[2], lastRow = performance.now()); dirty = true;
+    };
+  }
+  const now = performance.now();
+  for (const c of Object.values(s.cells)) if (now - lastRow > 2500 || !(live[c.cell] || []).length) { live[c.cell] = c.trail.map(p => [p[0], p[1], now - p[2] * 1000]); dirty = true; }
+}
+// a pilot's trail in four bands that fade with age, broken where no position came for a while; the point and the name where they are now
+function drawTrail(cell, pts, now) {
+  const paths = $("tr-" + cell).children, d = ["", "", "", ""];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p = pts[i], q = pts[i + 1];
+    if (q[2] - p[2] < 700 && !q[3]) d[Math.min(3, Math.floor((now - p[2]) / 3000))] += `M${p[0]},${p[1]}L${q[0]},${q[1]}`;
+  }
+  d.forEach((v, b) => paths[b].setAttribute("d", v));
+  const last = pts[pts.length - 1], fresh = !!last && now - last[2] < 1500 && !!courseBox, tag = $("tag-" + cell);
+  paths[4].setAttribute("d", fresh ? `M${last[0]},${last[1]}h0` : ""); tag.classList.toggle("on", fresh);
+  if (fresh) { tag.style.left = (last[0] - courseBox[0]) / courseBox[2] * 100 + "%"; tag.style.top = (last[1] - courseBox[1]) / courseBox[3] * 100 + "%"; }
+}
+(function frame() {                                  // redrawn when a position arrived, and a few times a second anyway so the trails fade
+  requestAnimationFrame(frame); const now = performance.now();
+  if (!dirty && now - frame.t < 250) return; dirty = false; frame.t = now;
+  for (const [cell] of CELLS) { const pts = live[cell] || []; while (pts.length && now - pts[0][2] > 12000) pts.shift(); drawTrail(cell, pts, now); }
+})();
+
+const num = (id, text) => { const el = $(id); if (el.textContent !== text) el.textContent = text; };
+
+function fillSelect(el, items, value, parts = 1) {   // parts: how much of the path's end to show (the cams all have the same file name)
+  const want = value ?? el.value;
+  const label = v => v.includes("+") ? "自動（" + v.split("+").map(x => x.split("/").pop().replace(".json", "")).join(" / ") + "）" : v.split("/").slice(-parts).join("/");   // several lenses: the tracker picks per cell
+  if (el.dataset.items !== items.join("|")) { el.replaceChildren(...items.map(v => new Option(label(v), v))); el.dataset.items = items.join("|"); }
+  if (items.includes(want)) el.value = want;
+}
+
+// a value's last 5 minutes: the newest sample at the right edge (marked), the line fading out towards the past, a gap where there was no value
+function spark(id, vals, n, lo, hi) {
+  const line = $("sp-" + id).querySelector("path"), head = $("hd-" + id); let d = "", open = false, y = null;
+  hi = Math.max(hi, ...vals.filter(v => v != null));
+  vals.forEach((v, i) => {
+    if (v == null) { open = false; return; }
+    const x = +(100 - (vals.length - 1 - i) / (n - 1) * 100).toFixed(2); y = 29 - (Math.min(Math.max(v, lo), hi) - lo) / (hi - lo) * 28;
+    d += (open ? "L" : "M") + x + "," + y.toFixed(1); open = true;
+  });
+  line.setAttribute("d", d); head.style.display = open ? "" : "none"; if (open) head.style.top = y / 30 * 100 + "%";
+}
+
+function fillForm(s) {                              // once, from the last start; after that the fields are the operator's
+  const c = s.config || {}, o = s.options;
+  fillSelect($("map"), o.maps, c.map); fillSelect($("cam"), o.cams, c.cam, 2); fillSelect($("scene"), o.scenes, c.scene);
+  for (const k of ["source", "extra"]) if (c[k] != null) $(k).value = c[k];
+  for (const k of ["render", "ba"]) if (c[k] != null) $(k).checked = !!c[k];
+  for (const [cell] of CELLS) {
+    const x = (c.cells || []).find(x => x.cell === cell);
+    if (x) { $("on-" + cell).checked = !!x.on; $("name-" + cell).value = x.name || ""; }
+  }
+}
+
+function render(s) {
+  if (!filled) { fillForm(s); filled = true; }
+  else { fillSelect($("map"), s.options.maps); fillSelect($("cam"), s.options.cams, undefined, 2); fillSelect($("scene"), s.options.scenes); }
+  $("sources").replaceChildren(...s.options.sources.map(v => new Option(v)));
+  const ja = { stopped: "停止中", loading: "読み込み中", running: "動作中", stopping: "停止処理中" }; document.body.className = s.phase;
+  $("phase").textContent = ja[s.phase] || s.phase; $("phase").className = s.phase;
+  $("up").textContent = s.up ? `${Math.floor(s.up / 60)} 分 ${s.up % 60} 秒` : (s.exit ? `前回は終了コード ${s.exit}` : "");
+  const stopped = s.phase === "stopped";
+  $("go-l").textContent = stopped ? "開始" : "停止"; $("go").className = stopped ? "" : "stop"; $("go").disabled = s.phase === "stopping";
+  for (const el of document.querySelectorAll("#form input, #form select, .q .hd input")) el.disabled = !stopped;
+  num("gw", s.gpu.w != null ? s.gpu.w.toFixed(0) : "–");
+  num("gt", s.gpu.temp != null ? String(s.gpu.temp) : "–");
+  $("gp").textContent = "GPU の温度" + (s.gpu.pstate ? ` · ${s.gpu.pstate === "P8" ? "待機" : "動作中"}` : "");   // P8 is the idle state, P0-P2 working
+  num("cyc", s.lat != null ? s.lat.toFixed(0) : "–");
+  $("ndi").textContent = (!stopped && s.ndi) || ""; $("ndi-sub").textContent = (!stopped && s.input) || "";
+  listen(s);
+  const byCell = Object.fromEntries(Object.entries(s.cells).map(([n, c]) => [c.cell, { n, ...c }]));
+  for (const [cell] of CELLS) {
+    const c = stopped ? null : byCell[cell];
+    $("c-" + cell).classList.toggle("off", stopped ? !$("on-" + cell).checked : !c);
+    $("dot-" + cell).className = "dot" + (c ? (c.signal === false ? " nosig" : c.solved > 0 ? " on" : "") : "");
+    $("c-" + cell).classList.toggle("live", !!c && c.signal !== false && c.solved > 0);
+    $("tag-" + cell).textContent = c ? c.n : "";
+    num("hz-" + cell, c ? c.solved.toFixed(0) : "–");
+    $("sub-" + cell).textContent = !c ? "" : c.signal === false ? "映像なし" :
+      (c.lens ? c.lens.replace("hdzero-nano90-", "").replace("-lens", "") + " · " : "") + `映像 ${c.hz.toFixed(1)} 枚/秒` + (c.last ? ` · ${c.last.age < 2 ? "一致点 " + c.last.inl : "見失って " + c.last.age.toFixed(0) + " 秒"}` : " · まだ位置が出ない");
+  }
+  pvName = (stopped ? $("source").value : (s.config && s.config.source) || "").trim(); loadCourse(...(stopped ? [$("map").value, $("scene").value] : [s.config && s.config.map, (s.config && s.config.scene) || ""]));
+  const h = s.hist; spark("w", h.w, h.n, 0, 150); spark("temp", h.temp, h.n, 25, 60); spark("cycle", h.lat, h.n, 0, 40);
+  for (const [cell] of CELLS) spark(cell, h.cells[cell], h.n, 0, 30);
+  const log = $("log"); log.textContent = s.log.join("\n"); if (logAtEnd) log.scrollTop = log.scrollHeight;
+  phase = s.phase;
+}
+
+$("log").addEventListener("scroll", e => { const l = e.target; logAtEnd = l.scrollTop + l.clientHeight >= l.scrollHeight - 8; });
+for (const [cell] of CELLS) $("on-" + cell).addEventListener("change", () => $("c-" + cell).classList.toggle("off", !$("on-" + cell).checked));
+
+async function post(path, body) {
+  $("err").textContent = "";
+  try {
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    if (!r.ok) $("err").textContent = (await r.json().catch(() => ({}))).error || `${r.status} ${r.statusText}`;
+  } catch (e) { $("err").textContent = "サーバーに届かない: " + e.message; }
+  poll();
+}
+const start = () => post("/api/start", {
+  source: $("source").value, map: $("map").value, cam: $("cam").value, scene: $("scene").value,
+  render: $("render").checked, ba: $("ba").checked, extra: $("extra").value,
+  cells: CELLS.map(([cell]) => ({ cell, on: $("on-" + cell).checked, name: $("name-" + cell).value.trim() })) });
+$("go").onclick = () => { if (phase === "stopped") start(); else if (confirm("tracker を止める？")) post("/api/stop"); };
+
+async function poll() {
+  try { render(await (await fetch("/api/state")).json()); if ($("err").textContent === "サーバーに届かない") $("err").textContent = ""; }
+  catch { $("err").textContent = "サーバーに届かない"; }
+}
+poll(); setInterval(poll, 1000); setInterval(pollPreview, 500);
+</script>
+</body>
+</html>

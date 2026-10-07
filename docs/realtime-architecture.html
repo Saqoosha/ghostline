@@ -112,10 +112,10 @@ ul.tight li { margin: 3px 0; }
     <div class="stat"><div class="v">11<small>ms</small></div><div class="k">フレーム到着から姿勢まで p50（1 人）。4 人同時は 18〜23 ms</div></div>
     <div class="stat"><div class="v">≈300<small>ms</small></div><div class="k">会場で送ってから画面に点が出るまで（表示の 100 ms 遅らせを含む）</div></div>
   </div>
-  <p class="note">点線の下線の語はカーソルを乗せると説明が出る。まとめは末尾の<a href="#s12">用語集</a>。<br>誤差の参照はオフラインの通しの経路 <code>poses60_pad.json</code>。同じ映像から作った姿勢で、独立した真値ではない。数値は RTX 4090、2026-09-29〜30 の計測。09・10 は 2026-10-04、屋内のアナログ機。冒頭の数字と 04 の「照合・特徴・PnP を速くする」の表は 2026-10-05（照合と XFeat を TensorRT、PnP を PoseLib）。図と 3D の答えは PyTorch＋MAGSAC の版のまま。予測姿勢でその場で描いて照合する <code>RENDER=1</code>（d05 の答え p50 0.11 m、新しいコースもスキャンだけの地図で同じ精度）はこのページに無く、<code>docs/realtime-tracking.ja.md</code> の RENDER 節にある。</p>
+  <p class="note">点線の下線の語はカーソルを乗せると説明が出る。まとめは末尾の<a href="#s12">用語集</a>。<br>誤差の参照はオフラインの通しの経路 <code>poses60_pad.json</code>。同じ映像から作った姿勢で、独立した真値ではない。数値は RTX 4090、2026-09-29〜30 の計測。09・10 は 2026-10-04、屋内のアナログ機。冒頭の数字と 04 の「照合・特徴・PnP を速くする」の表は 2026-10-05（照合と XFeat を TensorRT、PnP を PoseLib）。図と 3D の答えは PyTorch＋MAGSAC の版のまま。予測姿勢でその場で描いて照合する <code>RENDER=1</code>（d05 の答え p50 0.11 m、新しいコースもスキャンだけの地図で同じ精度）はこのページに無く、<code>docs/realtime-tracking.ja.md</code> の RENDER 節にある。11 は 2026-10-05〜06、4090 機に入れた Linux（rt4090）。</p>
   <nav class="toc">
     <a href="#s1">1 全体の流れ</a><a href="#s2">2 キーフレーム地図</a><a href="#s3">3 毎フレームの処理</a><a href="#s4">4 1 周の時間割</a>
-    <a href="#s5">5 4 人をまとめる</a><a href="#s6">6 精度</a><a href="#s7">7 描き方</a><a href="#s8">8 回線とビットレート</a><a href="#s9">9 USB キャプチャから</a><a href="#s10">10 ライブの束調整</a><a href="#s11">11 効いたこと・残り</a><a href="#s12">12 用語集</a>
+    <a href="#s5">5 4 人をまとめる</a><a href="#s6">6 精度</a><a href="#s7">7 描き方</a><a href="#s8">8 回線とビットレート</a><a href="#s9">9 USB キャプチャから</a><a href="#s10">10 ライブの束調整</a><a href="#s13">11 会場に持ち込む：電池と NDI</a><a href="#s11">12 効いたこと・残り</a><a href="#s12">13 用語集</a>
   </nav>
 </header>
 
@@ -313,7 +313,7 @@ ul.tight li { margin: 3px 0; }
       <li><b>受信側の先読みを絞る</b>：ffmpeg の既定だと最初の約 5 秒が消えた</li>
       <li class="muted">効かなかった：解像度（1280×720〜640×360 が 115〜117 ms）、デコーダのスレッド</li>
     </ul>
-    <p class="note">会場の送り手は GStreamer の 1 行の見込み：<code>ndisrc ! videoscale ! x264enc tune=zerolatency ! rtph264pay mtu=1316 ! srtsink</code>（本物の NDI では未確認）。</p>
+    <p class="note">この節はオフィスへ SRT で送る形の話。会場には 4090 機を持ち込み、NDI を直接受けるので送り手は要らない（11）。</p>
   </div>
 </div>
 
@@ -469,8 +469,51 @@ ul.tight li { margin: 3px 0; }
   </div>
 </div>
 
+<!-- ============================================================ 11 (field) -->
+<h2 id="s13"><span class="n">11</span>会場に持ち込む：電池と NDI</h2>
+<p>会場には 4090 機を持ち込み、ポータブル電源（EcoFlow DELTA 2 Max、2,048 Wh）で回し、Event VRX の NDI（1080p の 2×2）を同じ LAN で直接受ける。電力は GPU（<code>nvidia-smi</code>）と CPU パッケージ（RAPL）の和で、マザーボード・メモリ・ファン・電源の損失は入らない。録画で測るときは <code>PACE=1</code>（実時間で歩かせる。付けないと GPU が埋まって高く出る）。箱の操作はブラウザの操作ページ（<code>rt_control.py</code>、<code>http://rt4090:8080</code>）：NDI の送り手とマスを選んで開始 / 停止、各マスの映像と位置の回数、真上から描いたスキャンの上に軌跡と名前。HDZero Nano 90 はレンズが 2 種類で、マスごとに tracker が両方を短く試して一致点の多いほうに決める（合わない定義では一致点が 3 分の 1、軌跡が 1〜2 m ぶれる）。60 fps の NDI は 30 に間引く。</p>
+<div class="grid2">
+  <div class="card">
+    <h4>4 人・<code>RENDER=1</code> の GPU＋CPU</h4>
+    <table>
+      <tr><th>段階</th><th class="num" style="white-space:nowrap">平均</th><th class="num" style="white-space:nowrap">1 周 p50</th></tr>
+      <tr><td>はじめ（WSL）</td><td class="num" style="white-space:nowrap">282 W</td><td class="num" style="white-space:nowrap">16.0 ms</td></tr>
+      <tr><td>torch の OpenMP を 1 スレッドに（既定にした）</td><td class="num" style="white-space:nowrap">253 W</td><td class="num" style="white-space:nowrap">15.5 ms</td></tr>
+      <tr><td>Linux で直に</td><td class="num" style="white-space:nowrap">243 W</td><td class="num" style="white-space:nowrap">11.5 ms</td></tr>
+      <tr><td>Linux ＋ GPU の電力上限 150 W</td><td class="num" style="white-space:nowrap">195 W</td><td class="num" style="white-space:nowrap">12.1 ms</td></tr>
+      <tr><td>準決勝をライブで、<code>SIGNAL=1</code>、Mac Studio から 1080p NDI（Linux）</td><td class="num" style="white-space:nowrap"><b>123 W</b>（ヒート中 163、あいだ 46）</td><td class="num" style="white-space:nowrap">10.3 ms</td></tr>
+    </table>
+    <p class="note">答えの精度はどの段階も同じ（d05 p50 0.11〜0.12 m）。準決勝の NDI では解けたフレーム 14,081、届いてから答えまでマスごとに p50 15〜27 ms。この形では GPU の上限 150 W は 3 W しか効かない（ヒート中の GPU は平均 122 W）。屋外のライブの束調整は <code>BA=0.5 BA_ACC=30 BA_ALPHA=60</code>（既定は屋内向けで、屋外では悪くなる）：描く点 d05 p90 0.47 → 0.40 m。</p>
+  </div>
+  <div class="card">
+    <h4>効いたこと・効かなかったこと</h4>
+    <ul class="tight">
+      <li><b>CPU の約 100 W は torch の OpenMP の空回り</b>：16 本が仕事もなく回っていた。<code>OMP_NUM_THREADS=1</code> で消え、速さも精度も同じ</li>
+      <li><b>受信機が絵を出していないマスは処理しない</b>（<code>SIGNAL=1</code>）：単色の画面は画素のばらつき 0、砂嵐やデジタルの崩れは縦に隣り合う行の相関が 0.5 未満。全マス空なら GPU は 22 W まで下がる</li>
+      <li><b>Linux で直に</b>：WSL は CUDA の待ちでコアを回し（BLOCKING_SYNC を無視）、GPU への命令が Windows を通る。何もしていないとき CPU 31 → 9 W</li>
+      <li><b>GPU の電力上限 150 W</b>：200 W 以上は効かず、100 W ではクロックが落ちてレースの 3 本が 30 → 22 Hz</li>
+      <li><b>合間の GPU を 21 → 7 W に戻す</b>：Linux の 4090 は CUDA を一度使うと待機（P8）が 21 W に張り付く。ドライバの suspend と resume を続けて書くと 7 W に戻り、tracker は解き続ける（約 2 秒）。<code>rt_gpu_idle.sh</code> が P8 で 15 W 以上を 20 秒見たら自動で打つ。準決勝の通しでは 122.2 → 120.7 W と効果は小さい（合間は 74 秒が 2 回で、最初の 20 秒は P2 の 56 W。発火済みの合間は 30.6 → 21.1 W）。合間が長いほど効く</li>
+      <li class="muted">効かなかった：Windows で直に（1.6〜2 倍遅い）、<code>CUDA_SYNC=block</code>（Linux で CPU 49 → 16 W だが 1 周が倍）、クロック固定（同じ電力で上限より遅い）、CPU のターボ切り</li>
+    </ul>
+  </div>
+</div>
+<div class="grid2">
+  <div class="card">
+    <h4>NDI を直接受ける（<code>ndi://&lt;名前&gt;</code>）</h4>
+    <ul class="tight">
+      <li><code>cyndilib</code>（pip、<code>libndi</code> を同梱）の FrameSync を 2 ms ごとに覗き、NDI のタイムスタンプが変わったら新しいフレーム。<code>receive()</code> で 1 枚ずつ取る形は 3 分の 1 を取りこぼした</li>
+      <li>1080p 30 fps を 1 枚も落とさず、送ってから届くまで 31.5 ms、取り出し 0.6 ms。Linux は avahi-daemon が要る</li>
+      <li><code>GRID=1920x1080</code>、マスは 960×540。試験の送り手は <code>ndi_send.py</code></li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>電池でもつ時間（見積もり）</h4>
+    <p>DELTA の AC から使えるのは約 1,760 Wh（変換効率 86%）。本体の残りを 40 W、電源の効率を 90% と仮に置くと、はじめの 282 W で約 4.9 時間、準決勝の流れの 123 W で約 9.7 時間（モニターや受信機は別）。大会 1 日ぶん（JDL 2026 Round 6 の配信 7 時間 50 分に同じ映像の判定を掛けた見積もり）は GPU＋CPU 平均 131 W・壁で約 1,490 Wh、電池 1 台の 84〜91%。数字は NDI 30 fps のもの。Event VRX の 60 fps は tracker が 30 に間引く（間引かないと 3 マスで GPU ＋35%）。仮定の部分は、走らせながら DELTA の出力表示を読めば確かめられる。</p>
+  </div>
+</div>
+
 <!-- ============================================================ 11 -->
-<h2 id="s11"><span class="n">11</span>効いたこと・効かなかったこと・残っていること</h2>
+<h2 id="s11"><span class="n">12</span>効いたこと・効かなかったこと・残っていること</h2>
 <div class="grid2">
   <div class="card">
     <h4>見失いと探し直し</h4>
@@ -485,7 +528,7 @@ ul.tight li { margin: 3px 0; }
   <div class="card">
     <h4>残っていること</h4>
     <ul class="tight">
-      <li>会場での通し：本物の NDI の 2×2、会場の上り回線は未計測</li>
+      <li>会場での通し：本物の Event VRX の NDI では未確認（送り手の名前、マスの並び）。電源を入れたら前回の設定で自動開始する仕組み、壁の電力での確認、パイロット名をレース管理の仕組みから取ることもこれから</li>
       <li>ライブページは 1 人ぶんしか描かない：複数人の答えが 1 本に混ざる（issue #3）。race ページで 4 人の軌跡＋ライブの点を重ねるのもこれから</li>
       <li>送り手が立ち上がり直すと、録画の映像と答えがずれる（issue #4）</li>
       <li>本物のライブ入力で束調整と <code>sync=false</code> を通す（どちらも録画を流し直して測った）。4 人ぶんのライブ入力も未確認</li>
@@ -521,7 +564,7 @@ ul.tight li { margin: 3px 0; }
   </table>
 </div>
 
-<h2 id="s12"><span class="n">12</span>用語集</h2>
+<h2 id="s12"><span class="n">13</span>用語集</h2>
 <div id="glossary"></div>
 
 </main>
@@ -579,7 +622,7 @@ function axes(svg, { x0, x1, y0, y1, W, H, L = 48, R = 12, T = 12, B = 28, xt, y
   const boxes = [
     { x: 10, y: 60, w: 170, h: 200, t: '会場', items: ['HDZero Event VRX', '4 ch 受信', 'NDI 2×2（中継と同じ）'], fill: '#f1f0ea' },
     { x: 215, y: 60, w: 170, h: 200, t: '会場の送り手', items: ['GStreamer', 'x264 zerolatency', 'RTP → SRT（待ち 80 ms）', '854×480、8 Mbps', '試験は rt_send.py'], fill: '#f1f0ea' },
-    { x: 440, y: 20, w: 400, h: 290, t: '処理用 PC（RTX 4090、WSL）：rt_track.py 1 プロセス', fill: '#eef3fa' },
+    { x: 440, y: 20, w: 400, h: 290, t: '処理用 PC（RTX 4090。オフィスは WSL、会場は Linux）：rt_track.py', fill: '#eef3fa' },
     { x: 885, y: 60, w: 165, h: 200, t: 'ページ', items: ['viewer/src/live.ts', '100 ms 遅らせて内挿', '直近 0.5 s の軌跡を描き直す'], fill: '#f1f0ea' },
   ]
   for (const b of boxes) {
