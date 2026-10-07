@@ -183,7 +183,7 @@
 <script src="rt_topview.js"></script>
 <script>
 const $ = id => document.getElementById(id), CELLS = [["tl", "左上"], ["tr", "右上"], ["bl", "左下"], ["br", "右下"]];
-TopView.onError(m => { const e = $("err"); if (m || e.textContent.startsWith("地図") || e.textContent.startsWith("真上") || e.textContent.startsWith("コースの線")) e.textContent = m; });
+TopView.onError(m => { const e = $("err"); if (m || e.textContent.startsWith("地図") || e.textContent.startsWith("真上")) e.textContent = m; });
 let filled = false, phase = null, logAtEnd = true;
 
 // the grid's four cells (top row, then bottom row): what to track there, and how it is going while the tracker runs

@@ -34,7 +34,7 @@ const TopView = (() => {
     if (!name) { $("track").removeAttribute("d"); $("gate").removeAttribute("d"); return; }
     const r = await fetch("/api/track?name=" + encodeURIComponent(name)).catch(() => null);
     if (!r || !r.ok) { trackKey = null; onError("コースの線を読めない: " + (r ? (await r.json().catch(() => ({}))).error || r.status : "サーバーに届かない")); return; }
-    const t = await r.json(); if ((name || "") !== trackKey) return; onError("");
+    const t = await r.json(); if ((name || "") !== trackKey) return;
     $("track").setAttribute("d", smoothLoop(t.pts));
     $("gate").setAttribute("d", t.gate ? `M${t.gate[0].join(",")}L${t.gate[1].join(",")}` : "");
   }
@@ -73,9 +73,9 @@ const TopView = (() => {
   function when(cell, r, now) {
     if (!(r.fps > 0) || r.i == null) return now;
     const f = r.i * 1000 / r.fps, o = now - f, c = clock[cell];
-    // a stall of the source does not skip frame numbers (only frames received are counted): over a second late also starts again
-    if (!c || f < c.f - 1000 || f - c.f > 2000 || o > c.o + 1000) clock[cell] = { o, f, t: -Infinity };
-    else { c.o = o < c.o ? o : c.o + (o - c.o) * 0.002; c.f = Math.max(c.f, f); }
+    if (!c || f < c.f - 1000 || f - c.f > 2000) clock[cell] = { o, f, t: -Infinity };
+    // a stall of the source does not skip frame numbers (only frames received are counted): late by over 100 ms, catch up fast
+    else { c.o = o < c.o ? o : c.o + (o - c.o) * (o > c.o + 100 ? 0.1 : 0.002); c.f = Math.max(c.f, f); }
     const k = clock[cell]; return k.t = Math.max(f + k.o, k.t);   // never before the last one: the trail is drawn in time order
   }
   function listen(s) {
@@ -126,7 +126,7 @@ const TopView = (() => {
   }
   (function frame() {                                  // redrawn when a position arrived, and a few times a second anyway so the trails fade
     requestAnimationFrame(frame); const now = performance.now();
-    if (!dirty && !(view.delay > 0) && now - frame.t < 250) return;   // delayed, the head moves between the answers: every frame
+    if (!dirty && !(view.delay > 0 && Object.values(live).some(p => p.length)) && now - frame.t < 250) return;   // delayed, the head moves between the answers: every frame
     dirty = false; frame.t = now;
     for (const cell of CELLS) { const pts = live[cell] || []; while (pts.length && now - pts[0][2] > keep + view.delay) pts.shift(); drawTrail(cell, pts, now); }
   })();

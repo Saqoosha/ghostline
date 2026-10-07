@@ -186,10 +186,12 @@ def view():
     return dict(delay=v.get("delay", 250), smooth=v.get("smooth", 80))   # σ 80 ms: the wobble mostly gone, the line within ~0.2 m of the answers; 250 ms covers 2.5σ and the solve
 
 def set_view(v):                                   # ms; the delay lets the smoothing see as far ahead of the drawn point as behind it
+    if not isinstance(v, dict): raise ValueError("JSON の形がおかしい")
     d, m = v.get("delay"), v.get("smooth")
     if not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in (d, m)) or not (0 <= d <= 2000 and 0 <= m <= 1000): raise ValueError("遅らせる時間は 0〜2000 ms、なめらかさは 0〜1000 ms")
-    with open(VIEW + ".tmp", "w") as f: json.dump(dict(delay=round(d), smooth=round(m)), f)
-    os.replace(VIEW + ".tmp", VIEW)                # whole: /api/state reads it on other threads
+    tmp = f"{VIEW}.{threading.get_ident()}.tmp"
+    with open(tmp, "w") as f: json.dump(dict(delay=round(d), smooth=round(m)), f)
+    os.replace(tmp, VIEW)                # whole: /api/state reads it on other threads
 
 def watch(p):                                       # the tracker's output: the log, and the lines that say how it is doing
     try:
