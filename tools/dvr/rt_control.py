@@ -208,6 +208,7 @@ def watch(p):                                       # the tracker's output: the 
                 try: f.write(time.strftime("%H:%M:%S ") + line); f.flush()
                 except OSError as e: f = None; note(f"(ログを残せない: {e})")
             note(line.rstrip()[:300])
+        if f: f.close()
     finally:
         code = p.wait()
         with lock: S.update(phase="stopped", proc=None, exit=code); S["log"].append(f"(終了、コード {code})")

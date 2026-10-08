@@ -10,6 +10,7 @@ import glob, hashlib, json, os, re, subprocess, threading, time, traceback
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
 REC, REC_DIR, REC_FPS, REC_HOLD, REC_ENC = int(E("REC", 1)), os.path.expanduser(E("REC_DIR", HERE + "/rec")), float(E("REC_FPS", 0)), float(E("REC_HOLD", 5)), E("REC_ENC", "h264_nvenc")
 REC_RATE = E("REC_RATE", "16M")
+STOPPING = threading.Event()                        # set by stop_all: a picture still on screen must not start a new file
 FILE = re.compile(r"[A-Za-z0-9_.-]+\.mp4")          # what /rec/<file> may serve
 
 def receiver(highest):
@@ -26,9 +27,7 @@ class Writer:
     stalled sender has its last frame repeated and frames 2 or more ahead of the clock are dropped, so the file's time is the venue's"""
     def __init__(self, src, stem, rx, vf):
         self.src, self.stem, self.rx, self.vf, self.stop, self.frames, self.t0, self.size = src, stem, rx, vf, threading.Event(), 0, time.time(), None
-        self.on = [0, 0, 0, 0]; self.looks = 0     # how many of the watcher's looks found a picture in each cell
-        # busy: connecting or writing (the source is "recording"); cleared before the remux, so the next stretch may start meanwhile
-        self.busy, self.failed, self.ended = True, False, None
+        self.on = [0, 0, 0, 0]; self.looks = 0; self.failed = False     # how many of the watcher's looks found a picture in each cell
         self.thread = threading.Thread(target=self.run, daemon=True); self.thread.start()
     def run(self):
         rx, vf = self.rx, self.vf; ff = None; mp4 = f"{REC_DIR}/{self.stem}.mp4"
@@ -68,8 +67,6 @@ class Writer:
                 ff.wait()
                 self.failed = bool(ff.returncode)
                 if self.failed: print(f"rec {self.src.name}: ffmpeg failed (exit {ff.returncode}, its message above)", flush=True)
-            self.ended, self.busy = time.time(), False
-            if ff:
                 if not os.path.exists(mp4) or not os.path.getsize(mp4):   # nothing written: no file to list (a non-empty one that broke is kept)
                     for f in (mp4, f"{REC_DIR}/{self.stem}.json"): os.path.exists(f) and os.remove(f)
                 else: self.finish(mp4, fps)
@@ -92,7 +89,7 @@ class Watcher:
     """one NDI source: its low-bandwidth stream looked at five times a second. A picture in any cell starts a Writer; all four
     empty (or no frames) for REC_HOLD seconds, or the source leaving, stops it"""
     def __init__(self, finder, name):
-        self.finder, self.name, self.writer, self.cells = finder, name, None, None
+        self.finder, self.name, self.writer, self.cells, self.began = finder, name, None, None, 0.0
         threading.Thread(target=self.run, daemon=True).start()
     def run(self):
         import numpy as np
@@ -111,11 +108,11 @@ class Watcher:
                     elif time.time() - seen > 2: self.cells = None   # no new frame for 2 s (by this box's clock: the sender's may differ)
                     now = time.time(); wr = self.writer
                     if self.cells and any(self.cells): last_on = now
-                    if wr and wr.busy:
+                    if wr and wr.thread.is_alive():
                         if self.cells: wr.looks += 1; wr.on = [a + b for a, b in zip(wr.on, self.cells)]
                         if now - last_on > REC_HOLD: wr.stop.set()
-                    elif self.cells and any(self.cells) and (not wr or now - wr.ended > (60 if wr.failed else 0)):   # a failing ffmpeg: once a minute
-                        self.writer = Writer(src, time.strftime("%Y%m%d-%H%M%S") + "_" + (re.sub(r"[^A-Za-z0-9_-]+", "-", self.name).strip("-")[:48] or "ndi")
+                    elif self.cells and any(self.cells) and not STOPPING.is_set() and now - self.began > (60 if wr and wr.failed else 10):   # a failing ffmpeg: once a minute
+                        self.began = now; self.writer = Writer(src, time.strftime("%Y%m%d-%H%M%S") + "_" + (re.sub(r"[^A-Za-z0-9_-]+", "-", self.name).strip("-")[:48] or "ndi")
                                              + "-" + hashlib.sha1(self.name.encode()).hexdigest()[:6], *self.full)   # two names that clean up alike stay apart
                     time.sleep(0.2)
             except Exception: traceback.print_exc(); time.sleep(2)
@@ -135,7 +132,7 @@ class Recorders:
             except Exception: traceback.print_exc()
             time.sleep(3)
     def stop_all(self):                             # the service stops: cut every file, waiting up to 30 s each for the remux
-        ws = [w.writer for w in list(self.watch.values()) if w.writer and w.writer.thread.is_alive()]
+        STOPPING.set(); ws = [w.writer for w in list(self.watch.values()) if w.writer and w.writer.thread.is_alive()]
         for wr in ws: wr.stop.set()
         for wr in ws: wr.thread.join(30)
     def delete(self, name):                         # the list page's delete: a finished recording and its .json
@@ -143,9 +140,9 @@ class Recorders:
         if any(w.writer and w.writer.thread.is_alive() and w.writer.stem + ".mp4" == name for w in list(self.watch.values())): raise ValueError("録画中は消せない")
         for f in (f"{REC_DIR}/{name}", f"{REC_DIR}/{name[:-4]}.json"):
             if os.path.exists(f): os.remove(f)
-    def recording(self): return sum(1 for w in list(self.watch.values()) if w.writer and w.writer.busy)   # the control page's count
+    def recording(self): return sum(1 for w in list(self.watch.values()) if w.writer and w.writer.thread.is_alive())   # the control page's count
     def state(self):
-        live = {w.writer.stem: w.writer for w in list(self.watch.values()) if w.writer and w.writer.busy}
+        live = {w.writer.stem: w.writer for w in list(self.watch.values()) if w.writer and w.writer.thread.is_alive()}
         out = []
         for f in sorted(glob.glob(REC_DIR + "/*.json"), reverse=True):
             stem = os.path.basename(f)[:-5]; mp4 = f"{REC_DIR}/{stem}.mp4"
@@ -159,4 +156,4 @@ class Recorders:
         try: st = os.statvfs(REC_DIR); free = st.f_bavail * st.f_frsize
         except Exception: free = None
         return dict(on=bool(REC) and self.finder is not None, dir=REC_DIR, free=free, recs=out,
-                    sources={n: dict(cells=w.cells, rec=bool(w.writer and w.writer.busy)) for n, w in list(self.watch.items())})
+                    sources={n: dict(cells=w.cells, rec=bool(w.writer and w.writer.thread.is_alive())) for n, w in list(self.watch.items())})
