@@ -87,7 +87,7 @@ $("rows").addEventListener("click", async e => {
   render(await (await fetch("/api/rec")).json());
 });
 async function tick() {
-  try { render(await (await fetch("/api/rec")).json()); $("err").textContent = ""; }
+  try { render(await (await fetch("/api/rec")).json()); if ($("err").textContent === "サーバーに届かない") $("err").textContent = ""; }
   catch { $("err").textContent = "サーバーに届かない"; }
   setTimeout(tick, 2000);
 }

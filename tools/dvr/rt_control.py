@@ -6,7 +6,7 @@ shows the source's picture: its low-bandwidth stream, two JPEGs a second, receiv
 Beside all that, every NDI source is recorded while any cell of its grid shows a picture (rt_rec.py), tracker or not; /rec lists the files.
 usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080, the top view alone at /obs
 env: PORT (8080), PUSH (8765: the tracker's answers, also what viewer/live.html reads), ENG (eng_linux),
-     REC_* (rt_rec.py), CONF (~/.ghostline-control.json: the last start, shown again when the page opens), VIEW (~/.ghostline-view.json: the trails' delay and smoothing)
+     REC, REC_* (rt_rec.py), CONF (~/.ghostline-control.json: the last start, shown again when the page opens), VIEW (~/.ghostline-view.json: the trails' delay and smoothing)
 No login: whoever reaches the port can start and stop the tracker. Keep it on the venue LAN / Tailscale."""
 import collections, glob, http.server, json, os, re, signal, subprocess, sys, threading, time, traceback, urllib.parse, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
@@ -197,11 +197,17 @@ def set_view(v):                                   # ms; the delay lets the smoo
     os.replace(tmp, VIEW)                # whole: /api/state reads it on other threads
 
 def watch(p):                                       # the tracker's output: the log, and the lines that say how it is doing
-    # every run's whole output is kept too (live/tracker-<start>.log): the page shows the last 400 lines, and a run that went
-    # wrong is only understood from its lens decisions and summary afterwards
+    # every run's whole output is kept too (live/tracker-<start>.log): the page shows only the last lines, and a run that went
+    # wrong is understood from its lens decisions and summary afterwards. A failing write (a full disk) only stops the file:
+    # the pipe must be drained or the tracker blocks on its next print
     try:
-        with open(time.strftime(f"{HERE}/live/tracker-%Y%m%d-%H%M%S.log"), "w") as f:
-            for line in p.stdout: f.write(time.strftime("%H:%M:%S ") + line); f.flush(); note(line.rstrip()[:300])
+        try: f = open(time.strftime(f"{HERE}/live/tracker-%Y%m%d-%H%M%S.log"), "w")
+        except OSError as e: f = None; note(f"(ログを残せない: {e})")
+        for line in p.stdout:
+            if f:
+                try: f.write(time.strftime("%H:%M:%S ") + line); f.flush()
+                except OSError as e: f = None; note(f"(ログを残せない: {e})")
+            note(line.rstrip()[:300])
     finally:
         code = p.wait()
         with lock: S.update(phase="stopped", proc=None, exit=code); S["log"].append(f"(終了、コード {code})")
@@ -277,7 +283,7 @@ def state():
             try: conf = json.load(open(CONF))
             except Exception: conf = None
         return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], lat=latency(now) if S["phase"] != "stopped" else None, ndi=S["ndi"], input=S["input"],
-                    config=conf, view=view(), cells=cells, rec=sum(w["rec"] for w in recorders.state(list_files=False)["sources"].values()), log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
+                    config=conf, view=view(), cells=cells, rec=recorders.recording(), log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
                     hist=dict(n=HIST, w=[h["w"] for h in hist], temp=[h["temp"] for h in hist], lat=[h["lat"] for h in hist],
                               cells={c: [h["cells"].get(c) for h in hist] for c in CELLS}))
 
@@ -347,7 +353,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
 def on_term(*_):                                   # systemctl stop: the tracker gets TERM and the time to write its files (KillMode=mixed in the unit)
-    threading.Thread(target=recorders.stop_all, daemon=True).start()   # beside the tracker's write-out, inside the same 40 s
+    threading.Thread(target=recorders.stop_all, daemon=True).start()   # the remuxes run beside the tracker's write-out
     p = S["proc"]
     if p is not None:
         try:

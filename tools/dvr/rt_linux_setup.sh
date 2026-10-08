@@ -96,7 +96,8 @@ UNIT
 sudo systemctl daemon-reload; sudo systemctl enable --now ghostline-gpu-idle.service
 
 step "the control page (rt_control.py): start / stop the tracker on an NDI source from a browser, http://<this box>:8080"
-cp "$(dirname "$0")/rt_control.py" "$(dirname "$0")/rt_control.html" "$(dirname "$0")/rt_obs.html" "$(dirname "$0")/rt_topview.js" "$(dirname "$0")/rt_topview.py" ~/rt/
+cp "$(dirname "$0")/rt_control.py" "$(dirname "$0")/rt_control.html" "$(dirname "$0")/rt_obs.html" "$(dirname "$0")/rt_topview.js" "$(dirname "$0")/rt_topview.py" \
+   "$(dirname "$0")/rt_rec.py" "$(dirname "$0")/rt_rec.html" "$(dirname "$0")/rt_signal.py" ~/rt/   # the recorder runs inside the page
 cp -r "$(dirname "$0")/../../data/dvr/cams" ~/rt/   # the lens definitions: the page offers them together and the tracker picks per cell
 mkdir -p ~/rt/tracks; for f in "$(dirname "$0")"/../../data/dvr/*/*/race.json; do cp "$f" ~/rt/tracks/"$(basename "$(dirname "$f")")".json; done   # course lines (make_race.py) for the top view
 sudo tee /etc/systemd/system/ghostline-control.service > /dev/null <<UNIT
@@ -112,7 +113,7 @@ Restart=always
 RestartSec=5
 # stopping the service: TERM to the page only (KillMode=mixed), which stops the tracker and waits for its files; the rest is killed after the timeout
 KillMode=mixed
-TimeoutStopSec=50
+TimeoutStopSec=110
 
 [Install]
 WantedBy=multi-user.target
