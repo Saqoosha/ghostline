@@ -33,19 +33,19 @@ class Preview:
     def wanted(self, name): return self.name == name and time.time() - self.asked < 8
     def run(self):
         import cv2, numpy as np
-        from cyndilib.receiver import Receiver
-        from cyndilib.video_frame import VideoFrameSync
-        from cyndilib.wrapper.ndi_recv import RecvColorFormat, RecvBandwidth
+        from rt_rec import receiver
+        rx = vf = None                              # one receiver for good, reconnected per source: a dropped one can freeze the process (rt_rec.py)
         while True:
             name = self.name
             src = next((s for s in finder.iter_sources() if name in s.name), None) if finder and name and self.wanted(name) else None
             if src is None: self.jpg = None; time.sleep(1); continue
-            rx = Receiver(color_format=RecvColorFormat.BGRX_BGRA, bandwidth=RecvBandwidth.lowest)
-            vf = VideoFrameSync(); rx.frame_sync.set_video_frame(vf); rx.set_source(src)
+            if rx is None: rx, vf = receiver(False)
+            old = vf.get_timestamp_posix() if vf.xres else None   # the last source's last frame, still held
+            rx.set_source(src)
             try:
                 while self.wanted(name):
                     rx.frame_sync.capture_video()
-                    if vf.xres:
+                    if vf.xres and vf.get_timestamp_posix() != old:
                         w, h = vf.get_resolution(); img = vf.get_array().reshape(h, w, 4)[..., :3]
                         img = cv2.resize(img, (640, round(h * 640 / w)), interpolation=cv2.INTER_AREA) if w > 640 else np.ascontiguousarray(img)
                         self.jpg, self.have = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])[1].tobytes(), name
