@@ -19,7 +19,9 @@ if ! nvidia-smi >/dev/null 2>&1; then
   echo "driver installed: reboot, then run this script again"; exit 0
 fi
 # NVENC for the recordings (rt_rec.py): the headless driver leaves out libnvidia-encode, and ffmpeg's h264_nvenc fails without it
-sudo apt-get install -y --no-install-recommends "libnvidia-encode-$(dpkg -l | grep -o "nvidia-headless-no-dkms-[0-9]*-server" | head -1 | sed "s/nvidia-headless-no-dkms-//")"
+NV=$(dpkg -l | grep -o "nvidia-headless-no-dkms-[0-9]*-server" | head -1 | sed "s/nvidia-headless-no-dkms-//")
+[ -n "$NV" ] || { echo "no nvidia-headless-no-dkms-*-server package: install libnvidia-encode-<driver version> by hand"; exit 1; }
+sudo apt-get install -y --no-install-recommends "libnvidia-encode-$NV"
 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
 
 step "CUDA toolkit 12.9 (gsplat builds its kernels on first use and needs nvcc; WSL builds it with 12.9 against torch cu128)"
