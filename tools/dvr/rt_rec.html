@@ -70,7 +70,7 @@ function render(s) {
     + src.map(([n, w]) => `<span class="src${w.rec ? " rec" : ""}"><span class="dots">${[0, 1, 2, 3].map(k => `<i class="${w.cells && w.cells[k] ? "on" : ""}"></i>`).join("")}</span><b>${esc(n)}</b>${w.rec ? " 録画中" : ""}</span>`).join("")
     + (s.free != null ? `<span>空き <b>${gb(s.free)}</b></span>` : "");
   $("rows").innerHTML = s.recs.map(r => `<tr class="${r.file === playing ? "sel" : ""}">
-    <td>${when(r.start)}</td><td class="name">${esc(r.source)}${r.live ? ` <span class="live">● ${r.finishing ? "仕上げ中" : "録画中"}</span>` : ""}</td>
+    <td>${when(r.start)}</td><td class="name">${esc(r.source)}${r.live ? ' <span class="live">● 録画中</span>' : ""}</td>
     <td class="r">${dur(r.dur)}</td><td class="r">${gb(r.bytes)}</td>
     <td><span class="bars">${[0, 1, 2, 3].map(k => `<span><i style="width:${Math.round(100 * ((r.cells || [])[k] || 0))}%"></i></span>`).join("")}</span></td>
     <td>${r.live ? "" : `<a href="#" data-f="${esc(r.file)}" data-l="${esc(when(r.start) + " · " + r.source)}">再生</a> · `}<a href="/rec/${encodeURIComponent(r.file)}" download>保存</a>${r.live ? "" : ` · <a href="#" class="del" data-d="${esc(r.file)}" data-l="${esc(when(r.start) + " · " + r.source)}">削除</a>`}</td></tr>`).join("");

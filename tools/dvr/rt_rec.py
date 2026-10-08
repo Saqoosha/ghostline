@@ -10,7 +10,6 @@ import glob, hashlib, json, os, re, subprocess, threading, time, traceback
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
 REC, REC_DIR, REC_FPS, REC_HOLD, REC_ENC = int(E("REC", 1)), os.path.expanduser(E("REC_DIR", HERE + "/rec")), float(E("REC_FPS", 0)), float(E("REC_HOLD", 5)), E("REC_ENC", "h264_nvenc")
 REC_RATE = E("REC_RATE", "16M")
-WRITERS = set()                                     # every Writer whose thread is alive: capturing, or closing its file
 STOPPING = threading.Event()                        # set by stop_all: a picture still on screen must not start a new file
 FILE = re.compile(r"[A-Za-z0-9_.-]+\.mp4")          # what /rec/<file> may serve
 
@@ -29,8 +28,7 @@ class Writer:
     def __init__(self, src, stem, rx, vf):
         self.src, self.stem, self.rx, self.vf, self.stop, self.frames, self.t0, self.size = src, stem, rx, vf, threading.Event(), 0, time.time(), None
         self.on = [0, 0, 0, 0]; self.looks = 0; self.failed = False     # how many of the watcher's looks found a picture in each cell
-        self.capturing = True                       # until the full stream is let go: then the next stretch may start while this file is closed
-        WRITERS.add(self); self.thread = threading.Thread(target=self.run, daemon=True); self.thread.start()
+        self.thread = threading.Thread(target=self.run, daemon=True); self.thread.start()
     def run(self):
         rx, vf = self.rx, self.vf; ff = None; mp4 = f"{REC_DIR}/{self.stem}.mp4"
         old = vf.get_timestamp_posix() if vf.xres else None   # the last stretch's last frame, still held: wait for a new one
@@ -62,20 +60,16 @@ class Writer:
                 time.sleep(0.002)
         except Exception: traceback.print_exc(); self.failed = ff is None   # (ffmpeg not started: wait before trying again)
         finally:
-            try:
-                rx.disconnect()
-                if ff:
-                    try: ff.stdin.close()
-                    except Exception: pass
-                    ff.wait()
-                    self.failed = bool(ff.returncode)
-                    if self.failed: print(f"rec {self.src.name}: ffmpeg failed (exit {ff.returncode}, its message above)", flush=True)
-            finally: self.capturing = False
-            try:
-                if ff and (not os.path.exists(mp4) or not os.path.getsize(mp4)):   # nothing written: no file to list (a non-empty one that broke is kept)
+            rx.disconnect()
+            if ff:
+                try: ff.stdin.close()
+                except Exception: pass
+                ff.wait()
+                self.failed = bool(ff.returncode)
+                if self.failed: print(f"rec {self.src.name}: ffmpeg failed (exit {ff.returncode}, its message above)", flush=True)
+                if not os.path.exists(mp4) or not os.path.getsize(mp4):   # nothing written: no file to list (a non-empty one that broke is kept)
                     for f in (mp4, f"{REC_DIR}/{self.stem}.json"): os.path.exists(f) and os.remove(f)
-                elif ff: self.finish(mp4, fps)
-            finally: WRITERS.discard(self)
+                else: self.finish(mp4, fps)
     def finish(self, mp4, fps):
         self.meta(live=False); print(f"rec {self.src.name}: {self.stem}.mp4 cut, {self.frames / fps:.0f} s", flush=True)
     def meta(self, **kw):                           # beside the mp4: what the list shows
@@ -109,7 +103,7 @@ class Watcher:
                     elif time.time() - seen > 2: self.cells = None   # no new frame for 2 s (by this box's clock: the sender's may differ)
                     now = time.time(); wr = self.writer
                     if self.cells and any(self.cells): last_on = now
-                    if wr and wr.capturing:
+                    if wr and wr.thread.is_alive():
                         if self.cells: wr.looks += 1; wr.on = [a + b for a, b in zip(wr.on, self.cells)]
                         if now - last_on > REC_HOLD: wr.stop.set()
                     elif self.cells and any(self.cells) and not STOPPING.is_set() and now - self.began > (60 if wr and wr.failed else 10):   # a failing ffmpeg: once a minute
@@ -133,28 +127,28 @@ class Recorders:
             except Exception: traceback.print_exc()
             time.sleep(3)
     def stop_all(self):                             # the service stops: cut every file and wait for it to be closed
-        STOPPING.set(); ws = list(WRITERS)
+        STOPPING.set(); ws = [w.writer for w in list(self.watch.values()) if w.writer and w.writer.thread.is_alive()]
         for wr in ws: wr.stop.set()
         for wr in ws: wr.thread.join(30)
     def delete(self, name):                         # the list page's delete: a finished recording and its .json
         if not isinstance(name, str) or not FILE.fullmatch(name) or not os.path.exists(f"{REC_DIR}/{name}"): raise ValueError("録画が見つからない")
-        if any(wr.stem + ".mp4" == name for wr in list(WRITERS)): raise ValueError("録画中は消せない")
+        if any(w.writer and w.writer.thread.is_alive() and w.writer.stem + ".mp4" == name for w in list(self.watch.values())): raise ValueError("録画中は消せない")
         for f in (f"{REC_DIR}/{name}", f"{REC_DIR}/{name[:-4]}.json"):
             if os.path.exists(f): os.remove(f)
-    def recording(self): return sum(1 for wr in list(WRITERS) if wr.capturing)   # the control page's count
+    def recording(self): return sum(1 for w in list(self.watch.values()) if w.writer and w.writer.thread.is_alive())   # the control page's count
     def state(self):
-        live = {wr.stem: wr for wr in list(WRITERS)}   # capturing or closing: listed as live, not playable or deletable yet
+        live = {w.writer.stem: w.writer for w in list(self.watch.values()) if w.writer and w.writer.thread.is_alive()}
         out = []
         for f in sorted(glob.glob(REC_DIR + "/*.json"), reverse=True):
             stem = os.path.basename(f)[:-5]; mp4 = f"{REC_DIR}/{stem}.mp4"
             if not os.path.exists(mp4): continue
-            try: m = json.load(open(f))
-            except Exception: continue
+            try: m = json.load(open(f)); size = os.path.getsize(mp4)
+            except (OSError, ValueError): continue   # removed meanwhile (an empty stretch, a delete), or a broken .json
             wr = live.get(stem); fps = m.get("fps") or REC_FPS or 30
-            out.append(dict(file=stem + ".mp4", source=m.get("source"), start=m.get("start"), size=m.get("size"), bytes=os.path.getsize(mp4),
-                            dur=round((wr.frames if wr else m.get("frames", 0)) / fps, 1), live=bool(wr), finishing=bool(wr and not wr.capturing),
+            out.append(dict(file=stem + ".mp4", source=m.get("source"), start=m.get("start"), size=m.get("size"), bytes=size,
+                            dur=round((wr.frames if wr else m.get("frames", 0)) / fps, 1), live=bool(wr),
                             cells=[round(n / wr.looks, 3) if wr.looks else None for n in wr.on] if wr else m.get("cells")))
         try: st = os.statvfs(REC_DIR); free = st.f_bavail * st.f_frsize
         except Exception: free = None
         return dict(on=bool(REC) and self.finder is not None, dir=REC_DIR, free=free, recs=out,
-                    sources={n: dict(cells=w.cells, rec=bool(w.writer and w.writer.capturing)) for n, w in list(self.watch.items())})
+                    sources={n: dict(cells=w.cells, rec=bool(w.writer and w.writer.thread.is_alive())) for n, w in list(self.watch.items())})
