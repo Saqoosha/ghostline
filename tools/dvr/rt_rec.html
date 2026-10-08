@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ghostline 録画</title>
+<style>
+  /* the control page's look: hairlines, thin type, a colour per cell of the grid */
+  :root { --paper: #f3f4f6; --ink: #0c0f14; --dim: rgba(12, 15, 20, .58); --faint: rgba(12, 15, 20, .2); --alarm: #d1301f; --tl: #ff2e63; --tr: #f59e0b; --bl: #12b76a; --br: #2f6bff;
+          --sans: "Helvetica Neue", -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 400 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  main { max-width: 1080px; margin: 0 auto; padding: 30px 16px 64px; }
+  .mark { display: flex; align-items: center; gap: 16px; margin: 0; font: 200 21px/1 var(--sans); letter-spacing: .42em; }
+  .mark span:first-child { color: rgba(12, 15, 20, .45); }
+  .mark i { flex: 1; height: 1.5px; background: linear-gradient(90deg, var(--tl), var(--tr), var(--bl), var(--br)); }
+  .mark a { color: inherit; text-decoration: none; display: contents; }
+  .bar { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 20px 0 14px; font: 400 11px var(--mono); color: var(--dim); }
+  .bar b { font-weight: 400; color: var(--ink); }
+  .src { display: inline-flex; align-items: center; gap: 6px; } .src.rec b { color: var(--alarm); }
+  .dots { display: inline-grid; grid-template-columns: repeat(2, 5px); gap: 1px; }
+  .dots i { width: 5px; height: 5px; border: 1px solid var(--faint); } .dots i.on { border: 0; }
+  .dots i.on:nth-child(1) { background: var(--tl); } .dots i.on:nth-child(2) { background: var(--tr); } .dots i.on:nth-child(3) { background: var(--bl); } .dots i.on:nth-child(4) { background: var(--br); }
+  #player { width: 100%; max-height: 60vh; background: #000; display: none; margin-bottom: 6px; }
+  #now { font: 400 11px var(--mono); color: var(--dim); min-height: 18px; }
+  .list { width: 100%; border-collapse: collapse; font: 400 12px var(--mono); }
+  .list th { text-align: left; font-weight: 400; color: var(--dim); font-size: 10px; letter-spacing: .1em; padding: 6px 8px; border-bottom: 1px solid var(--hair, var(--ink)); }
+  .list td { padding: 7px 8px; border-bottom: 1px solid var(--faint); white-space: nowrap; }
+  .list tr.sel td { background: rgba(12, 15, 20, .05); }
+  .list td.r, .list th.r { text-align: right; } .list td.name { white-space: normal; word-break: break-all; }
+  .list a { color: var(--ink); } .list a.del { color: var(--alarm); } .live { color: var(--alarm); }
+  .bars { display: inline-grid; grid-template-columns: repeat(4, 22px); gap: 3px; vertical-align: middle; }
+  .bars span { height: 6px; background: var(--faint); position: relative; } .bars span i { position: absolute; inset: 0 auto 0 0; }
+  .bars span:nth-child(1) i { background: var(--tl); } .bars span:nth-child(2) i { background: var(--tr); } .bars span:nth-child(3) i { background: var(--bl); } .bars span:nth-child(4) i { background: var(--br); }
+  .wrap { overflow-x: auto; }
+  #empty { color: var(--dim); padding: 24px 8px; }
+  #err { color: var(--alarm); font: 400 12px var(--mono); min-height: 18px; }
+</style>
+</head>
+<body>
+<main>
+  <h1 class="mark"><a href="/"><span>ghost</span><i></i><span>line</span></a></h1>
+  <div class="bar" id="bar"></div>
+  <div id="err"></div>
+  <video id="player" controls preload="metadata"></video>
+  <div id="now"></div>
+  <div class="wrap"><table class="list">
+    <thead><tr><th>開始</th><th>送り手</th><th class="r">長さ</th><th class="r">大きさ</th><th title="マスごとに絵があった割合（左上・右上・左下・右下）">マス</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table></div>
+  <div id="empty" hidden>まだ録画は無い。どれかの送り手のマスに絵が出ると始まる</div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const dur = s => { s = Math.round(s || 0); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60; return (h ? `${h}:${String(m).padStart(2, "0")}` : m) + ":" + String(s % 60).padStart(2, "0"); };
+const gb = b => b == null ? "–" : b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : (b / 1e6).toFixed(0) + " MB";
+const when = t => { const d = new Date(t * 1000); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`; };
+let playing = null;
+
+function play(file, label) {
+  const v = $("player"); playing = file; v.style.display = "block"; v.src = "/rec/" + encodeURIComponent(file); v.play().catch(() => {});
+  $("now").textContent = label; render(last);
+}
+let last = null;
+function render(s) {
+  if (!s) return; last = s;
+  const src = Object.entries(s.sources || {});
+  $("bar").innerHTML = (s.on ? "" : "<b>録画は止まっている（REC=0 か NDI が使えない）</b>")
+    + src.map(([n, w]) => `<span class="src${w.rec ? " rec" : ""}"><span class="dots">${[0, 1, 2, 3].map(k => `<i class="${w.cells && w.cells[k] ? "on" : ""}"></i>`).join("")}</span><b>${esc(n)}</b>${w.rec ? " 録画中" : ""}</span>`).join("")
+    + (s.free != null ? `<span>空き <b>${gb(s.free)}</b></span>` : "");
+  $("rows").innerHTML = s.recs.map(r => `<tr class="${r.file === playing ? "sel" : ""}">
+    <td>${when(r.start)}</td><td class="name">${esc(r.source)}${r.live ? ' <span class="live">● 録画中</span>' : ""}</td>
+    <td class="r">${dur(r.dur)}</td><td class="r">${gb(r.bytes)}</td>
+    <td><span class="bars">${[0, 1, 2, 3].map(k => `<span><i style="width:${Math.round(100 * ((r.cells || [])[k] || 0))}%"></i></span>`).join("")}</span></td>
+    <td>${r.live ? "" : `<a href="#" data-f="${esc(r.file)}" data-l="${esc(when(r.start) + " · " + r.source)}">再生</a> · `}<a href="/rec/${encodeURIComponent(r.file)}" download>保存</a>${r.live ? "" : ` · <a href="#" class="del" data-d="${esc(r.file)}" data-l="${esc(when(r.start) + " · " + r.source)}">削除</a>`}</td></tr>`).join("");
+  $("empty").hidden = s.recs.length > 0;
+}
+$("rows").addEventListener("click", async e => {
+  const a = e.target.closest("a[data-f]"); if (a) { e.preventDefault(); play(a.dataset.f, a.dataset.l); return; }
+  const d = e.target.closest("a[data-d]"); if (!d) return;
+  e.preventDefault();
+  if (!confirm(`${d.dataset.l} の録画を消す。元に戻せない。`)) return;
+  if (playing === d.dataset.d) { const v = $("player"); v.pause(); v.removeAttribute("src"); v.load(); v.style.display = "none"; $("now").textContent = ""; playing = null; }
+  const r = await fetch("/api/rec/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ file: d.dataset.d }) });
+  $("err").textContent = r.ok ? "" : ((await r.json().catch(() => ({}))).error || `削除できなかった（${r.status}）`);
+  render(await (await fetch("/api/rec")).json());
+});
+async function tick() {
+  try { render(await (await fetch("/api/rec")).json()); $("err").textContent = ""; }
+  catch { $("err").textContent = "サーバーに届かない"; }
+  setTimeout(tick, 2000);
+}
+tick();
+</script>
+</body>
+</html>

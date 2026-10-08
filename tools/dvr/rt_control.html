@@ -36,6 +36,9 @@
   #go.stop::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M2.5 2.5h9v9h-9z' fill='%235b4bff'/%3E%3C/svg%3E"); border-color: var(--spirit); }
   #go:hover::before { background-color: rgba(12, 15, 20, .05); } #go:disabled { opacity: .3; cursor: default; }
   #go-l { margin-right: -.3em; }
+  /* the recordings: a link, with a red dot and the count while any source is being recorded */
+  #rec { flex: none; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); text-decoration: none; white-space: nowrap; }
+  #rec:hover { color: var(--ink); } #rec.on { color: var(--alarm); } #rec.on::before { content: "● "; animation: breathe 2.4s ease-in-out infinite; }
   #err { color: var(--alarm); font: 400 12px var(--mono); min-height: 18px; }
 
   .num { display: inline-block; font-weight: 100; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
@@ -146,6 +149,7 @@
   <div class="ctl">
     <span id="phase">…</span><span id="up"></span>
     <div id="src"><b id="ndi">–</b><span id="ndi-sub"></span></div>
+    <a id="rec" href="/rec" title="NDI の録画の一覧">録画</a>
     <button id="go"><span id="go-l">開始</span></button>
   </div>
   <div id="err"></div>
@@ -267,6 +271,7 @@ function render(s) {
   num("gt", s.gpu.temp != null ? String(s.gpu.temp) : "–");
   $("gp").textContent = "GPU の温度" + (s.gpu.pstate ? ` · ${s.gpu.pstate === "P8" ? "待機" : "動作中"}` : "");   // P8 is the idle state, P0-P2 working
   num("cyc", s.lat != null ? s.lat.toFixed(0) : "–");
+  $("rec").classList.toggle("on", s.rec > 0); $("rec").textContent = s.rec > 0 ? `録画中 ${s.rec}` : "録画";
   $("ndi").textContent = (!stopped && s.ndi) || ""; $("ndi-sub").textContent = (!stopped && s.input) || "";
   const byCell = Object.fromEntries(Object.entries(s.cells).map(([n, c]) => [c.cell, { n, ...c }]));
   for (const [cell] of CELLS) {
