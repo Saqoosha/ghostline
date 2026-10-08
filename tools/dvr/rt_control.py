@@ -3,9 +3,10 @@
 the cells, start (the frame size and rate are read off the source). While the tracker runs it reads its output (signal on / off per cell), its PUSH stream
 (frames processed and solved per cell, the positions for the page's top view) and the GPU's power from nvidia-smi. The page also
 shows the source's picture: its low-bandwidth stream, two JPEGs a second, received only while a page asks for it.
+Beside all that, every NDI source is recorded while any cell of its grid shows a picture (rt_rec.py), tracker or not; /rec lists the files.
 usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080, the top view alone at /obs
 env: PORT (8080), PUSH (8765: the tracker's answers, also what viewer/live.html reads), ENG (eng_linux),
-     CONF (~/.ghostline-control.json: the last start, shown again when the page opens), VIEW (~/.ghostline-view.json: the trails' delay and smoothing)
+     REC, REC_* (rt_rec.py), CONF (~/.ghostline-control.json: the last start, shown again when the page opens), VIEW (~/.ghostline-view.json: the trails' delay and smoothing)
 No login: whoever reaches the port can start and stop the tracker. Keep it on the venue LAN / Tailscale."""
 import collections, glob, http.server, json, os, re, signal, subprocess, sys, threading, time, traceback, urllib.parse, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
@@ -32,19 +33,19 @@ class Preview:
     def wanted(self, name): return self.name == name and time.time() - self.asked < 8
     def run(self):
         import cv2, numpy as np
-        from cyndilib.receiver import Receiver
-        from cyndilib.video_frame import VideoFrameSync
-        from cyndilib.wrapper.ndi_recv import RecvColorFormat, RecvBandwidth
+        from rt_rec import receiver
+        rx = vf = None                              # one receiver for good, reconnected per source: a dropped one can freeze the process (rt_rec.py)
         while True:
             name = self.name
             src = next((s for s in finder.iter_sources() if name in s.name), None) if finder and name and self.wanted(name) else None
             if src is None: self.jpg = None; time.sleep(1); continue
-            rx = Receiver(color_format=RecvColorFormat.BGRX_BGRA, bandwidth=RecvBandwidth.lowest)
-            vf = VideoFrameSync(); rx.frame_sync.set_video_frame(vf); rx.set_source(src)
+            if rx is None: rx, vf = receiver(False)
+            old = vf.get_timestamp_posix() if vf.xres else None   # the last source's last frame, still held
+            rx.set_source(src)
             try:
                 while self.wanted(name):
                     rx.frame_sync.capture_video()
-                    if vf.xres:
+                    if vf.xres and vf.get_timestamp_posix() != old:
                         w, h = vf.get_resolution(); img = vf.get_array().reshape(h, w, 4)[..., :3]
                         img = cv2.resize(img, (640, round(h * 640 / w)), interpolation=cv2.INTER_AREA) if w > 640 else np.ascontiguousarray(img)
                         self.jpg, self.have = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])[1].tobytes(), name
@@ -52,6 +53,8 @@ class Preview:
             except Exception as e: print("preview:", e, flush=True); time.sleep(2)
             finally: rx.disconnect(); self.jpg = None
 preview = Preview()
+from rt_rec import Recorders, FILE, REC_DIR
+recorders = Recorders(finder)
 
 courses = {}
 def course(name, line=""):
@@ -194,8 +197,18 @@ def set_view(v):                                   # ms; the delay lets the smoo
     os.replace(tmp, VIEW)                # whole: /api/state reads it on other threads
 
 def watch(p):                                       # the tracker's output: the log, and the lines that say how it is doing
+    # every run's whole output is kept too (live/tracker-<start>.log): the page shows only the last lines, and a run that went
+    # wrong is understood from its lens decisions and summary afterwards. A failing write (a full disk) only stops the file:
+    # the pipe must be drained or the tracker blocks on its next print
     try:
-        for line in p.stdout: note(line.rstrip()[:300])
+        try: f = open(time.strftime(f"{HERE}/live/tracker-%Y%m%d-%H%M%S.log"), "w")
+        except OSError as e: f = None; note(f"(ログを残せない: {e})")
+        for line in p.stdout:
+            if f:
+                try: f.write(time.strftime("%H:%M:%S ") + line); f.flush()
+                except OSError as e: f = None; note(f"(ログを残せない: {e})")
+            note(line.rstrip()[:300])
+        if f: f.close()
     finally:
         code = p.wait()
         with lock: S.update(phase="stopped", proc=None, exit=code); S["log"].append(f"(終了、コード {code})")
@@ -271,7 +284,7 @@ def state():
             try: conf = json.load(open(CONF))
             except Exception: conf = None
         return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], lat=latency(now) if S["phase"] != "stopped" else None, ndi=S["ndi"], input=S["input"],
-                    config=conf, view=view(), cells=cells, log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
+                    config=conf, view=view(), cells=cells, rec=recorders.recording(), log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
                     hist=dict(n=HIST, w=[h["w"] for h in hist], temp=[h["temp"] for h in hist], lat=[h["lat"] for h in hist],
                               cells={c: [h["cells"].get(c) for h in hist] for c in CELLS}))
 
@@ -281,12 +294,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
         self.send_response(code); self.send_header("Content-Type", ctype + ("; charset=utf-8" if ctype.startswith(("text", "application")) else "")); self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
+    def send_file(self, path, ctype):              # a recording, hours long: streamed, with ranges so the browser can seek
+        size = os.path.getsize(path); a, b = 0, size - 1
+        m = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", "").strip())
+        if m and (m[1] or m[2]):
+            a, b = (int(m[1]), min(int(m[2] or b), b)) if m[1] else (max(0, size - int(m[2])), b)
+            if a > b: self.send_response(416); self.send_header("Content-Range", f"bytes */{size}"); self.send_header("Content-Length", "0"); return self.end_headers()
+            self.send_response(206); self.send_header("Content-Range", f"bytes {a}-{b}/{size}")
+        else: self.send_response(200)
+        self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(b - a + 1)); self.send_header("Accept-Ranges", "bytes"); self.end_headers()
+        with open(path, "rb") as f:
+            f.seek(a); left = b - a + 1
+            try:
+                while left > 0 and (chunk := f.read(min(left, 1 << 20))): self.wfile.write(chunk); left -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError, TimeoutError): pass   # the browser seeks by dropping one range and asking for another
     def do_GET(self):
         u = urllib.parse.urlsplit(self.path); q = dict(urllib.parse.parse_qsl(u.query))
         if u.path == "/": self.send(200, open(HERE + "/rt_control.html", "rb").read(), "text/html")
         elif u.path == "/obs": self.send(200, open(HERE + "/rt_obs.html", "rb").read(), "text/html")   # the top view alone, for an OBS browser source
         elif u.path == "/rt_topview.js": self.send(200, open(HERE + "/rt_topview.js", "rb").read(), "text/javascript")
         elif u.path == "/api/state": self.send(200, state())
+        elif u.path == "/rec": self.send(200, open(HERE + "/rt_rec.html", "rb").read(), "text/html")   # the recordings
+        elif u.path == "/api/rec": self.send(200, recorders.state())
+        elif u.path.startswith("/rec/"):
+            name = u.path[5:]
+            if not FILE.fullmatch(name) or not os.path.exists(f"{REC_DIR}/{name}"): return self.send(404, dict(error="not found"))
+            self.send_file(f"{REC_DIR}/{name}", "video/mp4")
         elif u.path == "/api/preview.jpg":
             jpg = preview.get(q.get("source", "").strip()[:80])
             if jpg: self.send(200, jpg, "image/jpeg")
@@ -313,6 +346,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if self.path == "/api/start": start(body)
             elif self.path == "/api/stop": stop()
             elif self.path == "/api/view": set_view(body)
+            elif self.path == "/api/rec/delete": recorders.delete(body.get("file"))
             else: return self.send(404, dict(error="not found"))
             self.send(200, dict(ok=True))
         except (ValueError, KeyError, TypeError) as e: self.send(400, dict(error=str(e)))
@@ -320,13 +354,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
 def on_term(*_):                                   # systemctl stop: the tracker gets TERM and the time to write its files (KillMode=mixed in the unit)
+    threading.Thread(target=recorders.stop_all, daemon=True).start()   # the files are closed beside the tracker's write-out
     p = S["proc"]
     if p is not None:
         try:
             if S["phase"] != "stopping": p.send_signal(signal.SIGTERM)   # a second TERM would land in the tracker's write-out
             p.wait(40)
         except Exception: pass
-    os._exit(0)
+    recorders.stop_all(); os._exit(0)
 signal.signal(signal.SIGTERM, on_term)
 threading.Thread(target=poll_gpu, daemon=True).start(); threading.Thread(target=sample, daemon=True).start()
 print(f"control page on :{PORT}", flush=True)
