@@ -2,15 +2,15 @@
 stretch: the file is cut once all four cells have been empty for REC_HOLD seconds. Started by rt_control.py, listed on its /rec page.
 Each source is watched on its low-bandwidth stream (about 640 wide, five looks a second), so a quiet source costs little on the
 battery; only while it is recorded is its full stream received too, and the frame is piped as it comes (BGRX) to ffmpeg. The
-file is a fragmented mp4 while it is written (playable up to the last second if the box loses power), made an ordinary mp4
-(seekable in a browser) when it is cut. The first ~0.5 s of a stretch is lost: the full stream connects after the picture is seen.
+file is a fragmented mp4 and stays one (playable up to the last second if the box loses power; not remuxed at the venue,
+which would copy every file once more - for a browser that seeks it, later: ffmpeg -i x.mp4 -c copy -movflags +faststart y.mp4). The first ~0.5 s of a stretch is lost: the full stream connects after the picture is seen.
 env: REC (1; 0 = off), REC_DIR (rec/ beside this file), REC_FPS (0 = the source's own rate, the Event VRX's 60; 30 thins it),
      REC_RATE (16M: about 7 GB an hour), REC_HOLD (5 s), REC_ENC (h264_nvenc; libx264 without the GPU)"""
 import glob, hashlib, json, os, re, subprocess, threading, time, traceback
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
 REC, REC_DIR, REC_FPS, REC_HOLD, REC_ENC = int(E("REC", 1)), os.path.expanduser(E("REC_DIR", HERE + "/rec")), float(E("REC_FPS", 0)), float(E("REC_HOLD", 5)), E("REC_ENC", "h264_nvenc")
 REC_RATE = E("REC_RATE", "16M")
-WRITERS = set()                                     # every Writer whose thread is alive: capturing, or remuxing its finished file
+WRITERS = set()                                     # every Writer whose thread is alive: capturing, or closing its file
 STOPPING = threading.Event()                        # set by stop_all: a picture still on screen must not start a new file
 FILE = re.compile(r"[A-Za-z0-9_.-]+\.mp4")          # what /rec/<file> may serve
 
@@ -29,7 +29,7 @@ class Writer:
     def __init__(self, src, stem, rx, vf):
         self.src, self.stem, self.rx, self.vf, self.stop, self.frames, self.t0, self.size = src, stem, rx, vf, threading.Event(), 0, time.time(), None
         self.on = [0, 0, 0, 0]; self.looks = 0; self.failed = False     # how many of the watcher's looks found a picture in each cell
-        self.capturing = True                       # until the full stream is let go: then the next stretch may start while this file is remuxed
+        self.capturing = True                       # until the full stream is let go: then the next stretch may start while this file is closed
         WRITERS.add(self); self.thread = threading.Thread(target=self.run, daemon=True); self.thread.start()
     def run(self):
         rx, vf = self.rx, self.vf; ff = None; mp4 = f"{REC_DIR}/{self.stem}.mp4"
@@ -77,11 +77,6 @@ class Writer:
                 elif ff: self.finish(mp4, fps)
             finally: WRITERS.discard(self)
     def finish(self, mp4, fps):
-        # fragmented -> ordinary mp4 (the index at the front): a browser seeks it. Copies the stream, seconds for an hour
-        tmp = f"{REC_DIR}/{self.stem}.tmp.mp4"
-        r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", mp4, "-c", "copy", "-movflags", "+faststart", "-y", tmp], capture_output=True, text=True)
-        if r.returncode == 0: os.replace(tmp, mp4)
-        else: print(f"rec {self.stem}: kept fragmented ({r.stderr[-200:]})", flush=True); os.path.exists(tmp) and os.remove(tmp)
         self.meta(live=False); print(f"rec {self.src.name}: {self.stem}.mp4 cut, {self.frames / fps:.0f} s", flush=True)
     def meta(self, **kw):                           # beside the mp4: what the list shows
         f = f"{REC_DIR}/{self.stem}.json"
@@ -137,7 +132,7 @@ class Recorders:
                     if n not in self.watch: self.watch[n] = Watcher(self.finder, n); print(f"rec: watching {n}", flush=True)
             except Exception: traceback.print_exc()
             time.sleep(3)
-    def stop_all(self):                             # the service stops: cut every file, waiting up to 30 s each for the remux
+    def stop_all(self):                             # the service stops: cut every file and wait for it to be closed
         STOPPING.set(); ws = list(WRITERS)
         for wr in ws: wr.stop.set()
         for wr in ws: wr.thread.join(30)
@@ -148,7 +143,7 @@ class Recorders:
             if os.path.exists(f): os.remove(f)
     def recording(self): return sum(1 for wr in list(WRITERS) if wr.capturing)   # the control page's count
     def state(self):
-        live = {wr.stem: wr for wr in list(WRITERS)}   # capturing or being remuxed: listed as live, not playable or deletable yet
+        live = {wr.stem: wr for wr in list(WRITERS)}   # capturing or closing: listed as live, not playable or deletable yet
         out = []
         for f in sorted(glob.glob(REC_DIR + "/*.json"), reverse=True):
             stem = os.path.basename(f)[:-5]; mp4 = f"{REC_DIR}/{stem}.mp4"

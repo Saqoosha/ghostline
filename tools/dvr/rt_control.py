@@ -354,7 +354,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
 def on_term(*_):                                   # systemctl stop: the tracker gets TERM and the time to write its files (KillMode=mixed in the unit)
-    threading.Thread(target=recorders.stop_all, daemon=True).start()   # the remuxes run beside the tracker's write-out
+    threading.Thread(target=recorders.stop_all, daemon=True).start()   # the files are closed beside the tracker's write-out
     p = S["proc"]
     if p is not None:
         try:
