@@ -10,7 +10,7 @@ while true; do
 import json, sys, os, subprocess
 day = sys.argv[1]
 r = json.load(open("manifest.json", encoding="utf-8-sig")); r = r if isinstance(r, list) else r["races"]
-have = set(l.split("\t")[1] for l in open("urls.txt")) if os.path.exists("urls.txt") else set()
+have = set(l.rstrip("\n").split("\t")[1] for l in open("urls.txt") if "\t" in l) if os.path.exists("urls.txt") else set()
 al = json.load(open("aliases.json")) if os.path.exists("aliases.json") else {}
 for x in sorted(r, key=lambda x: x["name"]):
     n = x["name"].replace(" ", "_")
