@@ -56,8 +56,11 @@ export default {
       const start = object.range.offset ?? 0
       const length = object.range.length ?? object.size - start
       headers.set('content-range', `bytes ${start}-${start + length - 1}/${object.size}`)
+      headers.set('content-length', String(length))
       return new Response(request.method === 'HEAD' ? null : object.body, { status: 206, headers })
     }
+    // the size, so a loader can show progress against a total and a browser can resume a dropped transfer
+    headers.set('content-length', String(object.size))
     return new Response(request.method === 'HEAD' ? null : object.body, { headers })
   },
 }

@@ -35,16 +35,48 @@ app.root.addChild(cam)
 let sky: pc.Texture | null = null
 const showSky = () => { app.scene.skybox = sky && !sceneMissing ? sky : null }
 const skyImg = new Image(); skyImg.onload = () => { app.scene.skyboxMip = 0; sky = bakeSky(app.graphicsDevice, skyImg); showSky() }; skyImg.src = BASE + 'sky.jpg'
-let scan: pc.Entity | null = null, sceneName = '', sceneReady = false, sceneMissing = false
-const sceneNote = () => sceneMissing ? `no scan of this course yet: flight paths and gates only` : sceneReady ? '' : 'loading scene…'
+let scan: pc.Entity | null = null, sceneName = '', sceneReady = false, sceneMissing = false, sceneFailed = false
+const sceneNote = () => sceneFailed ? 'scan failed — reload the page' : sceneMissing ? `no scan of this course yet: flight paths and gates only` : sceneReady ? '' : 'loading scene…'
+// the scan's loading overlay: a bar over the canvas driven by the asset's 'progress' (bytes received of the .sog)
+const scanLoad = $('scanload'), scanBar = $('scanbar'), scanText = $('scantext')
+function showScanLoad(frac: number | null, text = 'Loading scan…') {
+  scanLoad.hidden = false; scanText.textContent = text
+  scanBar.classList.toggle('busy', frac === null); scanBar.style.width = frac === null ? '' : `${Math.round(frac * 100)}%`
+}
+// The .sog comes from R2 through a Worker, streamed without a content-length, and the stream sometimes stalls part way.
+// A watchdog retries: no progress for STALL_MS (or the asset erroring) drops the asset and loads it again with a
+// cache-busting query, up to RETRIES times; a download that reached its end but whose 'load' never comes (the build
+// hung) gets the longer BUILD_MS before the same retry. After the last try the overlay and the header say so.
+const STALL_MS = 10000, BUILD_MS = 30000, RETRIES = 3
+let sceneTry = 0, sceneTimer = 0
 function loadScene(name: string) {
   if (name === sceneName) return
-  sceneName = name; sceneReady = false; sceneMissing = false; showSky()
-  const a = new pc.Asset(name, 'gsplat', { url: `${BASE}scene/${name}.sog` }); app.assets.add(a)
-  a.on('load', () => { if (sceneName !== name) return
-    scan?.destroy(); const e = new pc.Entity('scan'); e.addComponent('gsplat', { asset: a }); app.root.addChild(e); scan = e; sceneReady = true; topCut = NaN; if (!loadingRound) say('') })
-  // no scan (not made yet, or failed): the round still plays over a ground grid, and the old scan does not stay up
-  a.on('error', (err: string) => { if (sceneName !== name) return; console.warn('scene', name, err); scan?.destroy(); scan = null; sceneMissing = true; showSky(); if (!loadingRound) say(sceneNote()) })
+  sceneName = name; sceneTry = 0; loadSceneTry(name)
+}
+function loadSceneTry(name: string) {
+  sceneReady = false; sceneMissing = false; sceneFailed = false; showSky(); clearTimeout(sceneTimer)
+  const retry = sceneTry > 0, label = retry ? `Retrying… (${sceneTry}/${RETRIES})` : 'Loading scan…'
+  showScanLoad(null, label)
+  const a = new pc.Asset(`${name}#${sceneTry}`, 'gsplat', { url: `${BASE}scene/${name}.sog${retry ? `?r=${sceneTry}` : ''}` }); app.assets.add(a)
+  let got = 0, total = 0, building = false, over = false
+  const drop = () => { over = true; clearTimeout(sceneTimer); a.off(); app.assets.remove(a); a.unload() }
+  const fail = (why: string) => {
+    if (sceneName !== name || over) return
+    console.warn(`scene ${name}: ${why} at ${(got / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB (try ${sceneTry + 1} of ${RETRIES + 1})`); drop()
+    if (sceneTry < RETRIES) { sceneTry++; loadSceneTry(name); return }
+    sceneFailed = true; scan?.destroy(); scan = null; showSky(); showScanLoad(null, 'Scan failed — reload the page'); scanBar.classList.remove('busy'); scanBar.style.width = '0'; if (!loadingRound) say(sceneNote())
+  }
+  const arm = () => { clearTimeout(sceneTimer); sceneTimer = window.setTimeout(() => fail(building ? 'build hung' : 'download stalled'), building ? BUILD_MS : STALL_MS) }
+  arm()
+  a.on('progress', (g: number, t: number) => { if (sceneName !== name || over) return
+    got = g; total = t; building = t > 0 && g >= t; arm()
+    showScanLoad(t > 0 ? g / t : null, building ? (retry ? `Building scan… (retry ${sceneTry}/${RETRIES})` : 'Building scan…') : `${label} ${(g / 1048576).toFixed(0)} / ${(t / 1048576).toFixed(0)} MB`) })
+  a.on('load', () => { if (sceneName !== name || over) return
+    clearTimeout(sceneTimer); scan?.destroy(); const e = new pc.Entity('scan'); e.addComponent('gsplat', { asset: a }); app.root.addChild(e); scan = e; sceneReady = true; topCut = NaN; scanLoad.hidden = true; if (!loadingRound) say('') })
+  // a 404 (no scan made yet) is final: the round plays over a ground grid; any other error is retried
+  a.on('error', (err: string) => { if (sceneName !== name || over) return
+    if (/404|not found/i.test(String(err))) { console.warn('scene', name, err); drop(); scan?.destroy(); scan = null; sceneMissing = true; showSky(); scanLoad.hidden = true; if (!loadingRound) say(sceneNote()); return }
+    fail('error: ' + err) })
   app.assets.load(a)
 }
 
@@ -70,7 +102,7 @@ const grey = new pc.Color(0.55, 0.57, 0.6)
 type Drone = { p: Pilot; e: pc.Entity; m: pc.StandardMaterial; tag: HTMLDivElement; col: pc.Color; trail: pc.Mesh }
 type Round = {
   entry: RoundEntry; race: Race; dir: string; P: Pilot[]; FPS: number; T0: number; T_END: number; root: pc.Entity; drones: Drone[]
-  videos: (HTMLVideoElement | null)[]; tiles: (HTMLDivElement | null)[]; speedTags: (HTMLDivElement | null)[]; lapTags: (HTMLDivElement | null)[]; audio: HTMLAudioElement | null; trackPts: pc.Vec3[]; trackMesh: pc.Mesh
+  videos: (HTMLVideoElement | null)[]; tiles: (HTMLDivElement | null)[]; speedTags: (HTMLDivElement | null)[]; lapTags: (HTMLDivElement | null)[]; audio: HTMLAudioElement | null; trackPts: pc.Vec3[]; trackS: number[]; trackMesh: pc.Mesh
   gates: { pts: pc.Vec3[]; mesh: pc.Mesh; col: pc.Color }[]; grid: pc.Vec3[]
   box: { min: number[]; max: number[] }; topView: { cx: number; cz: number; cy: number; yaw: number; all: number[][]; fit: null | { key: string; x: number; z: number; h: number } }
   planT: pc.Vec3[]; planD: number[]; NS: number
@@ -128,13 +160,15 @@ async function loadRound(entry: RoundEntry) {
   const audio = new Audio(dir + 'audio.m4a'); audio.preload = 'auto'; audio.muted = soundMuted
   audio.addEventListener('loadedmetadata', () => { if (R?.audio === audio) $('soundbtn').hidden = false })
   audio.addEventListener('error', () => { if (R?.audio === audio) { R.audio = null; $('soundbtn').hidden = true } })
-  // the track: the closed average line (make_race.py), resampled every 0.25 m for the dashes
+  // the track: the closed average line (make_race.py), resampled every 0.25 m; trackS is each point's arc length from
+  // the start, which the dashes are measured along (in metres, so they stay the same size on the ground at any zoom)
   const trackPts = (() => {
     const sm = (race.track ?? []).map(q => new pc.Vec3(q[0], q[1], q[2])), n = sm.length; if (n < 3) return [] as pc.Vec3[]
     const out: pc.Vec3[] = []; let carry = 0
     for (let i = 0; i < n; i++) { const a = sm[i], b = sm[(i + 1) % n], L = a.distance(b); if (L < 1e-6) continue; let d = carry; for (; d < L; d += 0.25) out.push(new pc.Vec3().lerp(a, b, d / L)); carry = d - L }
     return out
   })()
+  const trackS = trackPts.map((q, k) => k ? q.distance(trackPts[k - 1]) : 0); for (let k = 1; k < trackS.length; k++) trackS[k] += trackS[k - 1]
   const all = P.flatMap(p => p.pos), m = 10
   const box = { min: [0, 1, 2].map(k => Math.min(...all.map(q => q[k])) - m), max: [0, 1, 2].map(k => Math.max(...all.map(q => q[k])) + (k === 1 ? 40 : m)) }
   const topView = (() => {
@@ -166,7 +200,7 @@ async function loadRound(entry: RoundEntry) {
   const grid: pc.Vec3[] = [], gy = topView.cy - 0.05, g0 = box.min.map(v => Math.floor(v / 10) * 10), g1 = box.max.map(v => Math.ceil(v / 10) * 10)
   for (let x = g0[0]; x <= g1[0]; x += 10) grid.push(new pc.Vec3(x, gy, g0[2]), new pc.Vec3(x, gy, g1[2]))
   for (let z = g0[2]; z <= g1[2]; z += 10) grid.push(new pc.Vec3(g0[0], gy, z), new pc.Vec3(g1[0], gy, z))
-  R = { entry, race, dir, P, FPS, T0, T_END, root, drones, videos, tiles, speedTags, lapTags, audio, trackPts, trackMesh: ribbonMesh(app, root), gates, grid, box, topView, planT: [], planD: [], NS: Math.ceil((T_END - T0) / DT) + 1 }
+  R = { entry, race, dir, P, FPS, T0, T_END, root, drones, videos, tiles, speedTags, lapTags, audio, trackPts, trackS, trackMesh: ribbonMesh(app, root), gates, grid, box, topView, planT: [], planD: [], NS: Math.ceil((T_END - T0) / DT) + 1 }
   t = T0
   // the camera: following a pilot carries over to the same pilot in the new round, otherwise the orbit
   if (camMode[0] === 'p') { const k = prevFollow ? P.findIndex(p => p.name === prevFollow) : -1; camMode = k >= 0 ? 'p' + k : 'orbit'; lastMode = camMode }
@@ -389,10 +423,13 @@ setTimeline(false)                                                   // collapse
 const FOV = 50, PITCH0 = -18, TURN = 6, DT = 0.1                       // vertical fov of the free area; degrees a race second
 const view = { yawOffset: 30, topYaw: 0, pitch: PITCH0, zoom: 1 }
 const free = { x: 0, y: 0, w: 1, h: 1, W: 1, H: 1 }                    // the free rect in CSS px, and the canvas size
+const stBox = { w: 0, h: 0 }                                         // the standings overlay in the canvas's top-left corner (the fit keeps the pilots out of it)
 let stripW = -1, canvasW = 0, canvasH = 0
 function measureFree() {
   // the canvas is the window minus the DVR column (its width follows the tiles), full height; the free rect is the
-  // canvas minus the standings overlay at its top-left and the floating bar (under 1000 px, the DVR row above it too)
+  // canvas above the floating bar (under 1000 px, above the DVR row too). The standings overlay is not cut out of it -
+  // that pushed the view's centre to the right of where the eye expects - but the fit keeps the pilots out from under it;
+  // on a phone the standings run across the top, so there the free rect starts below them
   const W = innerWidth, H = innerHeight, dvr = $('dvr'), left = $('left').getBoundingClientRect()
   const column = getComputedStyle(dvr).display !== 'none' && !narrow()
   const sw = column ? Math.round(dvr.getBoundingClientRect().width) : 0
@@ -400,9 +437,11 @@ function measureFree() {
   const cw = Math.max(100, W - sw), ch = H
   if (cw !== canvasW || ch !== canvasH) { canvasW = cw; canvasH = ch; app.resizeCanvas(cw, ch) }
   const bt = Math.round($('bottom').getBoundingClientRect().top)
-  const x = phone() ? 0 : Math.min(cw - 100, Math.round(left.right)), y = phone() ? Math.min(ch - 100, Math.round(left.bottom)) : 0
-  const next = { x, y, w: cw - x, h: Math.max(100, Math.min(bt, ch) - y), W: cw, H: ch }
-  const changed = (Object.keys(next) as (keyof typeof free)[]).some(k => next[k] !== free[k]); Object.assign(free, next); return changed
+  const y = phone() ? Math.min(ch - 100, Math.round(left.bottom)) : 0
+  const next = { x: 0, y, w: cw, h: Math.max(100, Math.min(bt, ch) - y), W: cw, H: ch }
+  const sw_ = phone() ? 0 : Math.round(left.right), sh_ = phone() ? 0 : Math.round(left.bottom)
+  const changed = (Object.keys(next) as (keyof typeof free)[]).some(k => next[k] !== free[k]) || sw_ !== stBox.w || sh_ !== stBox.h
+  Object.assign(free, next); stBox.w = sw_; stBox.h = sh_; return changed
 }
 // off-centre projection: the free rect's centre is the optical axis and its height spans FOV. The top view is centred
 // on the whole canvas instead (its course sat high under the standings otherwise); its fit is still scaled to the free rect
@@ -430,7 +469,7 @@ function layoutStrip() {
   dvr.style.setProperty('--ah', ah.toFixed(4)); dvr.style.setProperty('--rows', String(Math.max(1, n)))
   if (!n || narrow()) { dvr.style.removeProperty('--tilew'); return }   // the row above the bar: CSS sizes
   const gap = 2, h = (innerHeight - (n - 1) * gap) / n
-  dvr.style.setProperty('--tilew', (h / ah).toFixed(1) + 'px')
+  dvr.style.setProperty('--tilew', (Math.floor(h * 2) / 2 / ah).toFixed(1) + 'px')   // rounded down to a half pixel: a hair of overflow would add a scrollbar
 }
 const yawAt = (tc: number) => view.yawOffset + (camMode === 'orbit' ? TURN * (tc - R!.T0) : 0)
 const gauss = (xs: number[], sigma: number) => { const r = Math.ceil(3 * sigma / DT), w = Array.from({ length: 2 * r + 1 }, (_, k) => Math.exp(-0.5 * ((k - r) * DT / sigma) ** 2))
@@ -440,19 +479,24 @@ const gauss = (xs: number[], sigma: number) => { const r = Math.ceil(3 * sigma /
 function plan() {
   if (!R) return
   const { P, T0, NS, box } = R
-  const tanV0 = Math.tan(FOV * Math.PI / 360) * 0.98, tanV = tanV0 * 0.85 / 0.98, tanH = tanV * free.w / free.h, tanH0 = tanV0 * free.w / free.h   // the fit aims 15% inside the free rect; 2% inside its edge is the hard limit
+  const tanV0 = Math.tan(FOV * Math.PI / 360) * 0.96, tanV = tanV0 * 0.85 / 0.96, tanH = tanV * free.w / free.h, tanH0 = tanV0 * free.w / free.h   // the fit aims 15% inside the free rect; 2% of its width / height inside the edge is the hard limit
   const inFrame = (p: Pilot, tc: number) => !(tc > p.end && doneAt(p) === null)       // a pilot who went out drops out of the frame
   const mids = Array.from({ length: NS }, (_, i) => { const tc = T0 + i * DT; const q = P.filter(p => inFrame(p, tc)); return (q.length ? q : P).map(p => at(p, Math.min(tc, p.end))) })
   const avg = (k: 'x' | 'y' | 'z') => gauss(mids.map(q => q.reduce((s_, v) => s_ + v[k], 0) / q.length), 1.5)   // the look-at centre, smoothed over +-1.5 s (the fit below is measured from this centre, so its lag costs no one the frame)
   const cx = avg('x'), cy = avg('y'), cz = avg('z')
   const planT = cx.map((x, i) => new pc.Vec3(x, cy[i], cz[i]))
   const need: number[] = [], hard: number[] = [], room: number[] = []
+  // the standings box's right edge and bottom in the hard frame's units (-1..1 across the free rect)
+  const cornerX = (-1 + 2 * stBox.w / free.w) / 0.96, cornerY = (1 - 2 * stBox.h / free.h) / 0.96
   for (let i = 0; i < NS; i++) {
     const r = new pc.Quat().setFromEulerAngles(view.pitch, yawAt(T0 + i * DT), 0)
     const dir = r.transformVector(new pc.Vec3(0, 0, 1), new pc.Vec3()), right = r.transformVector(new pc.Vec3(1, 0, 0), new pc.Vec3()), up = r.transformVector(new pc.Vec3(0, 1, 0), new pc.Vec3())
     let d = Math.max(12, dir.y > 1e-3 ? (box.min[1] + 10 + 8 - planT[i].y) / dir.y : 12)   // never lower than 8 m over the ground
     let h = d
-    for (const q of mids[i]) { const v = q.clone().sub(planT[i]); d = Math.max(d, Math.abs(v.dot(right)) / tanH + v.dot(dir), Math.abs(v.dot(up)) / tanV + v.dot(dir)); h = Math.max(h, Math.abs(v.dot(right)) / tanH0 + v.dot(dir), Math.abs(v.dot(up)) / tanV0 + v.dot(dir)) }
+    for (const q of mids[i]) { const v = q.clone().sub(planT[i]), a = v.dot(right), b = v.dot(up), c = v.dot(dir)
+      d = Math.max(d, Math.abs(a) / tanH + c, Math.abs(b) / tanV + c); h = Math.max(h, Math.abs(a) / tanH0 + c, Math.abs(b) / tanV0 + c)
+      // a pilot headed for the standings' corner (upper left): far enough that it clears the box's right edge or its bottom, whichever is nearer
+      if (a < 0 && b > 0 && cornerX < 0 && cornerY > 0) d = Math.max(d, c + Math.min(-a / (tanH0 * -cornerX), b / (tanV0 * cornerY))) }
     need.push(d * view.zoom); hard.push(h * view.zoom)
     let rm = 1e9; const o = [planT[i].x, planT[i].y, planT[i].z], dv = [dir.x, dir.y, dir.z]
     for (let k = 0; k < 3; k++) { if (dv[k] > 1e-6) rm = Math.min(rm, (box.max[k] - o[k]) / dv[k]); else if (dv[k] < -1e-6) rm = Math.min(rm, (box.min[k] - o[k]) / dv[k]) }
@@ -581,7 +625,11 @@ function startBlend() { blendFrom.pos.copy(cam.getPosition()); blendFrom.rot.cop
 const lastPos = new pc.Vec3(), lastRot = new pc.Quat()
 let stillFor = 0, resorted = false
 // the track line: faint white over the scan, darker over the bare grid
-const trackCol = () => sceneMissing ? hex('#030a18') : new pc.Color(1, 1, 1), trackAlpha = (k: number) => ((k * 0.25) % 2 < 1.25 ? (sceneMissing ? 0.3 : 0.18) : 0)
+// the track line: a band TRACK_W metres wide on the ground (perspective thins it with distance), dashed along its arc
+// length (TRACK_DASH on, TRACK_GAP off); faint white over the scan, darker over the bare grid
+const TRACK_W = 0.12, TRACK_DASH = 1.0, TRACK_GAP = 0.7
+const trackCol = () => sceneMissing ? hex('#030a18') : new pc.Color(1, 1, 1)
+const trackAlpha = (k: number) => (R!.trackS[k] % (TRACK_DASH + TRACK_GAP) < TRACK_DASH ? (sceneMissing ? 0.3 : 0.18) : 0)
 const gridCol = new pc.Color(0.72, 0.74, 0.78)
 function updateTrail(mesh: pc.Mesh, p: Pilot, tc: number, c: pc.Color, eye: pc.Vec3, pxWorld: number) {
   // the last TRAIL seconds of the path up to its end, fading by age both ways: alpha-to-coverage (the band is opaque
@@ -605,7 +653,7 @@ app.on('update', (dt: number) => {
   stillFor = moved ? 0 : stillFor + dt; if (moved) resorted = false
   if (!resorted && stillFor >= 0.2) resorted = resortWhenIdle(app)
   const eye = cam.getPosition(), pxWorld = 2 * Math.tan(FOV * Math.PI / 360) / free.h   // world size of one pixel at unit distance
-  ribbon(R.trackMesh, showTrack ? R.trackPts : [], trackCol(), trackAlpha, eye, pxWorld, 6, true)
+  ribbon(R.trackMesh, showTrack ? R.trackPts : [], trackCol(), trackAlpha, eye, pxWorld, 6, true, k => TRACK_W / (pxWorld * eye.distance(R!.trackPts[k])))   // a world width: the pixels that make TRACK_W at that point's distance
   for (const g of R.gates) ribbon(g.mesh, showTrack && sceneMissing ? g.pts : [], g.col, () => 0.85, eye, pxWorld, 3, true)   // gate frames only without a scan
   if (sceneMissing && R.grid.length) app.drawLines(R.grid, gridCol, true)
   const place = new Map(standings(t).map((s, k) => [s.p, { ...s, k: k + 1 }]))
@@ -614,7 +662,9 @@ app.on('update', (dt: number) => {
     d.e.setPosition(now); d.m.emissive = gone ? grey : d.col; d.m.update()
     updateTrail(d.trail, d.p, t, gone ? grey : d.col, eye, pxWorld)
     const s_ = cam.camera!.worldToScreen(now, tmpA), behind = cam.forward.dot(tmpB.copy(now).sub(eye)) < 0
-    d.tag.style.display = behind ? 'none' : ''; d.tag.style.left = s_.x + 'px'; d.tag.style.top = s_.y + 'px'
+    // the tag stays on the canvas: near an edge it slides sideways instead of running under the DVR column
+    const hw = d.tag.offsetWidth / 2 + 4, tx = Math.max(hw, Math.min(free.W - hw, s_.x))
+    d.tag.style.display = behind ? 'none' : ''; d.tag.style.left = tx + 'px'; d.tag.style.top = s_.y + 'px'
     const lab = s.finished ? 'FIN' : gone ? 'OUT' : t < R.race.start ? '' : `L${s.done + 1}`
     const key = `${s.k}|${lab}|${gone}`
     if (d.tag.dataset.k !== key) { d.tag.dataset.k = key

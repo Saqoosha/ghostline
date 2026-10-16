@@ -79,11 +79,20 @@ for spec in args[3:]:
     kk = np.nonzero(keep)[0]
     Q = [quat_xyzw(M @ rot_wxyz(L[k]["qvec"]).T) for k in kk]             # camera -> world
     if SMOOTH:
-        T60, X, out_w = smooth(t[kk] / 1000, C[kk])
-        near = np.clip(np.searchsorted(t[kk] / 1000, T60), 0, len(kk) - 1)
-        frames = [{"t_ms": int(round(T60[i] * 1000)), "center": np.round(X[i], 3).tolist(), "qvec": np.round(Q[near[i]], 5).tolist()}
-                  for i in range(len(T60))]
-        print(f"  smoothed to {len(T60)} frames at 60 fps; {int(out_w)} observations rejected as outliers")
+        # a gap longer than GAP s (lost tracking, or the landed quad's sky frames) is not bridged: each run is
+        # smoothed on its own and runs shorter than MIN_RUN frames (a stray registration) are dropped. Bridging a
+        # 27 s gap with one jerk-penalised curve once swung a path 700 m out of the field
+        GAP, MIN_RUN = 1.5, 10
+        runs = np.split(np.arange(len(kk)), np.nonzero(np.diff(t[kk]) > GAP * 1000)[0] + 1)
+        frames, rej, drop = [], 0, 0
+        for r in runs:
+            if len(r) < MIN_RUN:
+                drop += len(r); continue
+            T60, X, out_w = smooth(t[kk[r]] / 1000, C[kk[r]]); rej += int(out_w)
+            near = r[np.clip(np.searchsorted(t[kk[r]] / 1000, T60), 0, len(r) - 1)]
+            frames += [{"t_ms": int(round(T60[i] * 1000)), "center": np.round(X[i], 3).tolist(), "qvec": np.round(Q[near[i]], 5).tolist()}
+                       for i in range(len(T60))]
+        print(f"  smoothed to {len(frames)} frames at 60 fps in {len(runs)} runs; {rej} observations rejected as outliers, {drop} in short runs dropped")
     else:
         frames = [{"t_ms": int(round(t[k])), "center": np.round(C[k], 3).tolist(), "qvec": np.round(q, 5).tolist()} for k, q in zip(kk, Q)]
     json.dump({"pilot": name, "slot": int(slot) if slot else None, "qvec_source": "localize.py", "frames": frames},

@@ -44,6 +44,14 @@
       .stepbtn:disabled { opacity: .3; cursor: default; }
       #hline { font: 600 11px/1.3 var(--cond); color: var(--red); padding: 0 10px 6px; }   /* loading, a missing scan, an error */
       #hline[hidden] { display: none; }
+      /* the scan's loading overlay, centred on the canvas */
+      #scanload { position: fixed; z-index: 3; left: calc((100vw - var(--stripw)) / 2); top: 50%; transform: translate(-50%, -50%); width: 260px; padding: 10px 12px 12px; text-align: center; }
+      #scanload[hidden] { display: none; }
+      #scantext { font: 700 12px var(--cond); letter-spacing: .06em; text-transform: uppercase; color: var(--ink); margin-bottom: 8px; }
+      #scantrack { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+      #scanbar { height: 100%; width: 0; background: linear-gradient(90deg, var(--red-hi), var(--red)); border-radius: 3px; transition: width .15s; }
+      #scanbar.busy { width: 40%; animation: scanbusy 1.2s ease-in-out infinite alternate; }
+      @keyframes scanbusy { from { margin-left: 0; } to { margin-left: 60%; } }
 
       /* the round menu */
       #rounds { position: fixed; z-index: 5; left: var(--pad); top: var(--pad); width: min(560px, calc(100vw - 2 * var(--pad))); max-height: calc(100vh - 2 * var(--pad)); display: flex; flex-direction: column; overflow: hidden; background: #fff; }
@@ -92,7 +100,7 @@
          the tile count, --ah the clips' height over width); the followed pilot's tile is the same size, outlined, and
          moves to the top. The CSS formula here is only the fallback */
       #dvr { --rows: 1; --tilew: calc((100vh - (var(--rows) - 1) * 2px) / var(--rows) / var(--ah, 0.75));
-        position: fixed; z-index: 2; right: 0; top: 0; bottom: 0; padding: 0; background: var(--solid); border-left: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-end; gap: 2px; overflow-y: auto; overscroll-behavior: contain; }
+        position: fixed; z-index: 2; right: 0; top: 0; bottom: 0; padding: 0; background: var(--solid); border-left: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-end; gap: 2px; overflow: hidden; }   /* the tiles are sized to fit: a scrollbar from a rounding overflow would widen the column */
       #dvr[hidden], #dvr:empty { display: none; }
       .tile { position: relative; width: var(--tilew); flex: none; overflow: hidden; background: #000; cursor: pointer; transition: width .25s; }
       .tile.sel { outline: 2px solid var(--hot); outline-offset: -2px; }   /* the followed pilot's */
@@ -203,6 +211,7 @@
   </head>
   <body>
     <canvas id="c"></canvas>
+    <div id="scanload" class="panel" hidden><div id="scantext">Loading scan…</div><div id="scantrack"><div id="scanbar"></div></div></div>
     <div id="left">
       <div id="head" class="panel">
         <div id="series"></div>

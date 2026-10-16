@@ -20,6 +20,7 @@ race = os.environ.get("RACE", os.path.splitext(os.path.basename(src))[0])
 W, H, CW, CH, FW = 1920, 1080, 640, 360, 480
 BAR = 42    # race overlay across the top of each cell: place, pilot, lap, lap time
 MED_EVERY = 10   # every n-th live frame is kept for the median (prop mask)
+LAG = max(1, round(FPS / 3))   # frames in 1/3 s: the freeze test compares frames this far apart
 
 
 def frames():
@@ -40,7 +41,7 @@ def cell(f, slot):
 
 
 # ---- pass 1: per-slot statistics
-S = [dict(bright=[], diff=[], hf=[], prev=None, n=0, s1=np.zeros((CH, FW), np.float64), s2=np.zeros((CH, FW), np.float64), med=[]) for _ in range(9)]
+S = [dict(bright=[], diff=[], hf=[], prev=[], n=0, s1=np.zeros((CH, FW), np.float64), s2=np.zeros((CH, FW), np.float64), med=[]) for _ in range(9)]
 N = 0
 for f in frames():
     N += 1
@@ -50,7 +51,10 @@ for f in frames():
         # frozen = crashed / no signal: almost no change against the previous sample. Compare 8x8
         # block means so a crashed quad's flickering close-up (codec noise) does not count as motion
         gb = g[BAR:BAR + 312].reshape(39, 8, 60, 8).mean((1, 3))
-        s["diff"].append(np.inf if s["prev"] is None else np.abs(gb - s["prev"]).mean()); s["prev"] = gb
+        # against the frame 1/3 s earlier, not the previous one: the threshold was set at 3 fps, and at 30-60 fps
+        # neighbouring frames of a flying quad differ too little and were dropped as frozen
+        s["diff"].append(np.inf if len(s["prev"]) < LAG else np.abs(gb - s["prev"][-LAG]).mean())
+        s["prev"] = (s["prev"] + [gb])[-LAG:]
         # analog-style static after a lost link: neighbouring pixels are uncorrelated
         s["hf"].append(np.abs(np.diff(g[BAR:], axis=1)).mean())
 print("frames", N)
