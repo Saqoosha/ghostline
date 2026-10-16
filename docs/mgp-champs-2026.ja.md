@@ -1,0 +1,104 @@
+# MultiGP Championship 2026 — 公開 DVR だけからコースと全 Round の飛行経路を作る
+
+スキャン無し。MultiGP が公開している pilot-review の 8up 録画（8 人の HDZero DVR を 1 本の mp4 に並べたもの）だけから、
+SfM でコースの地図を組み、3DGS を学習し、各 Round の各 pilot の経路を地図に合わせて `viewer/mgp.html` で再生する。
+道具は `tools/mgp/`、結果の小さい JSON は `data/mgp/`、映像・画像・地図・3DGS は git の外（`build/mgp/`、Studio と rt4090 の作業場）。
+
+## 素材
+
+- 一覧：`https://race-dvr-public.s3.us-east-1.amazonaws.com/pilot-review/manifest.json`（UTF-8 BOM 付き。`encoding="utf-8-sig"`）。
+  `url` を `pilot-review/` に足すと mp4。10/15 の Bracket は 77 本（20 MB 未満の空録画を除く）、計 37 GB。`alias` の「Bracket · Race N」は
+  公式の Qualifier Round N と同じ（公式ラップで 2 回確かめた）。同じ N が 2 本あるもの（76、83）は後のほうが取りこぼされる。
+- 録画は 1920×1080 60 fps、3×3 の 640×360 マス、各マスの中央に 4:3 の 480×360 の映像（x オフセット 80）。マス 8 は「RACE N」と時計。
+  Race 17 以降は各マスの上 ~40 px に放送の帯（順位・国旗・pilot 名・LAP n・ラップタイム）。**帯と映像のマスがずれる Round がある**（Q44：
+  EL-MIDERRO の帯はマス 7、映像はマス 6）。Race 1〜16 には帯も時計も無い。
+- 落ちた機体のマスは止まった絵か砂嵐。砂嵐は隣の画素との差の平均が 23〜26（ふつうの映像は 3〜4）。
+- 公式の記録：`https://mgp.livefpv.com/results/`（LiveFPV）。各 Round の結果ページの JS に `racerLaps` としてラップごとの値が埋まっている。
+  `tools/mgp/livefpv_laps.py` が全 Round を `data/mgp/livefpv_laps.json` にする。**1 周目はその pilot 自身のホールショット（スタートゲートの
+  最初の通過）から数える**。lapNum 0 の行がその通過。MCKFPV が総合 1 位（2 周連続 33.184 s、Round 44）。
+- コースの配置：VelociDrone の公式トラック ID 2189「2026 MultiGP Championship Track」（Velbd の `getOfficialTracks` で取得、AES の復号は
+  Velbd の `scripts/download-trk.ts` と同じ）。cm 単位、ゲート 32、地面のライン（prefab 303）と Speed Trap の矢印（132）。
+  **VelociDrone は ground truth ではない**：縮尺と向きと順番の当たりに使い、ゲートの位置と大きさはスキャンから測る（`gates_from_map.py`）。
+  実物のゲートの開口は約 2.8 × 1.85 m で、VelociDrone のゲート（2.17 m 幅）より広い。配置のずれは 0.3〜0.9 m。
+
+## 通し
+
+```
+# Studio（~/mgp、env/ は uv の venv：pycolmap 4.2.1・opencv・ocrmac）
+./extract_all.sh all 30 4                 # 全 Round を 30 fps で q<NN>_s<slot> に切り出す（aliases.json から Round 番号）
+env/bin/python ocr_scan.py raw/<mp4> ocr/<name>.json 10      # 帯と時計の OCR（macOS Vision）
+# rt4090（CPU、nice -n 10。/mnt/data/mgp が作業場。GPU は ZTMY のセッションと共用）
+~/mgp/chain.sh chain vocab256k.bin chain/models/m01 r1404 r1451 ...   # レース 1 の地図に 1 レースずつ足す
+~/mgp/env/bin/python ~/mgp/localize.py <map_dir> <out> images/q44_s0 ... -j 5   # 全フレームの位置合わせ
+# Mac
+uv run --with numpy --with scipy python tools/mgp/poses_from_loc.py <top_frame.json> <fit.json> <poses_dir> <loc.json>=s0:0 ... --smooth
+uv run --with numpy python tools/mgp/name_slots.py 44 <poses_dir> build/mgp/poses/q44 60        # ラップの並びでマス→pilot
+uv run --with numpy python tools/mgp/make_mgp_race.py build --round 44 --poses build/mgp/poses/q44 --out build/mgp/q44 \
+    --fps 60 --margin 1.5 --min-gap 3 --ocr-dir /nonexistent --gates build/mgp/gates/gates.json --crop-top 40 [--clips]
+```
+
+- `extract.py`：2 回読み（1 回目で統計と live 判定、2 回目で書き出し）。メモリは 1 本 1.7 GB。**前の版は全フレームを載せる作りで、6 本並べて
+  Studio（64 GB）を落とした。** ファイル名は `(i + 0.5) / fps` の時刻（ffmpeg の fps フィルタは区間の真ん中を取る。3 fps なら 167 ms）。
+  OSD は時間方向の分散が小さい画素、プロペラは下の両隅の彩度の高い非緑、上の帯 42 px、魚眼の隅をマスクにする。
+  live 判定：明るさ > 30、8×8 のブロック平均の前フレームとの差 > 6（墜落して止まった絵の圧縮ノイズを動きと数えない）、隣の画素との差 < 12（砂嵐）。
+- SfM：pilot のフォルダごとに OPENCV_FISHEYE を 1 台（初期値は上側のレンズ寄り `195,197,240,180,0.155,-0.09,0.026,-0.003`）。
+  **15 レース 2.4 万枚をまとめて組むと壊れる**（global はかけらだらけ、incremental は 1 つになるが同じ印刷のゲートの取り違えで中身が散る）。
+  効くのは、きれいな 1 レース（レース 1、1,199 枚、3 fps、全組み合わせ照合で 1 モデル）に、`register.py`（既存フレーム固定、
+  `abs_pose_min_num_inliers` 30、sequential ＋ vocab tree）で 1 レースずつ足す `chain.sh`。1 レース 35〜55 分だが、データベースに前の試行の
+  照合が残っていると、それらも一緒に登録される（14:04 の 1 本で 2 時間 48 分、7,523 枚）。pycolmap の `incremental_mapping` は `input_path` が
+  あると出力先の直下に書く（`0/` を作らない）。
+- レース 1 の地図の欠陥と修理（`mapfix.py`）：同じ印刷の窓ゲート 2 つ（8 番と 32 番）の取り違えで、1 周に 1 回 60〜75 m 飛ぶ区間が 3 人とも
+  あった。3 fps で 60 m/s を超える歩幅で見つけて、52 枚を外して束調整して登録し直すと 0 回になる（m01）。
+  **3DGS で見える「幽霊」は 2 つとも本物だった**：TBS の列の裏 0.4 m に立つ MultiGP のバナーの柵と、列の 3.5 m 先の次のゲート（29 番）。
+  斜めからしか見ていない物は薄く描かれる。点の観測元を pilot × 周回で分けて、1 つの組だけが見ている升が無ければ写しではない。
+- 位置合わせ（`localize.py`）：OpenCV の RootSIFT（COLMAP の記述子と直接合う）、地図のキャッシュ `loc_cache.npz`、等速予測で近い地図画像 6 枚、
+  失敗時は全点の記述子で再探索。同じレースなら 15 fps の 98〜99% が乗り、前後 7 フレームのぶれ 6 cm（p50）。
+  **別の時刻の映像は乗りにくい**：14:00 の Q44 を 10:34 の地図に合わせると 52〜62%、一致点 35〜40（同レースは約 200）。レンズのせいではない
+  （純正レンズは全マスで最下位。`--lens auto` が純正・上側・中央値から選ぶ）。日の向きと影の違い。時間帯の違うレースを地図に足して埋める。
+- `poses_from_loc.py --smooth`：60 fps の格子にジャークのペナルティ付きで当てはめ、Huber で外れを落とす（2 m 超は捨てる）。`LAM` 2e-4 が
+  観測からのずれ p50 9 cm、加速度の最大 130 m/s²。地図の飛び（往復する 15 m 超の跳び）は先に捨てる。
+- **マス→pilot は帯でも OSD でもなくラップの並びで決める**（`name_slots.py`）。OSD の機体名は 3 倍に拡大しても読めない。Q44 の 5 人とも
+  公式ラップと 0.04 秒で一致。アナログの pilot は位置合わせできないので自然に外れる（Saqoosha：アナログは無視でよい）。
+- `make_mgp_race.py`：race.json は FDF の race ページの形＋ `official_laps`・`position`・`video_size`・`checkpoints`（`--gates` で
+  スキャンの測定値）。クリップを作り直さないときも `--crop-top 40` が要る（無いと `video_size` が 360 に戻る）。スタートの合図は
+  「いちばん早いホールショットの 2 秒前」の仮置き（帯の時計は前のレースの帯が残る時間があり使えない）。
+- 3DGS：spirula `train in-the-wild`、`--disable-viewer 1`（7007 番の取り合いで落ちる）、マスクは `masks/` を自動で使う。座標は SfM のまま
+  なので `to_metric.py`（地面の面 ＋ 2D 相似）→ `ply_to_web.py`（x 軸 −90°、y 上・z = −VelociDrone y）→
+  `npx -y @playcanvas/splat-transform@3.4.2 -w in.ply out.sog`。1,199 枚・30k 反復・200 万 splats で 12 分（GPU 独占時）。
+
+## ページ（`viewer/mgp.html`、`src/mgp.ts`、共通部は `src/racekit.ts`）
+
+- データ：`<data>/rounds.json`（Round の一覧）、`<data>/<round>/race.json`＋ `dvr_<pilot>.mp4`＋ `audio.m4a`、スキャンと空は
+  `<data>/scene/<scene>.sog`・`<data>/sky.jpg` を全 Round で共有。開発用は `viewer/public/mgp-dev/`（q01・q44 は本物、他は FDF の流用）。
+- 決めたこと：右端に DVR の列（常に 1 列、全高、同じ大きさ、追っている pilot は枠で一番上）、キャンバスはその左を全高、見出し・順位表・
+  操作のバー（左下）は浮かせる。Orbit・Top は空き領域（キャンバス − 順位表 − バー）に収める（主点をずらす投影）。
+  Orbit の距離は寄り 2.5 s・引き 1 s の時定数、2 s 先読み、3% の不感帯。Top は公式図と同じ向き（右 = world −z、上 = world −x）、
+  コースの中心をキャンバスの中心に、地面＋12 m より上の splat を切る（空の霧）。スキャンがあるときはゲートの枠を描かない。
+- 軌跡と球は不透明・深度書き込みで splat の前の不透明パスに描く（手前の splat に隠れる）。薄れは alpha-to-coverage（MSAA 4 なので 5 段階の
+  細かい縞。Saqoosha はこれを選んだ）＋幅の絞り 5 → 1 px。ディザは点々が目立つので不採用。
+- 1 周目のタイマーは `holeshot_at` から。クリップの帯は切り落とす（ページのチップと二重になる）。
+
+## 検証で使える基準値
+
+- レース 1 の 3 人：公式ラップとの差 0.15 s 以内（3 fps でも 15 fps でも）。Q44 の MCKFPV：16.539 / 16.685 / 21.058 s（公式 16.509 / 16.675 / 21.021）。
+- 縮尺：レース 1 の地図は 1 単位 = 7.37 m（地面のラインへの chamfer 1.4〜1.6 m）。ゲートの高さがスキャン上で 1.80〜1.94 m（6 ft）。
+- rt4090 の CPU での位置合わせ：1 プロセス 60〜85 ms/フレーム、24 本並列で 59 フレーム/s。
+
+## 機械
+
+- Studio（`ssh studio`、`~/mgp`）：ダウンロード・切り出し・OCR・SfM の CPU 仕事。raw/ に 77 本、all/ に 30 fps の切り出し（62 GB）。
+- rt4090（`/mnt/data/mgp`：chain・mapfix・gates・q44・gs_*）：地図のつなぎ足し、位置合わせ、3DGS。`/mnt/data` は fstab に無く、再起動後は
+  `sudo mount -t ntfs3 /dev/nvme1n1p2 /mnt/data`。`/` は小さい（ZTMY と共用で 98% になった）。GPU は ZTMY-Sets のセッションと
+  クロスセッションのメッセージで順番を決める。`pgrep -x spirula` が空なら使ってよい。
+- `ssh host 'until ! pgrep -f "<名前>"'` は ssh の bash -c の行に当たって終わらない。`pgrep -f "[n]ame"` と書く。`pkill -f` も同じ理由で
+  自分の bash を殺す。
+
+## 残タスク
+
+- つなぎ足し：r1451 以降（14:51 → 13:39 → 12:43 → 12:25 → 12:01 → 11:39 → 11:18 → 10:56）。14:04 は 1,006 枚中 292 枚しか入らない。
+  入った地図で Q44 を合わせ直して登録率を見る（走行中）。
+- 7,523 枚の地図からの 3DGS（走行中、`/mnt/data/mgp/gs_1404`）。できたら `.sog` を差し替える。
+- 全 Round の位置合わせ → race.json → rounds.json。Studio の `all/` にフレームはある。
+- スタートの合図の時刻（帯のラップ表示の変化を密に OCR するか、Round ごとに手で）。`position`・`gap`・国旗の公式ソース。
+- 公開：`tools/publish-dvr-viewer.sh` は mgp の形（rounds.json、共有のスキャン、`VITE_MGP_DATA`）を知らない。
+- レース 1 の 15 fps フレームを地図に足して 3DGS を厚くする（`loc_to_model.py` 未着手）。

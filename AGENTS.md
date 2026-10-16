@@ -13,7 +13,8 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 |---|---|
 | `tools/dvr/` | 姿勢推定（CPR 照合 `cpr_track.py` → 束調整 `cpr_ba.py` → 2 周目 `cpr_rematch.py` → `takeoff.py`、評価 `eval_align.py`）、`make_race.py`（race.json） |
 | `tools/dvr/rt_*` | ライブの位置推定（`rt_map.py` で他の飛行からキーフレーム地図、`rt_track.py` で過去のフレームだけで追跡・複数人をバッチ・答えを SSE で配信（`PUSH`）・直近の答えの束調整（`BA`））、`rt_trt.py`（LighterGlue と XFeat を TensorRT のエンジンに）、`rt_render.py`（`RENDER=1`：予測姿勢でその場で 3DGS を描いて照合。キーフレームより精度が高い）、`rt_capture.sh`（USB キャプチャ → SRT、録画つき）、`rt_replay.sh`、`ndi_send.py`（録画を NDI で流す試験用）、`rt_power*`（電力の記録）、`rt_day_gate.py` → `rt_day_power.py`（大会の配信の録画から 1 日ぶんの電力量を見積もる）、`rt_linux_setup.sh`（会場用の Linux の環境作り）、`rt_gpu_idle.sh`（合間の GPU を 21 → 7 W に戻す見張り。rt4090 で常駐）、`rt_rec.py`（NDI の送り手を全部、どれかのマスに絵があるあいだ録画。一覧は操作ページの `/rec`、判定は `rt_signal.py` を tracker と共有）、`rt_control.py`＋`rt_control.html`（会場の操作ページ `http://rt4090:8080`：NDI の送り手とマスを選んで tracker を開始 / 停止、状態・届いた映像・上から見た軌跡の表示、レンズは「自動」で tracker が見分ける。rt4090 で常駐。真上からの絵は `rt_topview.py`、`/obs` は図だけのページ（OBS のブラウザソース用）、描く部分は `rt_topview.js` を両ページで共有）。入力は SRT のほか `ndi://<名前>` で NDI を直接受ける。正本は [docs/realtime-tracking.ja.md](docs/realtime-tracking.ja.md) |
-| `viewer/` | Vite + PlayCanvas。`index.html` は 1 飛行のビューア（mark / pad の道具つき、`live` でライブの答えの再生：`src/live.ts` が 100 ms 遅らせた内挿で描く）、`race.html` はレースの再生、`live.html` はライブの表示と録画の再生（`?replay=`） |
+| `tools/mgp/` | スキャン無しの通し：MultiGP の公開 8up 録画から SfM の地図（`extract.py` → `sfm.py` / `chain.sh`）、3DGS、全フレームの位置合わせ（`localize.py`）、ラップで pilot 名（`name_slots.py`）、race.json（`make_mgp_race.py`）。正本は [docs/mgp-champs-2026.ja.md](docs/mgp-champs-2026.ja.md) |
+| `viewer/` | Vite + PlayCanvas。`index.html` は 1 飛行のビューア（mark / pad の道具つき、`live` でライブの答えの再生：`src/live.ts` が 100 ms 遅らせた内挿で描く）、`race.html` はレースの再生、`mgp.html` は MultiGP の全 Round の再生（`rounds.json`、右に DVR の列）、`live.html` はライブの表示と録画の再生（`?replay=`） |
 | `data/dvr/` | 結果の小さな JSON（姿勢・評価・pad・race.json）。映像と中間物は `build/dvr/`（git の外） |
 | `worker/` | https://ghostline.saqoo.sh 。R2（バケット `vdgs`）の `dvr/<name>/` を `/<name>/` として返す |
 | `tools/publish-dvr-viewer.sh` | ビューアを組んでページとデータを R2 に上げる。Worker の deploy は要らない |
@@ -46,6 +47,10 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 - **上から見た図（`rt_topview.js`）の点の時刻は、届いた時刻でなくフレーム番号（`i / fps`）で置く。** 届いた時刻だと処理の 30〜40 ms の揺れで点の間隔が乱れ、軌跡がカクつく（ページは 60 fps で軽いのに、動きだけが不揃いに見える）。操作ページと OBS ページ（`/obs`）は描く部分とスライダーの設定を共有する
 - **ライブの速度や精度をいじる前に、設計の報告書を読む**（`docs/realtime-architecture.html`。オフラインの通しは `docs/offline-architecture.html`）。解像度は効かない、1 人 60 fps・4 人で 1 周 9 ms など、測り直しになる数字がそこにある
 - **cyndilib の NDI の Receiver は使い回す。** 捨てて作り直すと、ガベージコレクションの中の `NDIlib_framesync_destroy` が GIL を握ったまま止まり、操作ページのサーバーごと固まった（`rt_rec.py`）
+- **同じ印刷のゲートが並ぶコースを何レースもまとめて SfM すると壊れる。** きれいな 1 レースの地図に `register.py` で 1 レースずつ足す。
+  地図で 1 周に 1 回 60 m 飛ぶのはゲートの取り違え（`mapfix.py`）。3DGS に見える薄い「写し」は本物のことがある（点の観測元で確かめる）
+- **別の時刻の映像は地図に乗りにくい**（同レース 98% → 3 時間半後 52〜62%）。レンズではなく影。時間帯の違うレースを地図に足す
+- **8up 録画の帯の名前は映像のマスとずれることがある。** マス→pilot はラップの並びで決める（`name_slots.py`）
 - **race ページの splat がぼやける**：PlayCanvas の CPU ソートは走行中の依頼を捨てる。カメラが止まったら `resortWhenIdle` がソートを頼み直す
   （PlayCanvas の内部フィールドを読んでいるので、上げたら確かめる）
 
