@@ -17,7 +17,8 @@ type Rounds = { title: string; rounds: RoundEntry[] }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const QS = new URLSearchParams(location.search)
-const BASE = import.meta.env.BASE_URL + (QS.get('data') || import.meta.env.VITE_MGP_DATA || 'mgp-dev') + '/'   // VITE_MGP_DATA: the published folder
+const DATA_Q = QS.get('data'); const DATA = DATA_Q && /^[a-z0-9_-]+$/i.test(DATA_Q) ? DATA_Q : ''   // a folder name only: no path parts
+const BASE = import.meta.env.BASE_URL + (DATA || import.meta.env.VITE_MGP_DATA || 'mgp-dev') + '/'   // VITE_MGP_DATA: the published folder
 const TRAIL = 2, TRAIL_PX = 5                                       // seconds of trail behind each drone, its width
 const AUDIO_LEAD = 3                                                // audio.m4a starts 3 s before the clip: the countdown (as on the race page)
 const FLASH = 2.5                                                   // seconds a finished lap's time stays on the board
