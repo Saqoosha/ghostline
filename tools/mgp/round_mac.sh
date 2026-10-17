@@ -12,7 +12,11 @@ ls "$L"/${Q}_s*.json >/dev/null 2>&1 || scp -q "$LOC_HOST:$LOC_DIR/${Q}_loc/*.js
 SPECS=$(cd "$L" && ls ${Q}_s*.json | sed -E "s|(${Q}_s([0-9]+))\.json|$L/\1.json=s\2:\2|")
 uv run -q --with numpy --with scipy python tools/mgp/poses_from_loc.py "$L/top_frame.json" "$L/fit01.png.json" "build/mgp/poses/${Q}_slots" $SPECS --smooth 2>&1 | grep -v Warning
 uv run -q --with numpy python tools/mgp/name_slots.py "$N" "build/mgp/poses/${Q}_slots" "build/mgp/poses/$Q" 60
-uv run -q --with numpy python tools/mgp/make_mgp_race.py build --round "$N" --poses "build/mgp/poses/$Q" --out "build/mgp/$Q" \
+# the recording the round was localized from: the studio queue says (round N <-> file), not the manifest's alias, which
+# is wrong for some rounds (a re-run labelled with the previous race's number) and missing for files fetched later
+VF=$(ssh -n "$LOC_HOST" "grep '^$N ' $LOC_DIR/queue.txt | head -1 | cut -d' ' -f2")
+[[ "$VF" =~ ^[0-9_-]+\.mp4$ ]] && VFA=(--video-file "$VF") || VFA=()
+uv run -q --with numpy python tools/mgp/make_mgp_race.py build --round "$N" --poses "build/mgp/poses/$Q" --out "build/mgp/$Q" "${VFA[@]}" \
   --fps 60 --margin 1.5 --min-gap 3 --ocr-dir /nonexistent --gates build/mgp/gates/gates_1404.json --crop-top 40 --clips 2>&1 | grep -E "^round|diff"
 ln -sfn "../../../build/mgp/$Q" "viewer/public/mgp-dev/$Q"
 uv run -q python - "$N" "$Q" <<'PY'
