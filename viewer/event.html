@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ghostline</title>
+    <style>
+      main { max-width: 880px; margin: 0 auto; padding: 32px 24px 64px; }
+      header { display: flex; align-items: center; gap: 20px; }
+      header .grow { flex: 1; }
+      h1 { margin: 40px 0 6px; font: 200 30px/1.2 var(--sans); letter-spacing: .06em; }
+      .sub { margin: 0 0 28px; color: var(--dim); font-size: 12px; }
+      .now { display: grid; grid-template-columns: 110px auto 1fr auto; align-items: baseline; gap: 18px; padding: 22px 4px; border-top: 1.5px solid var(--hair); border-bottom: 1px solid var(--faint); text-decoration: none; color: var(--ink); }
+      .now b { font: 300 18px var(--sans); letter-spacing: .08em; }
+      .now .who { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .now .go { font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); }
+      .now.on .go { color: var(--alarm); }
+      .now:hover .go { color: var(--ink); }
+      h2 { margin: 40px 0 8px; font: 400 11px var(--mono); letter-spacing: .2em; color: var(--dim); }
+      ol { list-style: none; margin: 0; padding: 0; }
+      li a { display: grid; grid-template-columns: 70px 170px 1fr; gap: 18px; align-items: baseline; padding: 11px 4px; border-bottom: 1px solid var(--faint); text-decoration: none; color: var(--ink); }
+      li a:hover { background: rgba(12, 15, 20, .04); }
+      li .t { font: 400 12px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
+      li b { font: 400 13px var(--sans); letter-spacing: .08em; }
+      li .who { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #empty { color: var(--dim); padding: 12px 4px; }
+      footer { margin-top: 48px; font-size: 11px; color: var(--dim); }
+      @media (max-width: 720px) { .now { grid-template-columns: auto 1fr; } .now .who, .now .go { grid-column: 1 / -1; } li a { grid-template-columns: 56px 1fr; } li .who { grid-column: 2; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header><a class="mark" href="/"><span>ghost</span><i></i><span>line</span></a><span class="grow"></span><span class="delay" id="delay"></span></header>
+      <h1 id="title"></h1>
+      <p class="sub">FPV の DVR 映像から推定した機体の位置を、コースのスキャンの上で見る</p>
+      <div id="now"></div>
+      <h2>HEATS</h2>
+      <ol id="list"></ol>
+      <div id="empty" hidden>まだ終わったヒートはありません</div>
+      <footer>位置は各機の DVR 映像から推定したもので、公式の記録ではありません。</footer>
+    </main>
+    <script type="module" src="/src/event.ts"></script>
+  </body>
+</html>

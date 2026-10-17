@@ -1,0 +1,60 @@
+/* The audience pages' look: the venue control page's (tools/dvr/rt_control.html) - paper, hairlines, thin type, the cells'
+   colours, fonts the device already has. Light only. */
+:root { --paper: #f3f4f6; --ink: #0c0f14; --dim: rgba(12, 15, 20, .58); --faint: rgba(12, 15, 20, .2); --hair: rgba(12, 15, 20, .82); --spirit: #5b4bff; --alarm: #d1301f;
+        --tl: #ff2e63; --tr: #f59e0b; --bl: #12b76a; --br: #2f6bff; --veil: rgba(243, 244, 246, .86);
+        --sans: "Helvetica Neue", -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--paper); color: var(--ink); font: 400 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+[hidden] { display: none !important; }
+
+/* the name with its line drawn: ghost, a hairline, line */
+.mark { display: flex; align-items: center; gap: 12px; margin: 0; font: 200 15px/1 var(--sans); letter-spacing: .42em; text-decoration: none; color: var(--ink); }
+.mark span:first-child { color: rgba(12, 15, 20, .45); }
+.mark span:last-child { margin-right: -.42em; }
+.mark i { width: 56px; height: 1.5px; background: linear-gradient(90deg, var(--tl), var(--tr), var(--bl), var(--br)); }
+
+/* a full-window 3D page: the canvas behind, the bars over it */
+body.stage { overflow: hidden; }
+#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.bar { position: fixed; left: 0; right: 0; z-index: 3; display: flex; align-items: center; gap: 20px; padding: 0 20px; background: var(--veil); backdrop-filter: blur(6px); }
+.bar.top { top: 0; height: 52px; border-bottom: 1px solid var(--faint); }
+.bar.foot { bottom: 0; min-height: 34px; border-top: 1px solid var(--faint); font: 400 11px/1.4 var(--sans); color: var(--dim); flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; }
+.bar.foot .grow { flex: 1; }
+.what { font: 400 12px var(--mono); letter-spacing: .14em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.grow { flex: 1; }
+.live { font: 400 11px var(--mono); letter-spacing: .2em; display: flex; align-items: center; gap: 8px; white-space: nowrap; color: var(--dim); }
+.live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--dim); }
+.live.on { color: var(--alarm); } .live.on::before { background: var(--alarm); border-color: var(--alarm); animation: breathe 2.4s ease-in-out infinite; }
+@keyframes breathe { 50% { opacity: .15; } }
+
+/* thin controls: text buttons, the chosen one underlined */
+.seg { display: flex; gap: 2px; }
+.seg button, .btn { background: none; border: 0; padding: 4px 7px; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); cursor: pointer; border-bottom: 1px solid transparent; }
+.seg button:hover, .btn:hover { color: var(--ink); }
+.seg button.on { color: var(--ink); border-bottom-color: var(--ink); }
+.delay { display: flex; align-items: center; gap: 4px; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); white-space: nowrap; }
+.delay output { display: inline-block; min-width: 46px; text-align: center; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* who is flying: one line per cell, its colour, name and state; a click follows them */
+.pilots { position: fixed; left: 20px; top: 68px; z-index: 3; display: grid; gap: 2px; min-width: 240px; padding: 8px 0; background: var(--veil); backdrop-filter: blur(6px); border-left: 1.5px solid var(--hair); }
+.pilots button { display: grid; grid-template-columns: 28px 1fr auto; align-items: baseline; gap: 10px; padding: 5px 14px 5px 12px; background: none; border: 0; text-align: left; cursor: pointer; color: var(--ink); font: 400 13px var(--sans); }
+.pilots button:hover, .pilots button.on { background: rgba(12, 15, 20, .05); }
+.pilots .cell { font: 400 11px var(--mono); letter-spacing: .08em; color: var(--c); }
+.pilots .st { font: 400 10px var(--mono); letter-spacing: .16em; color: var(--dim); }
+.pilots .st.flying { color: var(--c); }
+.pilots button.off { opacity: .45; }
+
+/* the name over each drone: a thin label in the pilot's colour, with a white halo over the scan */
+.tag { position: fixed; z-index: 2; left: 0; top: 0; transform: translate(-50%, -150%); pointer-events: none; display: flex; align-items: baseline; gap: 6px; white-space: nowrap;
+       font: 500 12px/1 var(--sans); letter-spacing: .06em; color: var(--ink); text-shadow: 0 0 2px #fff, 0 0 4px #fff, 0 0 8px #fff; }
+.tag b { font: 500 10px var(--mono); letter-spacing: .1em; color: var(--c); }
+.tag small { font: 400 10px var(--mono); letter-spacing: .14em; color: var(--dim); }
+.tag.lost b { color: var(--dim); }
+.note { position: fixed; left: 50%; top: 45%; transform: translateX(-50%); z-index: 2; font: 300 13px var(--sans); letter-spacing: .2em; color: var(--dim); text-align: center; pointer-events: none; }
+
+@media (max-width: 720px) {
+  .bar.top { height: auto; flex-wrap: wrap; gap: 6px 14px; padding: 8px 16px; }
+  .pilots { left: 16px; top: auto; bottom: 64px; min-width: 0; }
+  .mark i { width: 24px; }
+}

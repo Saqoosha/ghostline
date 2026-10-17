@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ghostline replay</title>
+    <style>
+      /* the timeline: one hairline bar at the bottom */
+      .bar.time { bottom: 34px; height: 46px; border-top: 1px solid var(--faint); }
+      #seek { flex: 1; accent-color: var(--ink); }
+      #clock { font: 400 11px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; min-width: 90px; text-align: right; }
+      .ver { font: 400 10px var(--mono); letter-spacing: .16em; color: var(--spirit); border: 1px solid currentColor; padding: 2px 6px; }
+      /* the night version: the pilots' DVR clips in a column on the right, each edged in its colour */
+      #dvr { position: fixed; right: 20px; top: 68px; bottom: 96px; z-index: 3; width: min(26vw, 360px); display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+      #dvr figure { margin: 0; position: relative; border-left: 2px solid var(--c); background: #000; aspect-ratio: 4 / 3; overflow: hidden; }
+      #dvr video { width: 100%; height: 100%; object-fit: cover; display: block; }
+      #dvr figcaption { position: absolute; left: 8px; bottom: 6px; font: 400 10px var(--mono); letter-spacing: .1em; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, .8); white-space: pre; }
+      @media (max-width: 720px) { #dvr { left: 16px; right: 16px; width: auto; top: auto; bottom: 90px; flex-direction: row; height: 110px; } #dvr figure { flex: none; height: 100%; } }
+    </style>
+  </head>
+  <body class="stage">
+    <canvas id="c"></canvas>
+    <header class="bar top">
+      <a id="home" class="mark" href="./"><span>ghost</span><i></i><span>line</span></a>
+      <span class="what" id="title"></span>
+      <span class="what" id="heat"></span>
+      <span class="ver" id="ver"></span>
+      <span class="grow"></span>
+      <span class="seg" id="cams"></span>
+    </header>
+    <nav class="pilots" id="pilots" hidden></nav>
+    <aside id="dvr" hidden></aside>
+    <div class="note" id="note">読み込み中…</div>
+    <div class="bar time">
+      <button class="btn" id="play">PAUSE</button>
+      <input id="seek" type="range" min="0" max="1" step="0.01" value="0" />
+      <span id="clock"></span>
+      <span class="seg" id="speed"></span>
+    </div>
+    <footer class="bar foot">
+      <span>位置は各機の DVR 映像から推定したもので、公式の記録ではありません。</span>
+      <span class="grow"></span>
+      <a href="./">ヒートの一覧 →</a>
+    </footer>
+    <script type="module" src="/src/heat.ts"></script>
+  </body>
+</html>

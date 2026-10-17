@@ -7,3 +7,4 @@ viewer/dist/
 viewer/public/*
 !viewer/public/flights.json
 worker/.wrangler/
+worker/.dev.vars

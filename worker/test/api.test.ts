@@ -1,0 +1,33 @@
+import { expect, test } from 'bun:test'
+import { applyToIndex, authorized, parseEventPath, type HeatIndex } from '../src/api'
+
+test('parseEventPath', () => {
+  expect(parseEventPath('/jdl-2026-10-25/api/push')).toEqual({ event: 'jdl-2026-10-25', rest: 'push' })
+  expect(parseEventPath('/staging-fdf-2026-10-17/api/live')).toEqual({ event: 'staging-fdf-2026-10-17', rest: 'live' })
+  expect(parseEventPath('/jdl-2026-10-25/api/heats/151700-h7')).toEqual({ event: 'jdl-2026-10-25', rest: 'heats/151700-h7' })
+  expect(parseEventPath('/Bad_Name/api/push')).toBeNull()
+  expect(parseEventPath('/jdl-2026-10-25/race.json')).toBeNull()
+})
+test('authorized', () => {
+  const r = (h?: string) => new Request('https://x/', { headers: h ? { authorization: h } : {} })
+  expect(authorized(r('Bearer k1'), 'k1')).toBe(true)
+  expect(authorized(r('Bearer k2'), 'k1')).toBe(false)
+  expect(authorized(r(), 'k1')).toBe(false)
+  expect(authorized(r('Bearer '), '')).toBe(false)          // no secret set: nobody gets in
+})
+test('applyToIndex: start, rename, end', () => {
+  let ix: HeatIndex = { event: 'e', title: 'e', live: null, heats: [] }
+  ix = applyToIndex(ix, { k: 'h', t: 1000, id: '151700-h7', heat: '7', cls: 'Expert', cells: { R2: 'A', F1: '' }, order: ['R2', 'F1'] })
+  expect(ix.live).toEqual({ id: '151700-h7', start: 1000, end: null, heat: '7', cls: 'Expert', pilots: ['A', ''] })
+  ix = applyToIndex(ix, { k: 'h', t: 2000, id: '151700-h7', heat: '7', cls: 'Expert', cells: { R2: 'A', F1: 'B' }, order: ['R2', 'F1'] })
+  expect(ix.live!.start).toBe(1000); expect(ix.live!.pilots).toEqual(['A', 'B'])
+  ix = applyToIndex(ix, { k: 'e', t: 9000, id: '151700-h7' })
+  expect(ix.live).toBeNull(); expect(ix.heats[0]).toMatchObject({ id: '151700-h7', end: 9000 })
+  expect(applyToIndex(ix, { k: 'e', t: 9500, id: 'other' })).toEqual(ix)   // the end of an unknown heat is ignored
+})
+test('applyToIndex: a new heat while one is live keeps the old one in the list (review I4)', () => {
+  let ix: HeatIndex = { event: 'e', title: 'e', live: null, heats: [] }
+  ix = applyToIndex(ix, { k: 'h', t: 1000, id: '100000', heat: null, cls: null, cells: {}, order: ['R2'] })
+  ix = applyToIndex(ix, { k: 'h', t: 9000, id: '100500', heat: null, cls: null, cells: {}, order: ['R2'] })
+  expect(ix.live!.id).toBe('100500'); expect(ix.heats.map(h => [h.id, h.end])).toEqual([['100000', 9000]])
+})

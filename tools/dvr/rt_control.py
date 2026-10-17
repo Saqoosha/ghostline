@@ -7,7 +7,9 @@ Beside all that, every NDI source is recorded while any cell of its grid shows a
 usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080, the top view alone at /obs
 env: PORT (8080), PUSH (8765: the tracker's answers, also what viewer/live.html reads), ENG (eng_linux),
      REC, REC_* (rt_rec.py), CONF (~/.ghostline-control.json: the last start, shown again when the page opens), VIEW (~/.ghostline-view.json: the trails' delay and smoothing),
-     PILOTS_URL (unset: no names; the venue heat manager's current_pilots, e.g. http://192.168.3.20:8001/current_pilots at FDF)
+     PILOTS_URL (unset: no names; the venue heat manager's current_pilots, e.g. http://192.168.3.20:8001/current_pilots at FDF),
+     RELAY_BASE, RELAY_EVENT (both set and ~/.config/ghostline/key there: the answers go out to the audience pages,
+     RELAY_BASE/RELAY_EVENT/, through rt_relay.py; it reads PUSH whether or not a tracker runs, and keeps heats in live/relay/)
 routes beside the page: /api/state, /rec (recordings), /obs (top view for OBS), /view/ (the 3D live page, viewer/live.html built with VITE_BASE=/view/,
      and its data folders in view/), /api/pilots (the pilot per cell, from the heat manager)
 No login: whoever reaches the port can start and stop the tracker. Keep it on the venue LAN / Tailscale."""
@@ -133,6 +135,17 @@ def pilots():
             if str(e) != _pilots[2]: print(f"pilots: {PILOTS_URL}: {e}", flush=True); _pilots[2] = str(e)
             if _pilots[1]: _pilots[1] = dict(_pilots[1], stale=True)
     return _pilots[1]
+
+def cell_order():                                   # the cells' names in grid order (tl, tr, bl, br): the audience pages colour by place
+    conf = S["config"] or json.load(open(CONF))
+    by = {x.get("cell"): cell_name(x) for x in conf.get("cells", []) if isinstance(x, dict)}
+    return [by.get(c, c) for c in CELLS]
+
+relay = None
+if E("RELAY_BASE") and E("RELAY_EVENT"):
+    from rt_relay import Relay, read_key
+    try: relay = Relay(f"http://127.0.0.1:{PUSH}/", E("RELAY_BASE"), E("RELAY_EVENT"), read_key(), pilots=lambda: pilots(), out_dir=HERE + "/live/relay", order=cell_order).start_threads()
+    except OSError as e: print("relay off: no key:", e, flush=True)
 
 def options():
     if time.time() - _opt[0] < 2 and _opt[1]: return _opt[1]   # every open page asks once a second: the globs and the finder are read at most every 2 s
@@ -308,7 +321,7 @@ def state():
             try: conf = json.load(open(CONF))
             except Exception: conf = None
         return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], lat=latency(now) if S["phase"] != "stopped" else None, ndi=S["ndi"], input=S["input"],
-                    config=conf, view=view(), cells=cells, rec=recorders.recording(), log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
+                    config=conf, view=view(), cells=cells, rec=recorders.recording(), relay=relay and relay.status(), log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
                     hist=dict(n=HIST, w=[h["w"] for h in hist], temp=[h["temp"] for h in hist], lat=[h["lat"] for h in hist],
                               cells={c: [h["cells"].get(c) for h in hist] for c in CELLS}))
 
