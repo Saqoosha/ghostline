@@ -35,13 +35,15 @@ for k in kept:
     dep, al = o[0, ..., 3].cpu().numpy(), a[0, ..., 0].cpu().numpy()
     uv = k["kp"]; ix = np.clip(np.round(uv).astype(int), 0, [RW - 1, RH - 1]); d = dep[ix[:, 1], ix[:, 0]]
     ok = (al[ix[:, 1], ix[:, 0]] > 0.9) & (d > 0.3) & (d < 200); uv, d, desc = uv[ok][:TOPK], d[ok][:TOPK], k["desc"][ok][:TOPK]
+    if len(uv) < 30: continue                        # looking past the scan: nothing to lift, and the tracker would match it for nothing
     xc = np.c_[(uv[:, 0] - K[0, 2]) / K[0, 0], (uv[:, 1] - K[1, 2]) / K[1, 1], np.ones(len(uv))] * d[:, None]
     X = (np.linalg.inv(w2c(k["quat"], k["pos"])) @ np.c_[xc, np.ones(len(xc))].T).T[:, :3]
     n = len(uv); pad = TOPK - n; NK.append(n); Q.append(k["quat"]); PS.append(k["pos"]); GD.append(k["g"])
     KP.append(np.pad(uv, ((0, pad), (0, 0)))); DS.append(np.pad(desc, ((0, pad), (0, 0)))); X3.append(np.pad(X, ((0, pad), (0, 0))))
-if not kept: sys.exit("no frame to add")
+if not NK: sys.exit("no frame to add")
 cat = lambda a, b, t: np.concatenate([a, np.array(b, t)])
-np.savez(out, pos=cat(m["pos"], PS, np.float32), quat=cat(m["quat"], Q, np.float32), K=K, size=m["size"], n=cat(m["n"], NK, m["n"].dtype),
+with open(out + ".part", "wb") as fh: np.savez(fh, pos=cat(m["pos"], PS, np.float32), quat=cat(m["quat"], Q, np.float32), K=K, size=m["size"], n=cat(m["n"], NK, m["n"].dtype),
          kp=cat(m["kp"], KP, np.float32), desc=cat(m["desc"], DS, np.float16), X=cat(m["X"], X3, np.float32), g=cat(m["g"], GD, np.float32),
-         real=np.concatenate([m["real"], np.ones(len(kept), np.uint8)]))
-print(f"GROW-DONE {len(m['pos'])} + {len(kept)} real keyframes, median {int(np.median(NK))} points with depth, {time.time() - t0:.0f} s", flush=True)
+         real=np.concatenate([m["real"], np.ones(len(NK), np.uint8)]))
+os.replace(out + ".part", out)                      # whole or not at all: a killed run leaves no map behind
+print(f"GROW-DONE {len(m['pos'])} + {len(NK)} real keyframes, median {int(np.median(NK))} points with depth, {time.time() - t0:.0f} s", flush=True)

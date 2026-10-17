@@ -1,7 +1,8 @@
 #!/bin/bash
 # rt4090: replay a day's recordings (rt_rec.py's 2x2 grids) through the live tracker, one recording per run, at real time
-# over SRT on this box (as rt_camsweep.sh), with the live settings (rt_control.py's start: 4 cells, lens auto, RENDER=1, BA).
-# One run per recording: a crash (gsplat's SIGFPE) loses one recording's answers, and the log says which and where.
+# over SRT on this box (as rt_camsweep.sh), with the field day's live settings (4 cells, lens auto, RENDER=1, BA; no RKF / KFOUT unless set). MAXFPS does not
+# thin SRT: the recordings' 60 fps all arrive, numbered at 60.
+# One run per recording: a crash (such as gsplat's SIGFPE, since fixed) loses one recording's answers, and the log says which and where.
 #   rt_replay_day.sh <out dir> <map.npz> <scene.ply> <recording.mp4> ...     env PORT (9000): the SRT port, to run two at once
 #   env PUSH: the answers as a live feed on that port (8765 is what the control page's 3D view /view/ reads; the audience
 #   viewer's rehearsal runs PUSH=8766 PORT=9100). Any other rt_track.py env passes through (RKF=1 with a grown map)

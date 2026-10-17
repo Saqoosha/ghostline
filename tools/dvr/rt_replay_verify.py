@@ -31,7 +31,7 @@ def cellimg(fr, cell, r):                             # the cell's picture throu
     img = cv2.cvtColor(cv2.remap(fr, mx + x0, my + y0, cv2.INTER_LINEAR), cv2.COLOR_BGR2RGB)
     kp0, d0, sc = xf(torch.from_numpy(img).to(dev).permute(2, 0, 1)[None].float() / 255); ix = kp0.long()
     return kp0, d0, (sc > 0) & qv[ix[..., 1], ix[..., 0]]
-def check(fr, cell, r, v=None):                      # -> matches, matches the pose explains (< 4 px), their median reprojection error
+def check(fr, cell, r, v=None):                      # -> matches, matches the pose explains (< 4 px), median reprojection error of all matches in front
     kp0, d0, ok = cellimg(fr, cell, r); R, c = Rot.from_quat(r["quat"]), np.array(r["pos"]); v = v or scene.views([(R, c)], [K])[0]
     m0 = glue(kp0 * ok[..., None], d0 * ok[..., None], v["kp"][None], v["desc"][None].float())[0][0].cpu().numpy()
     q = np.nonzero((m0 >= 0) & ok[0].cpu().numpy())[0]; j = m0[q]; keep = j < v["n"]; q, j = q[keep], j[keep]
@@ -46,7 +46,7 @@ def frames_at(want):                                 # {recording frame: picture
         if n == w: out[n] = fr; w = next(it, None)
         n += 1
     return out
-# rt_track.py's frame i counts from the first frame its decoder got over SRT, which is not the recording's first (161601: ~118
+# rt_track.py's frame i counts from the first frame its decoder got over SRT, which is not the recording's first (the FDF late heats: 120
 # frames late, the start of the stream lost). Per run: the shift that lets its strongest answers explain the most matches.
 SHIFT = range(*[int(v) for v in os.environ.get("SHIFT", "-20:400").split(":")])   # the shifts tried (161601 and the late heats: 120)
 def offset(d):

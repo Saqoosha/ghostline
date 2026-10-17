@@ -26,7 +26,8 @@ lock = threading.Lock(); gpu = {}
 HIST = 300; hist = collections.deque(maxlen=HIST)   # one sample a second, for the page's sparklines: it shows the last 5 minutes whenever it is opened
 KF_DIR, MAP_PTR = "live/kf", "live/map.txt"         # the frames the tracker keeps, and the file that names the map it should use (MAPWATCH)
 GROW_WINDOW, GROW_QUIET = int(E("GROW_WINDOW", 1800)), int(E("GROW_QUIET", 30))   # s: only the heats just before (older light hurt); a heat is over after this long without a picture
-G = dict(phase="idle", last=None, error=None, heat=False, quiet=None)   # growing the map between heats
+GROW_KF = int(E("GROW_KF", 300))                    # s: a place gets a fresh frame once its last is this old; the grow keeps the newest per place
+G = dict(phase="idle", last=None, error=None, heat=False, quiet=None, using=None)   # growing the map between heats; using: the map the tracker says it swapped to
 S = dict(phase="stopped", proc=None, since=None, exit=None, ndi=None, input=None, config=None, cells={}, log=collections.deque(maxlen=400))
 
 try:                                                # the same finder rt_track.py uses; it keeps its list fresh on a thread
@@ -197,7 +198,7 @@ def start(c):
         if os.path.exists(f"{HERE}/{ENG}/{f}"): env[k] = f"{ENG}/{f}"
     if c.get("render"):
         if c.get("scene") not in o["scenes"]: raise ValueError("描いて照合するにはシーン（.ply）が要る")
-        env.update(RENDER="1", RCLIP="2", SCENE=c["scene"], RKF="1", KFOUT=KF_DIR, KF_WINDOW=str(GROW_WINDOW), MAPWATCH=MAP_PTR)
+        env.update(RENDER="1", RCLIP="2", SCENE=c["scene"], RKF="1", KFOUT=KF_DIR, KF_WINDOW=str(GROW_KF), MAPWATCH=MAP_PTR)
     if c.get("ba"): env.update(BA="0.5", BA_ACC="30", BA_ALPHA="60")   # the outdoor setting, docs/realtime-tracking.ja.md
     for kv in str(c.get("extra", "")).split():
         k, _, v = kv.partition("=")
@@ -206,7 +207,11 @@ def start(c):
     with lock:
         if S["phase"] != "stopped": raise ValueError("もう動いている")
         os.makedirs(HERE + "/live", exist_ok=True); point(c["map"])   # each start begins on the scan alone; the next heat grows it again
-        G.update(last=None, error=None, heat=False, quiet=None)
+        made = f"{c['map']}|{c.get('scene')}"; tag = f"{HERE}/{KF_DIR}/made-with"   # frames posed on another map are in another world frame
+        if os.path.isdir(f"{HERE}/{KF_DIR}") and (not os.path.exists(tag) or open(tag).read() != made):
+            for f in glob.glob(f"{HERE}/{KF_DIR}/*.npz"): os.remove(f)
+        os.makedirs(f"{HERE}/{KF_DIR}", exist_ok=True); open(tag, "w").write(made)
+        G.update(last=None, error=None, heat=False, quiet=None, using=None)
         p = subprocess.Popen([sys.executable, "-u", "rt_track.py", *specs], cwd=HERE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         S.update(phase="loading", proc=p, since=time.time(), exit=None, ndi=None, config=c, input=f"{w}×{h} · {fps:g} fps" + (f" → {cap:g}" if cap < fps else ""),
                  cells={n: dict(cell=x["cell"], signal=None, lens=None, rows=collections.deque(maxlen=600), last=None, trail=collections.deque(maxlen=150)) for x, n in zip(on, names)})
@@ -226,12 +231,12 @@ def grow(reason):
         if not c.get("render"): raise ValueError("地図を育てるには「描いて照合」が要る")
         if G["phase"] == "growing": raise ValueError("いま育てている")
         G.update(phase="growing", error=None)
-    threading.Thread(target=run_grow, args=(c, reason), daemon=True).start()
+    threading.Thread(target=run_grow, args=(c, reason, S["since"]), daemon=True).start()
 
-def run_grow(c, reason):
+def run_grow(c, reason, run):                       # run: the start it belongs to; a grow that outlives its tracker is thrown away
     out, t0 = time.strftime("live/map-grow-%Y%m%d-%H%M%S.npz"), time.time()
     try:
-        for f in glob.glob(f"{HERE}/{KF_DIR}/*.npz"):   # ~280 KB each, thousands a day; past the window they are never used again
+        for f in glob.glob(f"{HERE}/{KF_DIR}/*.npz"):   # ~280 KB each, thousands a day; never used past the window (2x: a margin)
             if t0 - os.path.getmtime(f) > 2 * GROW_WINDOW: os.remove(f)
         r = subprocess.run([sys.executable, "-u", "rt_map_grow.py", c["map"], c["scene"], out, KF_DIR], cwd=HERE, capture_output=True, text=True, timeout=600,
                            env=dict(os.environ, SINCE=str(GROW_WINDOW), PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}"))
@@ -239,9 +244,11 @@ def run_grow(c, reason):
         if not m:
             tail = (r.stdout + r.stderr).strip().splitlines()
             raise RuntimeError("直前のフレームが無い" if "no frame to add" in r.stdout + r.stderr else (tail[-1][:200] if tail else f"終了コード {r.returncode}"))
-        point(out)
+        with lock:
+            if S["since"] != run or S["phase"] == "stopped": G.update(phase="idle"); return
+            point(out)
         for f in sorted(glob.glob(f"{HERE}/live/map-grow-*.npz"), key=os.path.getmtime)[:-2]: os.remove(f)   # the one in use and the one before
-        with lock: G.update(phase="idle", last=dict(t=time.time(), n=int(m[1]), reason=reason, s=round(time.time() - t0)))
+        with lock: G.update(phase="idle", last=dict(t=time.time(), n=int(m[1]), reason=reason, s=round(time.time() - t0), map=out))
         note(f"(地図を育てた：直前 {GROW_WINDOW // 60} 分の実フレーム {m[1]} 枚、{reason}、{time.time() - t0:.0f} 秒)")
     except Exception as e:
         with lock: G.update(phase="idle", error=str(e)[:200])
@@ -257,6 +264,7 @@ def reset_map():
 
 def between_heats():                                # a heat is over when every cell has been without a picture for GROW_QUIET s
     while True:
+      try:
         time.sleep(1); now = time.time(); go = False
         with lock:
             if S["phase"] == "running" and S["config"] and S["config"].get("render"):
@@ -267,6 +275,7 @@ def between_heats():                                # a heat is over when every 
         if go:
             try: grow("ヒートの後に自動")
             except ValueError: pass
+      except Exception as e: note(f"(ヒートの区切りの見張りで例外：{e})")   # keep watching: the next heat still grows
 
 def view():
     try: v = json.load(open(VIEW))
@@ -307,6 +316,9 @@ def note(line):
                 if m[1] in S["cells"]: S["cells"][m[1]]["lens"] = m[2]
             elif m := re.search(r": receiving (.+)$", line): S["ndi"] = m[1]
             elif line == "listening" and S["phase"] == "loading": S["phase"] = "running"
+            elif m := re.match(r"map (\S+): (\d+ keyframes|.+)", line):   # the tracker's word on a swap: done, or why not
+                if m[2].endswith("keyframes"): G["using"] = m[1]
+                else: G["error"] = f"tracker が地図を読めなかった：{m[2][:150]}"
 
 def answers(p):                                     # the PUSH stream: one row per processed frame, "pos" when it was solved
     while p.poll() is None:
@@ -369,7 +381,7 @@ def state():
             try: conf = json.load(open(CONF))
             except Exception: conf = None
         return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], lat=latency(now) if S["phase"] != "stopped" else None, ndi=S["ndi"], input=S["input"],
-                    config=conf, view=view(), grow=dict(phase=G["phase"], error=G["error"], last=G["last"] and dict(G["last"], age=round(now - G["last"]["t"]))), cells=cells, rec=recorders.recording(), log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
+                    config=conf, view=view(), grow=dict(phase=G["phase"], error=G["error"], last=G["last"] and dict(G["last"], age=round(now - G["last"]["t"]), swapped=G["using"] == G["last"]["map"])), cells=cells, rec=recorders.recording(), log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
                     hist=dict(n=HIST, w=[h["w"] for h in hist], temp=[h["temp"] for h in hist], lat=[h["lat"] for h in hist],
                               cells={c: [h["cells"].get(c) for h in hist] for c in CELLS}))
 

@@ -30,7 +30,8 @@ env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s w
      GLUE / XFEAT (unset; TensorRT engines from rt_trt.py to match / find features with instead of PyTorch),
      PNP (poselib; magsac = OpenCV's USAC_MAGSAC, below),
      RENDER (0; 1 = while tracking, match a render of SCENE (.ply) at the prediction instead of keyframes, rt_render.py), RNEAR (1.0 m near plane),
-     RFALL (1: also match keyframes right after a failed try); RCLIP / ROPA / RBATCH / REDGE: see rt_render.py"""
+     RFALL (1: also match keyframes right after a failed try); RCLIP / ROPA / RBATCH / REDGE: see rt_render.py,
+     KFOUT / KF_MIN / KF_STEP / KF_ROT / KF_WINDOW / RKF / MAPWATCH (the day's frames grown into the map between heats, below)"""
 import os
 # One BLAS thread. numpy's matrices here are small (the BA's system is about 150 x 150), and OpenBLAS otherwise starts a
 # thread per core for them: on a 32-core machine that took the tracker from 54 to 33 Hz with BA on, the solve itself 0.2 ms.
@@ -69,7 +70,7 @@ NEAR, NEAR_K, NEAR_ANG = int(E("NEAR", 0)), int(E("NEAR_K", 4)), E("NEAR_ANG", 1
 # writes the frames it tracked well (how "track", KF_MIN inliers or more; one per KF_STEP m / KF_ROT deg per cell) - the
 # matcher's own keypoints and descriptors, the pose, the global descriptor - for rt_map_grow.py, which lifts them to 3D with
 # the scan's depth and appends them to a map as real keyframes. RKF=1 (with RENDER) then also matches the nearest real
-# keyframe while tracking, so every frame meets a picture taken in the same light as well as the render. Only frames from the
+# keyframe (within 4 m / 30 deg) while tracking, so such a frame meets a picture taken in the same light as well as the render. Only frames from the
 # heats just before help: 14-15h frames made the 16:44 heats worse, 16:30s frames made them better. KF_WINDOW (s): a place
 # gets a new frame once its last one is older than this (0 = never). MAPWATCH=<file>: the file names the map to use; when
 # what it names changes the map is loaded on a thread and swapped in between cycles (rt_control.py grows one between heats)
@@ -521,6 +522,7 @@ def solve(c, b):                                    # CPU: PnP for one stream ->
         if r and (best is None or r[2] > best[0][2]): best = (r, uv, X)
     return (best[0], "reloc", time.perf_counter(), carry(s, i, best[1], best[2], best[0], 0)) if best and best[0][2] >= RMIN else (None, None, time.perf_counter(), "drop")
 def land(c, out, t0, clock0):                       # apply the answers to the streams and record them
+    global KFOUT
     for b, ((s, i), (r, how, tf, fs)) in enumerate(zip(c["batch"], out)):
         done = (tf - s.t_base) if s.live else clock0 + (tf - t0)   # live: on the cell's own time line
         s.flow = None if fs == "drop" else fs if fs is not None else s.flow
@@ -536,7 +538,9 @@ def land(c, out, t0, clock0):                       # apply the answers to the s
             if len(s.win) >= 3:
                 qs, ps = smooth(s.win); win = {"win": [[w[1], *p_, *q_] for w, p_, q_ in zip(s.win, np.round(ps, 4).tolist(), np.round(qs, 5).tolist())]}
         s.recs.append(dict(i=i, done=done, plan=c["plan"][b][0], **lat, **win, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how, **({"H": [float(f"{v:.6g}") for v in r[4][np.triu_indices(6)]]} if INFO and r[4] is not None else {})) if r else {"how": "none"})))
-        if KFOUT and r is not None and how == "track" and r[2] >= KF_MIN and c["q"][b] is not None: keep_kf(s, i, r, c["q"][b], c["x"][c["row"][b]])
+        if KFOUT and r is not None and how == "track" and r[2] >= KF_MIN and c["q"][b] is not None:
+            try: keep_kf(s, i, r, c["q"][b], c["x"][c["row"][b]])
+            except Exception as e: KFOUT = None; print(f"KFOUT off: {type(e).__name__}: {e}", flush=True)   # a side output must not end the run
         if s.live and len(s.lenses) > 1: s.recs[-1]["lens"] = s.li; s.lens_step(int(r[2]) if r is not None else 0)
         if subs:
             m = json.dumps(dict(stream=os.path.basename(s.prefix), fps=s.fps, **s.recs[-1]))
@@ -550,8 +554,10 @@ def keep_kf(s, i, r, q, img):                       # KFOUT: one tracked frame a
     s.kfs.append((r[1], f, now)); kp, d = (q[0][q[2]], q[1][q[2]]) if len(q) == 3 else q
     with torch.no_grad(): g = torch.nn.functional.normalize(dino((torch.nn.functional.interpolate(img[None], (168, 224), mode="area") - MEAN) / STD), dim=1)[0]
     os.makedirs(KFOUT, exist_ok=True)
-    np.savez(f"{KFOUT}/{os.path.basename(s.prefix)}-{now * 1000:.0f}-{i:07d}.npz", kp=kp.float().cpu().numpy(), desc=d.half().cpu().numpy(), quat=r[0].as_quat(), pos=r[1],
+    out = f"{KFOUT}/{os.path.basename(s.prefix)}-{now * 1000:.0f}-{i:07d}.npz"
+    with open(out + ".part", "wb") as fh: np.savez(fh, kp=kp.float().cpu().numpy(), desc=d.half().cpu().numpy(), quat=r[0].as_quat(), pos=r[1],
              g=g.float().cpu().numpy(), K=s.K, inl=int(r[2]), lens=getattr(s, "li", 0))
+    os.replace(out + ".part", out)                  # whole: rt_map_grow.py may read the folder mid-heat
 REAL = any(s.live for s in streams)
 # PACE=1 (recorded video): wait on the wall clock for the next frame instead of jumping to it, so the GPU idles between
 # frames as it does on a live feed. Without it a recording runs back to back - right for timings, wrong for power.
@@ -595,7 +601,7 @@ def loop():
   while True:
       t0, clock0 = time.perf_counter(), clock
       if swap:                                        # between cycles: the matches in flight already hold their points, not map indices
-          path, m = swap.pop()
+          path, m = swap[-1]; swap.clear()            # only the newest: an older one left behind would swap back
           for s in streams: s.m, s.map_npz = m, path
           print(f"map {path}: {len(m['pos'])} keyframes, {int(m['real'].sum())} real", flush=True)
       futs = [pool.submit(solve, pending, b) for b in range(len(pending["batch"]))] if pending else None

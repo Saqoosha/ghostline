@@ -12,7 +12,7 @@ def load(d):
     return out
 A, B = load(sys.argv[1]), load(sys.argv[2]); na, nb = (os.path.basename(d.rstrip("/")) for d in sys.argv[1:3])
 line = np.array(json.load(open(sys.argv[3]))["track"], float)
-seg = np.linspace(0, 1, 20)[:, None, None]; dense = (line[:-1] * (1 - seg) + line[1:] * seg).reshape(-1, 3)   # ~0.01 m apart
+seg = np.linspace(0, 1, 20)[:, None, None]; dense = (line[:-1] * (1 - seg) + line[1:] * seg).reshape(-1, 3)   # 19 steps between line points
 def to_line(P):
     P = np.asarray(P).reshape(-1, 3)
     return np.concatenate([np.sqrt(((c[:, None] - dense[None]) ** 2).sum(-1)).min(1) for c in np.array_split(P, max(1, len(P) // 2000))]) if len(P) else np.zeros(0)
@@ -23,7 +23,7 @@ def jumps(ans, keep):
         prev = next((ans[j] for j in (i - 1, i - 2, i - 3) if j in ans), None)
         if prev is None: continue
         j = next(j for j in (i - 1, i - 2, i - 3) if j in ans); n += 1
-        bad += np.linalg.norm(ans[i] - prev) / ((i - j) / 60) > 40
+        bad += np.linalg.norm(ans[i] - prev) / ((i - j) / 60) > 40   # frame numbers count the recording's 60 fps
     return bad, n
 def pct(x, q): return float(np.percentile(x, q)) if len(x) else float("nan")
 def report(name, ans_by_key, keys_by_key):

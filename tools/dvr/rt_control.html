@@ -159,7 +159,7 @@
     <button id="go"><span id="go-l">開始</span></button>
   </div>
   <div id="err"></div>
-  <div class="grow" title="ヒートが終わる（全マスの映像が 30 秒消える）と、直前 30 分に追えたフレームを地図に足す。tracker は止まらない。描いて照合（RENDER）のときだけ">
+  <div class="grow" title="ヒートが終わる（既定：全マスの映像が 30 秒消える）と、直前 30 分（既定）に追えたフレームを地図に足す。tracker は止まらない。描いて照合（RENDER）のときだけ">
     <span>地図 <b id="grow-s">–</b></span><button id="grow-go">今すぐ育てる</button><button id="grow-reset">スキャンだけに戻す</button></div>
 
   <div class="top"><svg id="top" preserveAspectRatio="xMidYMid meet"><image id="aerial" preserveAspectRatio="none"/><path id="course"/><path id="track"/><path id="gate"/><g id="trails"></g></svg>
@@ -280,7 +280,7 @@ function render(s) {
   $("gp").textContent = "GPU の温度" + (s.gpu.pstate ? ` · ${s.gpu.pstate === "P8" ? "待機" : "動作中"}` : "");   // P8 is the idle state, P0-P2 working
   num("cyc", s.lat != null ? s.lat.toFixed(0) : "–");
   const g = s.grow || {}, can = s.phase === "running" && !!(s.config && s.config.render);
-  $("grow-s").textContent = !can ? "–" : g.phase === "growing" ? "育てている…" : g.last ? `実フレーム ${g.last.n} 枚を足した（${Math.round(g.last.age / 60)} 分前、${g.last.reason}）` : "スキャンだけ";
+  $("grow-s").textContent = !can ? "–" : g.phase === "growing" ? "育てている…" : g.last ? `実フレーム ${g.last.n} 枚を足した（${Math.round(g.last.age / 60)} 分前、${g.last.reason}）${g.last.swapped ? "" : " · tracker の差し替え待ち"}` : "スキャンだけ";
   $("grow-s").className = g.error && can && g.phase !== "growing" ? "bad" : ""; if (g.error && can && g.phase !== "growing") $("grow-s").textContent += ` · ${g.error}`;
   $("grow-go").disabled = $("grow-reset").disabled = !can || g.phase === "growing";
   $("rec").classList.toggle("on", s.rec > 0); $("rec").textContent = s.rec > 0 ? `録画中 ${s.rec}` : "録画";
