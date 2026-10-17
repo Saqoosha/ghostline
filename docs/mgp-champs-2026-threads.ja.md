@@ -1,0 +1,39 @@
+# MGP Champs 2026：並行している作業（2026-10-17 時点）
+
+同時に走っている作業と、次の一手の控え。終わったものは消す。仕組みと罠の正本は [mgp-champs-2026.ja.md](mgp-champs-2026.ja.md)。
+
+## 1. 予選の全 Round の処理と公開
+
+- Studio：`round_queue_studio.sh` が `~/mgp/rounds/queue.txt` を上から処理（ログ `queue.out`、Round ごとに `q<N>.loc.log`）。
+  今日の分（138〜178）は済み、1 日目（1〜120 のうち録画のある分）を処理中。1 Round 5〜15 分
+- Mac：`round_loop.sh`（`build/mgp/round_loop.log`）が仕上げと公開。**この Mac がスリープすると止まる**
+  （待ちの sleep が進まない）。`caffeinate -i -w <loop の PID>` で防ぐ。フタを閉じると効かない
+- 公開先 https://ghostline.saqoo.sh/mgp-champs-2026/
+- 失敗のまま：Round 173〜178（夕方の光で位置合わせが各マス 0〜30%）。直すなら夕方のレースを地図につなぎ足す（Saqoosha の判断待ち）
+- 一覧の名前が「Bracket · Race N」から「Qualifying · Race N · Qualifying」に変わった。`round_loop.sh` は両方を受けるよう
+  直したが、**動いているループは古い版のまま**（次に止めたときに入れ替える）
+- Round 178 の 20:30 の録画（名前は 178）は別物。本物は 18:29（LiveFPV の終了 17:32 ＋ 録画の時計の 1 時間）
+
+## 2. 最後の 5 ゲート：フライスルーを錨で地図へ
+
+- 公式フライスルー（youtu.be/XvGI1JULiOQ）。単独では地図に乗らない（夕方・色加工・同じ印刷のゲート）
+- 錨のページ http://studio:8765/（`tools/mgp/anchor_server.py`＋`anchor.html`、保存 `~/mgp/fly15/anchor/anchors.json`）。
+  使える錨：8 px 以内 6 組以上・隅 3 つ以上・ぶれ 0.5 m 以内。カメラは錨から較正（`camera.json`、焦点距離 約 460）
+- 登録：`tools/mgp/anchor_register.py` を Studio で実行中（`~/mgp/fly15/areg.log`、出力 `~/mgp/fly15/areg/reg`）
+- 次：登録できたフレームのつながり（速さ）を確かめる → 地図＋フライスルーで Spirula（Studio、`~/tools/spirula/spirula`）で 3DGS
+  → `to_metric.py` → `ply_to_web.py` → `.sog` を差し替え
+- 錨の数値と場所の正しさは別物：同じ印刷のゲートなら数値は良くても場所が違う（50 s の 1 回目）。場所は人の目で決める
+
+## 3. 本戦のページ（ライブの音つき）
+
+- 録画：10/16 夜の 13 本（Winner Bracket / Redemption / Final、**4 分割**）は Studio の `raw/` にある。
+  10/17 の分は `watch_new.sh 2026-10-17` が拾う（`watch_new_1017.out`）
+- 録画は無音（−91 dB）。音は YouTube のライブから取る：A Main `_LDYBkr9M0M`、B `GKc9jo6_rYM`、C `ow1dZGNZYng`、D `GbT8_wnBErs`
+  （10/17 時点で配信前）。合わせ方は時計（録画のファイル名の時刻とライブの開始時刻）＋スタートの合図
+- やること：4 分割の切り出し（`extract.py`）、本戦の LiveFPV のイベント、名前付け、ページの束ね方、音
+
+## 4. 済み（この日）
+
+- DVR の列の幅を窓の 25% までに
+- 名前付け：2 組入った録画、つながった周、1 周だけの曖昧な一致、古いファイルの消し忘れ
+- 空のマスでポーズの変換が止まる問題

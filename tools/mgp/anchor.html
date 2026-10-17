@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Footage anchors</title>
+<style>
+  :root { --paper: #f3f4f6; --ink: #0c0f14; --dim: rgba(12,15,20,.58); --line: rgba(12,15,20,.16); --hot: #ff2e63; --ok: #12b76a; --pick: #2f6bff;
+          --sans: "Helvetica Neue", -apple-system, "Segoe UI", Roboto, sans-serif; --mono: ui-monospace, "SF Mono", Menlo, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 400 13px/1.45 var(--sans); }
+  header { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header b { font-weight: 600; letter-spacing: .04em; }
+  #keys { display: flex; gap: 4px; flex-wrap: wrap; }
+  #keys button, .btn { font: 500 12px var(--mono); padding: 3px 8px; border: 1px solid var(--line); background: #fff; color: var(--ink); cursor: pointer; border-radius: 3px; }
+  #keys button.cur { border-color: var(--ink); background: var(--ink); color: #fff; }
+  #keys button.done { box-shadow: inset 0 -3px 0 var(--ok); }
+  #keys button.bad { box-shadow: inset 0 -3px 0 var(--hot); }
+  input[type=range] { width: 260px; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 12px; }
+  .pane { position: relative; background: #fff; border: 1px solid var(--line); }
+  .pane h2 { margin: 0; padding: 5px 8px; font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 8px; }
+  canvas { display: block; width: 100%; height: auto; cursor: crosshair; }
+  #bottom { display: grid; grid-template-columns: 420px 1fr; gap: 8px; padding: 0 12px 12px; }
+  #thumbs { display: flex; flex-wrap: wrap; gap: 4px; align-content: flex-start; padding: 6px; }
+  #thumbs figure { margin: 0; cursor: pointer; border: 2px solid transparent; }
+  #thumbs figure.cur { border-color: var(--pick); }
+  #thumbs img { display: block; width: 160px; height: 120px; object-fit: cover; }
+  #thumbs figcaption { font: 10px var(--mono); color: var(--dim); padding: 1px 3px; max-width: 160px; overflow: hidden; white-space: nowrap; }
+  #pairs { font: 12px var(--mono); padding: 6px 8px; }
+  #pairs span { display: inline-block; margin: 0 8px 4px 0; padding: 1px 6px; border: 1px solid var(--line); border-radius: 3px; background: #fff; }
+  #pairs span i { cursor: pointer; color: var(--hot); font-style: normal; margin-left: 4px; }
+  #result { font: 12px var(--mono); padding: 6px 8px; }
+  #result.ok { color: var(--ok); } #result.bad { color: var(--hot); }
+  .help { color: var(--dim); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <b>Footage anchors</b>
+  <div id="keys"></div>
+  <label class="help">any frame <input id="any" type="range" min="1" max="1310" step="1"> <span id="anyn"></span></label>
+  <span class="help">1. pick the map image of the same place · 2. click a blue dot on it · 3. click the same spot on the footage · 8–10 pairs: all four corners, near and far, points touching the ground · big dark dots: map points seen from many flights · goal: wobble ≤ 0.5 m · Z undoes</span>
+</header>
+<main>
+  <div class="pane"><h2><span>footage <span id="flyname"></span></span><span><span id="pickhint"></span> <label><input type="checkbox" id="back" checked> map points drawn back</label></span></h2><canvas id="fly"></canvas></div>
+  <div class="pane"><h2><span>map image <span id="mapname"></span></span><span id="ndots"></span></h2><canvas id="map"></canvas></div>
+</main>
+<div id="bottom">
+  <div class="pane"><h2><span>course from above · click to list images taken near</span></h2><canvas id="top" width="840" height="840"></canvas></div>
+  <div class="pane">
+    <h2><span>pairs</span><span><button class="btn" id="clear">clear</button></span></h2>
+    <div id="pairs"></div>
+    <div id="result"></div>
+    <h2><span>map images · suggested, or near the spot you clicked above</span></h2>
+    <div id="thumbs"></div>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id)
+let D, cur = null, flyImg = new Image(), mapImg = new Image(), mapPts = [], mapName = null, sel = null, pairs = [], last = null, near = null
+const name5 = k => 'f' + String(k).padStart(5, '0') + '.jpg'
+fetch('data.json').then(r => r.json()).then(d => { D = d; $('any').max = d.nfly; keys(); go(d.frames[0].fly); drawTop() })
+
+// frame n is f0000n.jpg, cut at 15 fps from the video's start: time (n - 1) / 15 s
+const fnum = fly => parseInt(fly.slice(1))
+const label = fly => `frame ${fnum(fly)} · ${((fnum(fly) - 1) / 15).toFixed(1)} s`
+function keys() {
+  $('keys').innerHTML = ''
+  const all = [...new Set([...D.frames.map(f => f.fly), ...Object.keys(D.saved), ...(cur ? [cur] : [])])].sort()   // the suggested frames, every saved one, and the open one
+  for (const fly of all) {
+    const b = document.createElement('button'); b.textContent = `${fnum(fly)} · ${((fnum(fly) - 1) / 15).toFixed(1)}s`; b.title = fly
+    const s = D.saved[fly], v = s && s.solve
+    if (s) b.className = usable(v) ? 'done' : 'bad'
+    if (cur === fly) b.classList.add('cur')
+    b.onclick = () => go(fly); $('keys').append(b)
+  }
+}
+// an anchor: 6+ pairs agree within 8 px (the solve leaves the others out), the pose barely moves without any one pair,
+// and the pairs reach 3+ quarters of the frame
+const usable = v => !!(v && v.ok && v.err.filter(e => e <= 8).length >= 6 && v.wobble_m !== null && v.wobble_m <= 0.5 && v.quads >= 3)
+function go(fly) {
+  cur = fly; const s = D.saved[fly]; pairs = s ? s.pairs.slice() : []; sel = null; last = s ? s.solve : null
+  $('flyname').textContent = label(fly); $('any').value = parseInt(fly.slice(1)); $('anyn').textContent = label(fly)
+  flyImg = new Image(); flyImg.onload = drawFly; flyImg.src = 'fly/' + fly
+  const f = D.frames.find(x => x.fly === fly); near = null
+  const guess = s ? null : between(parseInt(fly.slice(1)))
+  if (guess) { near = guess; thumbs(nearList(guess[0], guess[1], 8)) }      // the solved frames before and after, split by time
+  else thumbs(f ? f.cands.map(c => [c.map, c.rows + ' matches']) : [])
+  if (s) loadMap(s.map); else if (f && f.cands.length) loadMap(f.cands[0].map); else { mapName = null; mapPts = []; drawMap() }
+  keys(); showPairs(); showResult(); drawTop()
+}
+$('any').oninput = e => go(name5(+e.target.value))
+function thumbs(list) {
+  $('thumbs').innerHTML = ''
+  for (const [m, cap] of list) {
+    const fg = document.createElement('figure'); if (m === mapName) fg.className = 'cur'
+    fg.innerHTML = `<img loading="lazy" src="map/${m}"><figcaption>${m.replace('__', '/')} · ${cap}</figcaption>`
+    fg.onclick = () => { if (pairs.length && m !== mapName && !confirm('Pairs belong to the current map image. Switch and clear them?')) return
+      if (m !== mapName) pairs = []; loadMap(m); showPairs(); [...$('thumbs').children].forEach(x => x.classList.toggle('cur', x === fg)) }
+    $('thumbs').append(fg)
+  }
+}
+function loadMap(m) {
+  mapName = m; $('mapname').textContent = m.replace('__', '/')
+  mapImg = new Image(); mapImg.onload = drawMap; mapImg.src = 'map/' + m
+  fetch('pts/' + m).then(r => r.json()).then(d => { mapPts = d.pts; $('ndots').textContent = `${mapPts.filter(q => q[3] >= 8).length} strong / ${mapPts.length} points`; drawMap() })
+}
+// footage: drawn at its own resolution, pairs numbered
+function drawFly() {
+  const c = $('fly'); c.width = flyImg.naturalWidth || 1280; c.height = flyImg.naturalHeight || 720
+  const g = c.getContext('2d'); g.drawImage(flyImg, 0, 0)
+  if (last && last.ok && $('back').checked) {            // the map image's points drawn back with the solved pose
+    g.fillStyle = 'rgba(0,229,255,.85)'; for (const q of last.all || []) g.fillRect(q[0] - 1.5, q[1] - 1.5, 3, 3)
+    g.strokeStyle = '#00e5ff'; g.lineWidth = 2
+    pairs.forEach((q, i) => { const pr = last.proj && last.proj[i]; if (!pr) return; g.beginPath(); g.moveTo(q[0], q[1]); g.lineTo(pr[0], pr[1]); g.stroke() })
+  }
+  pairs.forEach((q, i) => mark(g, q[0], q[1], i + 1, '#ff2e63', 2))
+}
+const S = 2   // the map image is 480x360: drawn twice its size
+function drawMap() {
+  const c = $('map'); c.width = (mapImg.naturalWidth || 480) * S; c.height = (mapImg.naturalHeight || 360) * S
+  const g = c.getContext('2d'); g.imageSmoothingEnabled = true; if (mapImg.complete && mapName) g.drawImage(mapImg, 0, 0, c.width, c.height)
+  for (const q of mapPts) {                              // strong: seen in 8+ map images, placed well; weak points drawn faint
+    const st = (q[3] || 0) >= 8
+    g.fillStyle = st ? 'rgba(20,70,255,1)' : 'rgba(47,107,255,.35)'; const s = st ? 6 : 3
+    g.fillRect(q[0] * S - s / 2, q[1] * S - s / 2, s, s)
+  }
+  pairs.forEach((q, i) => { const m = mapPts.find(x => x[2] === q[2]); if (m) mark(g, m[0] * S, m[1] * S, i + 1, '#ff2e63', 2) })
+  if (sel) mark(g, sel[0] * S, sel[1] * S, '?', '#f59e0b', 2)
+  $('pickhint').textContent = sel ? 'now click the same spot here' : ''
+}
+function mark(g, x, y, label, col, k) {
+  g.strokeStyle = col; g.lineWidth = k; g.beginPath(); g.arc(x, y, 9, 0, 7); g.stroke()
+  g.beginPath(); g.moveTo(x - 14, y); g.lineTo(x - 5, y); g.moveTo(x + 5, y); g.lineTo(x + 14, y); g.moveTo(x, y - 14); g.lineTo(x, y - 5); g.moveTo(x, y + 5); g.lineTo(x, y + 14); g.stroke()
+  g.font = 'bold 16px ui-monospace, monospace'; g.lineWidth = 4; g.strokeStyle = '#fff'; g.strokeText(label, x + 11, y - 9); g.fillStyle = col; g.fillText(label, x + 11, y - 9)
+}
+const at = (c, e) => { const r = c.getBoundingClientRect(); return [(e.clientX - r.left) * c.width / r.width, (e.clientY - r.top) * c.height / r.height] }
+$('map').onclick = e => {
+  const [x, y] = at($('map'), e); let best = null, bd = 1e9
+  for (const q of mapPts) { const d = Math.hypot(q[0] * S - x, q[1] * S - y); if (d < bd) { bd = d; best = q } }
+  sel = best && bd < 14 ? best : null; drawMap()
+}
+$('fly').onclick = e => {
+  if (!sel) { flash('click a blue dot on the map image first'); return }
+  const [x, y] = at($('fly'), e)
+  pairs = pairs.filter(q => q[2] !== sel[2]); pairs.push([+x.toFixed(1), +y.toFixed(1), sel[2]]); sel = null
+  drawFly(); drawMap(); showPairs(); save()
+}
+$('back').onchange = drawFly
+document.onkeydown = e => { if (e.key === 'z' || e.key === 'Z') { pairs.pop(); drawFly(); drawMap(); showPairs(); save() } }
+$('clear').onclick = () => { pairs = []; drawFly(); drawMap(); showPairs(); save() }
+function showPairs() {
+  $('pairs').innerHTML = pairs.length ? '' : '<span class="help" style="border:0">no pairs yet</span>'
+  pairs.forEach((q, i) => { const s = document.createElement('span'); const m = mapPts.find(x => x[2] === q[2])
+    s.innerHTML = `${i + 1}${m && m[3] >= 8 ? ' ●' : ''} <i>×</i>`; s.title = m ? `map point seen in ${m[3]} images` : ''
+    s.querySelector('i').onclick = () => { pairs.splice(i, 1); drawFly(); drawMap(); showPairs(); save() }; $('pairs').append(s) })
+}
+function save() {
+  fetch('save', { method: 'POST', body: JSON.stringify({ fly: cur, map: mapName, pairs }) }).then(r => r.json()).then(res => {
+    if (pairs.length) D.saved[cur] = { fly: cur, map: mapName, pairs: pairs.slice(), solve: res }; else delete D.saved[cur]
+    last = pairs.length ? res : null; showResult(); keys(); drawTop(); drawFly()
+  })
+}
+function showResult() {
+  const r = $('result'); r.className = ''
+  if (!last) { r.textContent = ''; return }
+  if (!last.ok) { r.className = 'bad'; r.textContent = last.why; return }
+  const bad = last.err.map((e, i) => e > 8 ? (i + 1) : null).filter(Boolean)
+  const w = last.wobble_m, fit = last.err.length - bad.length, good = usable(last)
+  r.className = good ? 'ok' : 'bad'
+  const hint = (good ? ' · usable anchor' : fit < 6 ? ' · need 6+ pairs within 8 px' : w === null ? ' · add pairs (6+ to measure wobble)'
+    : last.quads < 3 ? ' · spread into more corners' : w > 0.5 ? ' · add far objects and screen edges' : '')
+    + (bad.length ? ` · off (left out): pair ${bad.join(', ')}` : '')
+  r.textContent = `pairs ${last.err.length} · agree ${last.inliers} · error px ${last.err.join(' ')} · corners ${last.quads}/4 · wobble ${w === null ? '–' : w + ' m'}` + hint
+}
+function flash(t) { $('result').className = 'bad'; $('result').textContent = t }
+// the course from above: the map's points, its cameras, the anchors solved so far
+let view = null
+function drawTop() {
+  if (!D) return
+  const c = $('top'), g = c.getContext('2d'), W = c.width
+  if (!view) { const xs = D.cloud.map(p => p[0]).sort((a, b) => a - b), ys = D.cloud.map(p => p[1]).sort((a, b) => a - b)
+    const q = (a, f) => a[Math.floor(a.length * f)], cx = (q(xs, .03) + q(xs, .97)) / 2, cy = (q(ys, .03) + q(ys, .97)) / 2
+    const span = Math.max(q(xs, .97) - q(xs, .03), q(ys, .97) - q(ys, .03)) * 1.1; view = { cx, cy, s: W / span } }
+  const P = (x, y) => [W / 2 + (x - view.cx) * view.s, W / 2 - (y - view.cy) * view.s]
+  g.fillStyle = '#fff'; g.fillRect(0, 0, W, W); g.fillStyle = 'rgba(12,15,20,.25)'
+  for (const p of D.cloud) { const [x, y] = P(p[0], p[1]); g.fillRect(x, y, 1, 1) }
+  if (mapName) { const m = D.cams.find(k => k[0] === mapName); if (m) cam(g, P, m, '#2f6bff', 3) }
+  for (const k in D.saved) { const s = D.saved[k].solve; if (s && s.ok) { const [x, y] = P(s.top[0], s.top[1]); g.fillStyle = k === cur ? '#ff2e63' : '#12b76a'; g.beginPath(); g.arc(x, y, k === cur ? 6 : 4, 0, 7); g.fill() } }
+  if (near) { g.strokeStyle = '#f59e0b'; g.lineWidth = 2; const [x, y] = P(near[0], near[1]); g.beginPath(); g.arc(x, y, 6 * view.s, 0, 7); g.stroke() }
+}
+function cam(g, P, m, col, w) { const [x, y] = P(m[1], m[2]); g.strokeStyle = col; g.lineWidth = w; g.beginPath(); g.moveTo(x, y); g.lineTo(x + 18 * Math.cos(m[3]), y - 18 * Math.sin(m[3])); g.stroke(); g.fillStyle = col; g.beginPath(); g.arc(x, y, 4, 0, 7); g.fill() }
+function between(k) {
+  const ok = Object.values(D.saved).filter(s => s.solve && s.solve.ok).map(s => [parseInt(s.fly.slice(1)), s.solve.top]).sort((a, b) => a[0] - b[0])
+  const a = ok.filter(o => o[0] < k).pop(), b = ok.find(o => o[0] > k)
+  if (a && b) { const t = (k - a[0]) / (b[0] - a[0]); return [a[1][0] + t * (b[1][0] - a[1][0]), a[1][1] + t * (b[1][1] - a[1][1])] }
+  return null
+}
+function nearList(x, y, r) {
+  const list = D.cams.map(k => [k, Math.hypot(k[1] - x, k[2] - y)]).filter(a => a[1] < r).sort((a, b) => a[1] - b[1])
+  const pick = [], seen = new Set()                    // one image per folder (pilot × race) per 0.5 s, so the list shows different views
+  for (const [k, d] of list) { const key = k[0].split('__')[0] + Math.floor(parseInt(k[0].split('__')[1]) / 500); if (seen.has(key)) continue; seen.add(key); pick.push([k[0], d.toFixed(1) + ' m']); if (pick.length >= 24) break }
+  return pick
+}
+$('top').onclick = e => {
+  const c = $('top'), [px, py] = at(c, e), W = c.width
+  const x = view.cx + (px - W / 2) / view.s, y = view.cy - (py - W / 2) / view.s; near = [x, y]
+  thumbs(nearList(x, y, 6)); drawTop()
+}
+</script>
+</body>
+</html>

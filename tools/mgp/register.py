@@ -14,17 +14,19 @@ t = time.time()
 log = lambda s: print(f"[{time.time() - t:7.0f}s] {s}", flush=True)
 names = sorted(f"{d}/{f}" for d in folders for f in os.listdir(f"{img}/{d}") if f.endswith(".jpg"))
 log(f"{len(names)} new images")
-ro = p.ImageReaderOptions(camera_model="OPENCV_FISHEYE", mask_path=msk, camera_params=os.environ.get("CAM", "195,197,240,180,0.155,-0.09,0.026,-0.003"))   # race-1 map median (upgrade lens)
+ro = p.ImageReaderOptions(camera_model=os.environ.get("CAM_MODEL", "OPENCV_FISHEYE"), mask_path=msk, camera_params=os.environ.get("CAM", "195,197,240,180,0.155,-0.09,0.026,-0.003"))   # race-1 map median (upgrade lens)
 eo = p.FeatureExtractionOptions()
 eo.sift.max_num_features = 4096
 p.extract_features(db, img, image_names=names, camera_mode=p.CameraMode.PER_FOLDER, reader_options=ro, extraction_options=eo)
 log("extract")
-p.match_sequential(db, pairing_options=p.SequentialPairingOptions(overlap=15, quadratic_overlap=True))
+p.match_sequential(db, pairing_options=p.SequentialPairingOptions(overlap=int(os.environ.get("OVERLAP", 15)), quadratic_overlap=True))
 log("sequential")
 ql = f"{w}/query_{os.getpid()}.txt"
-open(ql, "w").write("\n".join(names) + "\n")
+open(ql, "w").write("\n".join(names[::int(os.environ.get("QUERY_EVERY", "1"))]) + "\n")   # QUERY_EVERY=n: only every nth new image looks for the map
 p.match_vocabtree(db, pairing_options=p.VocabTreePairingOptions(num_images=50, vocab_tree_path=vocab, match_list_path=ql))
 log("vocabtree")
+if os.environ.get("MAP") == "0":                      # matches only (fly_align.py builds and places the footage itself)
+    sys.exit(0)
 o = p.IncrementalPipelineOptions()
 o.fix_existing_frames = True
 o.multiple_models = False
