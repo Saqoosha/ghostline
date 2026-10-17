@@ -63,17 +63,18 @@ function play(file, label) {
   $("now").textContent = label; render(last);
 }
 let last = null;
+const set = (id, html) => { const el = $(id); if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; } };   // only on a change: a rewrite every 2 s cleared the text selection
 function render(s) {
   if (!s) return; last = s;
   const src = Object.entries(s.sources || {});
-  $("bar").innerHTML = (s.on ? "" : "<b>録画は止まっている（REC=0 か NDI が使えない）</b>")
+  set("bar", (s.on ? "" : "<b>録画は止まっている（REC=0 か NDI が使えない）</b>")
     + src.map(([n, w]) => `<span class="src${w.rec ? " rec" : ""}"><span class="dots">${[0, 1, 2, 3].map(k => `<i class="${w.cells && w.cells[k] ? "on" : ""}"></i>`).join("")}</span><b>${esc(n)}</b>${w.rec ? " 録画中" : ""}</span>`).join("")
-    + (s.free != null ? `<span>空き <b>${gb(s.free)}</b></span>` : "");
-  $("rows").innerHTML = s.recs.map(r => `<tr class="${r.file === playing ? "sel" : ""}">
+    + (s.free != null ? `<span>空き <b>${gb(s.free)}</b></span>` : ""));
+  set("rows", s.recs.map(r => `<tr class="${r.file === playing ? "sel" : ""}">
     <td>${when(r.start)}</td><td class="name">${esc(r.source)}${r.live ? ' <span class="live">● 録画中</span>' : ""}</td>
     <td class="r">${dur(r.dur)}</td><td class="r">${gb(r.bytes)}</td>
     <td><span class="bars">${[0, 1, 2, 3].map(k => `<span><i style="width:${Math.round(100 * ((r.cells || [])[k] || 0))}%"></i></span>`).join("")}</span></td>
-    <td>${r.live ? "" : `<a href="#" data-f="${esc(r.file)}" data-l="${esc(when(r.start) + " · " + r.source)}">再生</a> · `}<a href="/rec/${encodeURIComponent(r.file)}" download>保存</a>${r.live ? "" : ` · <a href="#" class="del" data-d="${esc(r.file)}" data-l="${esc(when(r.start) + " · " + r.source)}">削除</a>`}</td></tr>`).join("");
+    <td>${r.live ? "" : `<a href="#" data-f="${esc(r.file)}" data-l="${esc(when(r.start) + " · " + r.source)}">再生</a> · `}<a href="/rec/${encodeURIComponent(r.file)}" download>保存</a>${r.live ? "" : ` · <a href="#" class="del" data-d="${esc(r.file)}" data-l="${esc(when(r.start) + " · " + r.source)}">削除</a>`}</td></tr>`).join(""));
   $("empty").hidden = s.recs.length > 0;
 }
 $("rows").addEventListener("click", async e => {
