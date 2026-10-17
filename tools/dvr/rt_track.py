@@ -69,8 +69,12 @@ NEAR, NEAR_K, NEAR_ANG = int(E("NEAR", 0)), int(E("NEAR_K", 4)), E("NEAR_ANG", 1
 # writes the frames it tracked well (how "track", KF_MIN inliers or more; one per KF_STEP m / KF_ROT deg per cell) - the
 # matcher's own keypoints and descriptors, the pose, the global descriptor - for rt_map_grow.py, which lifts them to 3D with
 # the scan's depth and appends them to a map as real keyframes. RKF=1 (with RENDER) then also matches the nearest real
-# keyframe while tracking, so every frame meets a picture taken in the same light as well as the render
+# keyframe while tracking, so every frame meets a picture taken in the same light as well as the render. Only frames from the
+# heats just before help: 14-15h frames made the 16:44 heats worse, 16:30s frames made them better. KF_WINDOW (s): a place
+# gets a new frame once its last one is older than this (0 = never). MAPWATCH=<file>: the file names the map to use; when
+# what it names changes the map is loaded on a thread and swapped in between cycles (rt_control.py grows one between heats)
 KFOUT, KF_MIN, KF_STEP, KF_ROT, RKF = os.environ.get("KFOUT"), int(E("KF_MIN", 200)), E("KF_STEP", 1.0), E("KF_ROT", 20), int(E("RKF", 0))
+KF_WINDOW, MAPWATCH = E("KF_WINDOW", 0), os.environ.get("MAPWATCH")
 FLOW, FLOW_EVERY, FLOW_RESEED, FLOW_MIN = int(E("FLOW", 0)), int(E("FLOW_EVERY", 8)), int(E("FLOW_RESEED", 60)), int(E("FLOW_MIN", 30))
 GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30), E("SEND_T0", 0), os.environ.get("FRAME_CODE")
 # Two lenses (a live cell's camera field "a.json+b.json"): the HDZero Nano 90 flies with its stock lens or the upgrade one, and the
@@ -119,6 +123,12 @@ FRESH, KQ, BLEND, TRAIL_L, TRAIL_W = E("FRESH", 0.1), E("KQ", 1e4), E("BLEND", 0
 T = lambda a: torch.tensor(a, dtype=torch.float32, device=dev)
 def sync(): torch.cuda.synchronize() if dev == "cuda" else torch.mps.synchronize() if dev == "mps" else None
 maps, sources = {}, {}
+def load_map(path):
+    with np.load(path) as m:
+        mk = MAPK or m["kp"].shape[1]               # XFeat returns the strongest first, so the first MAPK are the best
+        return dict(K=m["K"], size=[int(x) for x in m["size"]], n=np.minimum(m["n"], mk), kp=T(m["kp"][:, :mk]), desc=torch.tensor(m["desc"][:, :mk], device=dev), X=m["X"][:, :mk],
+                    pos=m["pos"], fwd=Rot.from_quat(m["quat"]).as_matrix()[:, :, 2], g=T(m["g"]),
+                    real=m["real"].astype(bool) if "real" in m.files else np.zeros(len(m["pos"]), bool))
 import threading, subprocess
 # SIGNAL=1 (live): a cell whose receiver shows no picture - its flat no-signal screen or analog snow (rt_signal.py) - sends no
 # frames to the tracker, and with every cell quiet the loop only waits. On an EventVRX recording the cells had a picture 47% of
@@ -216,11 +226,7 @@ class Stream:
         if self.live:
             url, rect, camj = self.video.split("|"); self.rect = [int(v) for v in rect.split(":")]
             camjs = [c if c.endswith(".json") else c + ".json" for c in camj.split("+")]; self.video = camjs[0][:-5]   # the first one gives the frame size
-        if self.map_npz not in maps:
-            m = np.load(self.map_npz); mk = MAPK or m["kp"].shape[1]   # XFeat returns the strongest first, so the first MAPK are the best
-            maps[self.map_npz] = dict(K=m["K"], size=[int(x) for x in m["size"]], n=np.minimum(m["n"], mk), kp=T(m["kp"][:, :mk]), desc=torch.tensor(m["desc"][:, :mk], device=dev), X=m["X"][:, :mk],
-                                      pos=m["pos"], fwd=Rot.from_quat(m["quat"]).as_matrix()[:, :, 2], g=T(m["g"]),
-                                      real=m["real"].astype(bool) if "real" in m.files else np.zeros(len(m["pos"]), bool))
+        if self.map_npz not in maps: maps[self.map_npz] = load_map(self.map_npz)
         self.m = maps[self.map_npz]; self.K = self.m["K"]; RW, RH = self.m["size"]
         # frames: the pinhole video, at the map's size, with the OSD and the undistortion border masked (as cpr_track.py)
         cam = self.cam = json.load(open(self.video + ".json")); W, H = cam["width"], cam["height"]; self.fps = GRID_FPS if self.live else cam.get("fps", 60)
@@ -538,12 +544,13 @@ def land(c, out, t0, clock0):                       # apply the answers to the s
                 if not q.full(): q.put_nowait(m)
     s_ = {k: c[k] * 1000 for k in ("feat", "match", "rend", "glue") if k in c}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
 def keep_kf(s, i, r, q, img):                       # KFOUT: one tracked frame as a candidate real keyframe (rt_map_grow.py lifts it)
-    f = r[0].as_matrix()[:, 2]
-    if any(np.linalg.norm(r[1] - p) < KF_STEP and f @ g > np.cos(np.radians(KF_ROT)) for p, g in s.kfs): return
-    s.kfs.append((r[1], f)); kp, d = (q[0][q[2]], q[1][q[2]]) if len(q) == 3 else q
+    f, now = r[0].as_matrix()[:, 2], time.time()
+    if KF_WINDOW: s.kfs = [k for k in s.kfs if now - k[2] < KF_WINDOW]
+    if any(np.linalg.norm(r[1] - p) < KF_STEP and f @ g > np.cos(np.radians(KF_ROT)) for p, g, _ in s.kfs): return
+    s.kfs.append((r[1], f, now)); kp, d = (q[0][q[2]], q[1][q[2]]) if len(q) == 3 else q
     with torch.no_grad(): g = torch.nn.functional.normalize(dino((torch.nn.functional.interpolate(img[None], (168, 224), mode="area") - MEAN) / STD), dim=1)[0]
     os.makedirs(KFOUT, exist_ok=True)
-    np.savez(f"{KFOUT}/{os.path.basename(s.prefix)}-{i:07d}.npz", kp=kp.float().cpu().numpy(), desc=d.half().cpu().numpy(), quat=r[0].as_quat(), pos=r[1],
+    np.savez(f"{KFOUT}/{os.path.basename(s.prefix)}-{now * 1000:.0f}-{i:07d}.npz", kp=kp.float().cpu().numpy(), desc=d.half().cpu().numpy(), quat=r[0].as_quat(), pos=r[1],
              g=g.float().cpu().numpy(), K=s.K, inl=int(r[2]), lens=getattr(s, "li", 0))
 REAL = any(s.live for s in streams)
 # PACE=1 (recorded video): wait on the wall clock for the next frame instead of jumping to it, so the GPU idles between
@@ -569,10 +576,28 @@ if REAL:                                            # the warm-up's blank frame 
     print("listening", flush=True)
 else: print("tracking", flush=True)
 cycles.clear(); clock, t_all, pending, steps = 0.0, time.time(), None, []
+swap = []                                           # MAPWATCH: (path, map) loaded on the watcher's thread, put in by the loop
+def mapwatch():
+    cur = streams[0].map_npz
+    while True:
+        time.sleep(2)
+        try: want = open(MAPWATCH).read().strip()
+        except OSError: continue
+        if not want or want == cur: continue
+        try:
+            m = load_map(want); cur = want
+            if m["size"] != [RW, RH] or not np.allclose(m["K"], streams[0].K): print(f"map {want}: not the running map's camera, kept the old one", flush=True); continue
+            swap.append((want, m))
+        except Exception as e: print(f"map {want}: {type(e).__name__}: {e}", flush=True); cur = want   # tried once; a new name tries again
+if MAPWATCH: threading.Thread(target=mapwatch, daemon=True).start()
 def loop():
   global clock, pending
   while True:
       t0, clock0 = time.perf_counter(), clock
+      if swap:                                        # between cycles: the matches in flight already hold their points, not map indices
+          path, m = swap.pop()
+          for s in streams: s.m, s.map_npz = m, path
+          print(f"map {path}: {len(m['pos'])} keyframes, {int(m['real'].sum())} real", flush=True)
       futs = [pool.submit(solve, pending, b) for b in range(len(pending["batch"]))] if pending else None
       batch, live = pick(clock)
       if not batch and not futs:

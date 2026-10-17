@@ -2,13 +2,16 @@
 day's pictures, and the pose it solved), lifted to 3D with the scan's depth rendered at that pose, appended to a map from
 rt_map.py as keyframes marked real. The geometry stays the scan's; the look is the day's light. rt_track.py RKF=1 matches them.
   rt_map_grow.py base.npz scene.ply out.npz kfdir [kfdir ...]
-env: NEAR (1.0 m, as rt_map.py), STEP (1.0 m) / ROT (20 deg): a frame is dropped when an earlier real one is this close in both"""
+env: NEAR (1.0 m, as rt_map.py), STEP (1.0 m) / ROT (20 deg): a frame is dropped when a newer real one is this close in both,
+     SINCE (s, 0 = all): only the frames written in the last SINCE seconds - the heats just before match the light, older ones hurt"""
 import glob, os, sys, time, numpy as np, torch
 from plyfile import PlyData
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from frustum import rasterize_culled
 from scipy.spatial.transform import Rotation as Rot
 dev = "cuda"; E = lambda k, d: float(os.environ.get(k, d)); NEAR, STEP, ROT = E("NEAR", 1.0), E("STEP", 1.0), E("ROT", 20)
-base, ply, out = sys.argv[1:4]; files = sorted(f for d in sys.argv[4:] for f in glob.glob(f"{d}/*.npz"))
+base, ply, out = sys.argv[1:4]; SINCE = E("SINCE", 0)
+files = sorted((f for d in sys.argv[4:] for f in glob.glob(f"{d}/*.npz")), key=os.path.getmtime, reverse=True)   # newest first: they win the thinning
+if SINCE: files = [f for f in files if time.time() - os.path.getmtime(f) < SINCE]
 m = dict(np.load(base)); TOPK = m["kp"].shape[1]; RW, RH = [int(v) for v in m["size"]]; K = m["K"]
 if "real" not in m: m["real"] = np.zeros(len(m["pos"]), np.uint8)
 v = PlyData.read(ply)["vertex"].data; v = v[1 / (1 + np.exp(-v["opacity"])) >= 0.1]
@@ -18,7 +21,7 @@ scales, opac = torch.exp(T(np.c_[v["scale_0"], v["scale_1"], v["scale_2"]])), to
 colors = T(np.c_[v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]][:, None, :])   # depth only: the colour does not matter
 def w2c(q, c): M = np.eye(4); R = Rot.from_quat(q).as_matrix(); M[:3, :3] = R.T; M[:3, 3] = -R.T @ c; return M
 kept, P, F, t0 = [], [], [], time.time()
-for f in files:                                      # thin as rt_map.py does, over the frames of every cell and run
+for f in files:                                      # thin as rt_map.py does, over the frames of every cell and run, the newest kept
     with np.load(f) as z: k = {n: z[n] for n in z.files}   # read and closed: a day has thousands of these
     fw = Rot.from_quat(k["quat"]).as_matrix()[:, 2]
     if not np.allclose(k["K"], K): sys.exit(f"{f}: its camera is not the map's")
