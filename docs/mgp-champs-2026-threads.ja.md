@@ -29,7 +29,10 @@
   「写しのゲート」はこれ（Saqoosha の指摘：前後が反対）
 - 直し：`LOCAL=1 ZMIN=1.8 ZMAX=4.6 mapfix_row.py mapfinal/sparse/0 mapfix_neros top_frame.json fit01.png.json -118.6 -112.4 5.6 7.9 6.6`
   （柵を巻き込まない高さ、列から 12 m のカメラだけ動かす束調整）→ 差 −0.02 m、3 つのゲートの奥行きが 6.70 / 6.86 / 6.85 m に
-- 3DGS の学習し直し：`gs_dataset.py mapfix_neros ... ~/mgp/gsfix` → spirula `train in-the-wild`（Studio、`~/mgp/gsfix/train.log`）
+- 3DGS の学習し直し：`gs_dataset.py mapfix_neros ... ~/mgp/gsfix` → spirula `train in-the-wild`（Studio の M4 Max で 7 時間 4 分、
+  200 万 splat、PSNR 24.1）→ `MGP-Champs-2026-fix.sog`。公開ページの `?scene=MGP-Champs-2026-fix` で比べられる（差し替えは未）。
+  見た目の差は小さい：文字が少しくっきりするが、NEROS の上の枠はどちらでもほぼ見えない（FPV は枠を下から抜けるので、
+  上から見た姿を学習していない）
 - 未：位置合わせのキャッシュ（`loc_cache`）を直した地図で作り直すか。作り直さないと、奥側の pilot の位置は 0.5 m ずれたまま
 
 ## 2b. フライスルー（打ち切り）

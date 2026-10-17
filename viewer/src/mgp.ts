@@ -134,7 +134,8 @@ async function loadRound(entry: RoundEntry) {
   if (token !== loadToken) return                                     // another round was picked meanwhile
   const prevFollow = R && camMode[0] === 'p' ? R.P[Number(camMode.slice(1))]?.name : null
   disposeRound()
-  loadScene(race.scene)
+  // ?scene=<name>: another scan from the same data folder, to compare a retrained one before it replaces the published
+  loadScene(/^[A-Za-z0-9._-]+$/.test(QS.get('scene') ?? '') ? QS.get('scene')! : race.scene)
   const P = race.pilots, FPS = race.fps
   const T_END = Math.max(...P.map(p => p.end)), T0 = race.start - 2 - AUDIO_LEAD
   const root = new pc.Entity('round'); app.root.addChild(root)

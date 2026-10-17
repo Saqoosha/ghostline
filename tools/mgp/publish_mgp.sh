@@ -50,6 +50,10 @@ for RD in $FOLDERS; do
   SCN="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["scene"])' "$SRC/race.json")"
   [ -e "$DATA/scene/$SCN.sog" ] && cp -L "$DATA/scene/$SCN.sog" "$UP/scene/"
 done
+# EXTRA_SCENES="<name> ...": scans no round names yet, uploaded too so the page's ?scene=<name> can show them for comparison
+for SCN in ${EXTRA_SCENES:-}; do
+  [[ "$SCN" =~ ^[A-Za-z0-9._-]+$ ]] && [ -e "$DATA/scene/$SCN.sog" ] && cp -L "$DATA/scene/$SCN.sog" "$UP/scene/"
+done
 [ -e "$DATA/sky.jpg" ] && cp -L "$DATA/sky.jpg" "$UP/sky.jpg"
 du -sh "$UP"
 rclone --s3-no-check-bucket copy --checksum --progress "$UP" "$REMOTE:$BUCKET/dvr/$NAME/data/"
