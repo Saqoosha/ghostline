@@ -63,6 +63,8 @@ for spec in args[3:]:
     path, who = spec.split("=")
     name, slot = (who.split(":") + [None])[:2]
     L = [f for f in json.load(open(path))["frames"] if f["ok"]]
+    if len(L) < 2:                                       # a cell that never localized (noise, analog): skip it, not the rest
+        print(f"{name}: {len(L)} localized frames, skipped"); continue
     t = np.array([f["t_ms"] for f in L], float) + dt
     C = (np.array([f["center"] for f in L]) - a0) @ M.T * s
     C[:, [0, 2]] += [tvd[0], -tvd[1]]
