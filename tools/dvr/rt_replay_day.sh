@@ -1,7 +1,7 @@
 #!/bin/bash
 # rt4090: replay a day's recordings (rt_rec.py's 2x2 grids) through the live tracker, one recording per run, at real time
 # over SRT on this box (as rt_camsweep.sh), with the field day's live settings (4 cells, lens auto, RENDER=1, BA; no RKF / KFOUT unless set). MAXFPS does not
-# thin SRT: the recordings' 60 fps all arrive, numbered at 60.
+# thin SRT, so every frame arrives: GRID_FPS is the recording's own rate (60), or the tracker's clock runs twice too fast.
 # One run per recording: a crash (such as gsplat's SIGFPE, since fixed) loses one recording's answers, and the log says which and where.
 #   rt_replay_day.sh <out dir> <map.npz> <scene.ply> <recording.mp4> ...     env PORT (9000): the SRT port, to run two at once
 #   env PUSH: the answers as a live feed on that port (8765 is what the control page's 3D view /view/ reads; the audience
@@ -17,7 +17,8 @@ for f in "$@"; do
   mkdir -p "$d"; specs=()
   for c in "R2 0:0" "F1 960:0" "R4 0:540" "R5 960:540"; do set -- $c
     specs+=("$MAP,srt://127.0.0.1:$PORT?mode=listener&latency=80000|$2:960:540|$CAM,$d/$1"); done
-  SIGNAL=1 GRID=1920x1080 GRID_FPS=30 MAXFPS=30 GLUE=eng_linux/glue_mix.engine XFEAT=eng_linux/xfeat_fp32.engine \
+  fps=$(ffprobe -v error -select_streams v -show_entries stream=r_frame_rate -of csv=p=0 "$f" | python3 -c "import sys, fractions; print(float(fractions.Fraction(sys.stdin.read().strip())))")
+  SIGNAL=1 GRID=1920x1080 GRID_FPS=$fps GLUE=eng_linux/glue_mix.engine XFEAT=eng_linux/xfeat_fp32.engine \
     RENDER=1 RCLIP=2 SCENE="$SCENE" BA=0.5 BA_ACC=30 BA_ALPHA=60 python -u rt_track.py "${specs[@]}" > "$d/tracker.log" 2>&1 &
   T=$!
   until grep -q listening "$d/tracker.log" 2>/dev/null; do sleep 2; kill -0 $T 2>/dev/null || break; done
