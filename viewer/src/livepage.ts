@@ -382,7 +382,7 @@ app.on('update', (dt: number) => {
   // engine only moves the pattern for a jittered camera, i.e. with TAA)
   drawLine(eye)
   trailMat.setParameter('blueNoiseJitter', [Math.random(), Math.random(), Math.random(), Math.random()])
-  const rows: string[] = []; let best = 0                  // 1 lost, 2 hold, 3 tracking
+  const rows: Node[] = []; let best = 0                    // 1 lost, 2 hold, 3 tracking. Text nodes only: names come from the feed and the heat manager
   for (const p of pilots.values()) {
     while (p.got.length && p.got[0] < t - 2) p.got.shift()
     const live = p.live
@@ -412,12 +412,12 @@ app.on('update', (dt: number) => {
     p.tag.style.display = behind ? 'none' : ''; p.tag.style.left = s.x + 'px'; p.tag.style.top = s.y + 'px'; const b = document.createElement('b'); b.style.background = state === 1 ? '#8c9199' : p.color; b.textContent = p.name   // as mgp.ts: a dark tag, the pilot's colour at its left
     const who = names.cells?.[p.name] ?? '', sm = document.createElement('small'); sm.textContent = stale ? 'NO ANSWERS' : state === 1 ? 'LOST' : ''
     p.tag.replaceChildren(b, ...(who ? [Object.assign(document.createElement('span'), { className: 'who', textContent: (flagOf(country(who)) + ' ' + who).trim() })] : []), ...(sm.textContent ? [sm] : []))
-    const nm = (names.cells?.[p.name] ?? '').replace(/[<>&]/g, '')
-    rows.push(`<span style="color:${p.color}">●</span> ${p.name.padEnd(4)} ${nm ? (flagOf(country(nm)) + ' ' + nm).trim() + '  ' : ''}${rate.toFixed(0).padStart(2)} Hz  ${p.lastLat.toFixed(0).padStart(3)} ms  ${String(p.lastInl).padStart(4)} inl  h ${d.pos[1].toFixed(2)} m`)
+    const nm = names.cells?.[p.name] ?? '', dotS = Object.assign(document.createElement('span'), { textContent: '●' }); dotS.style.color = p.color
+    rows.push(document.createTextNode('\n'), dotS, document.createTextNode(` ${p.name.padEnd(4)} ${nm ? (flagOf(country(nm)) + ' ' + nm).trim() + '  ' : ''}${rate.toFixed(0).padStart(2)} Hz  ${p.lastLat.toFixed(0).padStart(3)} ms  ${String(p.lastInl).padStart(4)} inl  h ${d.pos[1].toFixed(2)} m`))
   }
   if (best) { stateEl.textContent = ['', 'LOST', 'HOLD', 'TRACKING'][best]; stateEl.className = ['', '', 'hold', 'ok'][best] }
   else if (REPLAY && rp?.live) { stateEl.textContent = 'NO ANSWER YET'; stateEl.className = '' }
-  info.innerHTML = (names.heat ? `Heat ${String(names.heat).replace(/[<>&]/g, '')} ${String(names.cls ?? '').replace(/[<>&]/g, '')}\n` : '') + rows.join('\n')
+  info.replaceChildren(document.createTextNode(names.heat ? `Heat ${names.heat} ${names.cls ?? ''}` : ''), ...(names.heat ? rows : rows.slice(1)))
 })
 app.start()
 
