@@ -2,7 +2,7 @@
 their race result ids; each result page embeds racerLaps in JS (as for the qualifiers, livefpv_laps.py).
 The bare results page shows the newest event, so save a Main while it is the newest, or pass the event's page.
 usage: livefpv_bracket.py <results page URL or saved .html> <out.json>"""
-import json, re, sys, urllib.request
+import json, os, re, sys, urllib.request
 
 BASE = "https://mgp.livefpv.com/results/"
 get = lambda u: urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})).read().decode("utf-8", "replace")
@@ -23,6 +23,11 @@ for rid, n, cls, done in rows:
         pilots.append({"pilot": name, "laps": laps})
     out.append({"event": event, "race": int(n), "class": cls.strip(), "id": rid, "completed": done.strip(), "pilots": pilots})
     print(event, n, done.strip(), ", ".join(f"{p['pilot']} {[t for _, t in p['laps']]}" for p in pilots), flush=True)
+if os.path.isdir(out_path):                              # a folder: one file per event, named by it (livefpv_d_main.json)
+    out_path = os.path.join(out_path, f"livefpv_{event.lower().replace('-', '_')}.json")
 if not out:                                              # never replace a good file with an empty scrape
     sys.exit(f"no races found in {src}; {out_path} left as it was")
+if os.path.exists(out_path) and len(json.load(open(out_path))) > len(out):
+    sys.exit(f"{out_path} already holds more races than this scrape; left as it was")
 json.dump(sorted(out, key=lambda r: r["race"]), open(out_path, "w"), indent=1)
+print(f"{event}: {len(out)} races -> {out_path}")

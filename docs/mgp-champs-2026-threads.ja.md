@@ -56,6 +56,13 @@
   組み合わせ表のページは reCAPTCHA つきで読めない
 - 録画の名前のレース番号は当てにならない（Race 1 が 2 本、「Race 5-7」）。録画↔レースは時刻で：レースの終了＋1 時間＝録画の時計、
   録画はその数分前に始まる
+- **集め続けている（Studio、寝ている間も）**：`watch_new.sh 2026-10-17`（今日の録画。Archive へ移った後も拾う）、
+  `finals_collect.sh`（15 分おき：LiveFPV の各 Main を `~/mgp/finals/livefpv_<x>_main.json` に、最初のページの HTML、
+  YouTube の配信を終わったものから映像込み 1080p で `~/mgp/finals/stream/<id>.mp4`＋情報 JSON）
+- LiveFPV のイベント番号：C Main 521648、D Main 521649、B Main 521650（`?p=view_event&id=`）。E と A は不明
+  （E は保存済み、A は最初のページから拾う）
+- 配信は途中で切り直されて番号が変わる（D Main だけで 3 本）。だからチャンネルの配信一覧を毎回読む。
+  Studio の yt-dlp は 2026.7.4 だと YouTube に 403 で断られた（2026.8.19 に上げて解決）
 - 4 分割の切り出しは `LAYOUT=4up extract.py`（720×540 の映像を 480×360 に縮めて、予選と同じ処理に流す）
 - **E Main と A Main は夜**（照明の下）。昼の地図に乗るかを E Main の Race 8（`~/mgp/brackets/e08`）で試し中。
   乗らなければ E Main の夜の映像を地図につなぎ足す。急がない（Saqoosha：どうせリアルタイムにはならない）
