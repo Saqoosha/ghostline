@@ -30,7 +30,8 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 TRACK_TXT = f"{ROOT}/build/mgp/champs2026.txt"      # decrypted VelociDrone track (Velbd output)
 COLORS = ["#ff3b30", "#ff9500", "#ffcc00", "#34c759", "#00c7be", "#0a84ff", "#af52de", "#ff2d92"]
 HOLE_LEAD = 2.0      # assumed horn -> first start-gate pass (FDF holeshots were 1.6-2.4 s), used only when no start is given
-PRE = 4.0            # clip pre-roll before the horn (page opens ~2 s + audio lead before the start)
+RESTART_GAP = 120.0  # no qualifier lap is this long: a gap like it between passes means two heats in one recording
+PRE = 4.0           # clip pre-roll before the horn (page opens ~2 s + audio lead before the start)
 POST = 6.0
 CELL_W, CELL_H, FEED_X, FEED_W = 640, 360, 80, 480
 
@@ -47,7 +48,7 @@ def load_poses(d, names):
             J = json.load(open(p)); F = J["frames"]
             t = np.array([f["t_ms"] for f in F], float) / 1000; c = np.array([f["center"] for f in F], float)
             q = np.array([f["qvec"] if f.get("qvec") else [np.nan] * 4 for f in F], float)
-            o = np.argsort(t); out[n] = dict(t=t[o], c=c[o], q=q[o], slot=J.get("slot"))
+            o = np.argsort(t); out[n] = dict(t=t[o], c=c[o], q=q[o], slot=J.get("slot"), run=J.get("run"))
     return out
 
 
@@ -195,6 +196,14 @@ def build(a):
     t_lo = min(p["t"][0] for p in P.values()); t_hi = max(p["t"][-1] for p in P.values())
     nfull = int((t_hi - t_lo) * fps) + 1
     cross_v = {n: [t_lo + c for c in crossings(resample(p, t_lo, fps, nfull), fps, gate, a.margin, a.min_gap)] for n, p in P.items()}
+    # a recording with two heats in it (a restart, or the next round recorded on): name_slots.py wrote the run each pilot's
+    # official laps matched in; only passes in that window count when there was a gap of minutes between passes
+    runs = [p["run"] for p in P.values() if p.get("run")]
+    two = any(c[i + 1] - c[i] > RESTART_GAP for c in cross_v.values() for i in range(len(c) - 1))
+    if runs and two and a.start_video is None:
+        lo, hi = min(r[0] for r in runs) - 15.0, max(r[1] for r in runs) + 15.0
+        cross_v = {n: [x for x in c if lo <= x <= hi] for n, c in cross_v.items()}
+        print(f"round {rnd}: two heats in the recording, using the passes in [{lo:.1f}, {hi:.1f}] s")
     holes = {n: c[0] for n, c in cross_v.items() if c}
     start_v = a.start_video if a.start_video is not None else min(holes.values()) - HOLE_LEAD
     L = max(len(v) for v in off.values()) or 1

@@ -31,8 +31,27 @@ for f in sorted(os.listdir(src)):
     cells[f[:-5]] = dict(file=f, laps=np.diff(cr).tolist(), cross=cr, slot=J.get("slot"))
 
 
-def score(laps, off):
-    """mean abs difference between a cell's laps and the official ones, over the overlap; large when nothing lines up."""
+def score(cross, off):
+    """(mean abs difference between a cell's laps and the official ones over the overlap, the run's [first, last] pass).
+    A recording can hold two heats (a restart, or the next round recorded on): minutes without a pass split the passes
+    into runs, each scored on its own, and the best run is the one the official laps belong to."""
+    runs, cur = [], []
+    for x in cross:
+        if cur and x - cur[-1] > GAP_S:
+            runs.append(cur); cur = []
+        cur.append(x)
+    runs.append(cur)
+    best = (9e9, None)
+    for r in runs:
+        if len(r) >= 2:
+            best = min(best, (score_run(np.diff(r).tolist(), off), (r[0], r[-1])))
+    return best
+
+
+GAP_S = 120                                                # no qualifier lap is this long
+
+
+def score_run(laps, off):
     best = 9e9
     for k in range(-2, 3):                                 # the path may miss / add a crossing at the ends
         a = laps[max(0, k):]; b = off[max(0, -k):]
@@ -42,19 +61,20 @@ def score(laps, off):
     return best
 
 
-S = {(cell, p): score(v["laps"], off) for cell, v in cells.items() for p, off in official.items() if off}
+S = {(cell, p): score(v["cross"], off) for cell, v in cells.items() for p, off in official.items() if off}
 os.makedirs(out, exist_ok=True)
 used_c, used_p = set(), set()
-for (cell, p), s in sorted(S.items(), key=lambda kv: kv[1]):
+for (cell, p), (s, run) in sorted(S.items(), key=lambda kv: kv[1][0]):
     if cell in used_c or p in used_p or s > 1.0:
         continue
     used_c.add(cell); used_p.add(p)
     J = json.load(open(f"{src}/{cells[cell]['file']}")); J["pilot"] = p
+    J["run"] = [round(run[0], 3), round(run[1], 3)]       # the passes (video s) its official laps were matched in
     json.dump(J, open(f"{out}/{p}.json", "w"))
     print(f"{cell} -> {p}  (score {s:.2f})  path laps {np.round(cells[cell]['laps'], 2).tolist()}  official {official[p]}")
 for cell in cells:
     if cell not in used_c:
-        print(f"{cell} -> ?  path laps {np.round(cells[cell]['laps'], 2).tolist()}  best {min((s, p) for (c_, p), s in S.items() if c_ == cell)}")
+        print(f"{cell} -> ?  path laps {np.round(cells[cell]['laps'], 2).tolist()}  best {min((round(s[0], 2), p) for (c_, p), s in S.items() if c_ == cell)}")
 for p in official:
     if p not in used_p:
         print(f"   unnamed pilot {p} {official[p]}")
