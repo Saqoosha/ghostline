@@ -607,7 +607,15 @@ function cameraFollow(p: Pilot, tc: number) {
   const eye = now.clone().sub(fwd.clone().mulScalar(8 * view.zoom)).add(new pc.Vec3(0, 3 * view.zoom, 0))
   cam.setPosition(eye); cam.lookAt(now.clone().add(fwd.clone().mulScalar(5)))
 }
+// ?cam=ex,ey,ez,tx,ty,tz,ux,uy,uz[,fov]: a fixed camera (eye, look-at target, up; world metres), to set the scan next
+// to a photo taken from a known pose (the fly-through anchors) and compare them
+const CAM = (QS.get('cam') ?? '').split(',').map(Number)
 function cameraAt(tc: number) {
+  if (CAM.length >= 9 && CAM.every(Number.isFinite)) {
+    cam.setPosition(CAM[0], CAM[1], CAM[2]); cam.lookAt(new pc.Vec3(CAM[3], CAM[4], CAM[5]), new pc.Vec3(CAM[6], CAM[7], CAM[8]))
+    if (CAM.length >= 10) cam.camera!.fov = CAM[9]
+    return
+  }
   if (camMode === 'free') return cameraFree()
   if (camMode === 'top') return cameraTop()
   if (camMode[0] === 'p') return cameraFollow(R!.P[Number(camMode.slice(1))], tc)

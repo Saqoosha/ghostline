@@ -21,6 +21,11 @@ from scipy.spatial import cKDTree
 model_in, model_out, frame, fit = sys.argv[1:5]
 x0, x1, y0, y1, YS = [float(v) for v in sys.argv[5:10]]
 DX, DZ, DY = [float(os.environ.get(k, d)) for k, d in (("DX", 0.5), ("DZ", 0.15), ("DY", 0.8))]
+# the heights taken as the row's faces: above a fence (ZMIN 1.8) keeps a real object in front of the row out of the pairing
+ZMIN, ZMAX = float(os.environ.get("ZMIN", 0.3)), float(os.environ.get("ZMAX", 3.0))
+# LOCAL=1: bundle-adjust only the cameras within R_IN m of the box (and the points they see), with the cameras R_IN..R_OUT
+# m away held fixed as the anchor; the rest of the map does not move. Without it the whole model is adjusted.
+LOCAL, R_IN, R_OUT = os.environ.get("LOCAL") == "1", float(os.environ.get("R_IN", 12)), float(os.environ.get("R_OUT", 30))
 t0 = time.time()
 log = lambda s: print(f"[{time.time() - t0:7.0f}s] {s}", flush=True)
 F, T = json.load(open(frame)), json.load(open(fit))
@@ -39,7 +44,7 @@ def faces(r):
     cy = {im.image_id: metric(im.projection_center()[None])[0, 1] for im in r.images.values()}
     ids = np.array(list(r.points3D))
     P = metric(np.array([r.points3D[i].xyz for i in ids]))
-    k = (P[:, 2] > 0.3) & (P[:, 2] < 3.0) & (P[:, 0] > x0) & (P[:, 0] < x1) & (P[:, 1] > y0) & (P[:, 1] < y1)
+    k = (P[:, 2] > ZMIN) & (P[:, 2] < ZMAX) & (P[:, 0] > x0) & (P[:, 0] < x1) & (P[:, 1] > y0) & (P[:, 1] < y1)
     side = np.array([np.mean([cy[el.image_id] > YS for el in r.points3D[i].track.elements]) for i in ids[k]])
     return ids[k], P[k], side > 0.5
 
@@ -78,9 +83,26 @@ before = {im.name: im.projection_center() for im in r.images.values()}
 o = p.BundleAdjustmentOptions()
 o.refine_focal_length = o.refine_extra_params = o.refine_principal_point = False
 o.print_summary = False
+def local_ba(r):
+    """the cameras near the row move, a ring of cameras around them stays put, intrinsics fixed."""
+    cx = {im.image_id: metric(im.projection_center()[None])[0] for im in r.images.values()}
+    mid = np.array([(x0 + x1) / 2, (y0 + y1) / 2]); half = np.array([(x1 - x0) / 2, (y1 - y0) / 2])
+    dist = {i: np.linalg.norm(np.maximum(np.abs(c[:2] - mid) - half, 0)) for i, c in cx.items()}   # metres outside the box
+    cfg = p.BundleAdjustmentConfig()
+    inner = [i for i, d in dist.items() if d <= R_IN]; ring = [i for i, d in dist.items() if R_IN < d <= R_OUT]
+    for i in inner + ring:
+        cfg.add_image(i)
+    for i in ring:
+        cfg.set_constant_rig_from_world_pose(r.images[i].frame_id)
+    for c in {r.images[i].camera_id for i in inner + ring}:
+        cfg.set_constant_cam_intrinsics(c)
+    log(f"local BA: {len(inner)} cameras free, {len(ring)} fixed around them")
+    p.create_default_bundle_adjuster(o, cfg, r).solve()
+
+
 for rnd in range(int(os.environ.get("ROUNDS", 3))):      # each round pairs what the last BA brought within reach
     merged = merge(r)
-    p.bundle_adjustment(r, o)
+    local_ba(r) if LOCAL else p.bundle_adjustment(r, o)
     r.update_point_3d_errors()
     e = np.array([r.points3D[i].error for i in merged if i in r.points3D])
     log(f"BA {rnd + 1}: merged points' reprojection error p50 {np.median(e):.2f} p90 {np.percentile(e, 90):.2f} max {e.max():.1f} px; "

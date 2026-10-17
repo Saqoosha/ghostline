@@ -53,9 +53,19 @@ print(f"triangulated: {n0} -> {len(R.points3D)} points", flush=True)
 o = p.IncrementalPipelineOptions()
 o.fix_existing_frames = True
 o.multiple_models = False
-o.mapper.abs_pose_min_num_inliers = int(os.environ.get("MIN_INL", 20))
+o.mapper.abs_pose_min_num_inliers = int(os.environ.get("MIN_INL", 30))
+o.mapper.abs_pose_min_inlier_ratio = float(os.environ.get("MIN_RATIO", 0.35))
+# the 2D-only fallback placed frames that saw few 3D points; later frames built on their points and a third of the
+# footage piled up on one spot (first run: 33 fallbacks, median step 0 m/s)
+o.structure_less_registration_fallback = os.environ.get("SL_FALLBACK", "0") == "1"
 reg = f"{out}/reg"; os.makedirs(reg, exist_ok=True)
 recs = p.incremental_mapping(db, img_root, reg, o, input_path=tri)
 R2 = recs[0] if 0 in recs else max(recs.values(), key=lambda r: r.num_reg_images())
 F = sorted((im for im in R2.images.values() if im.name.startswith(pre)), key=lambda im: im.name)
 print(f"registered {len(F)} footage frames ({len(used)} anchors); model {R2.num_reg_images()} images", flush=True)
+# a check that does not trust the count: the speed between consecutive registered frames (15 fps footage)
+k = np.array([int(os.path.splitext(im.name)[0][-5:]) for im in F]); C = np.array([im.projection_center() for im in F]) * float(os.environ.get("UNIT_M", 7.37))
+if len(k) > 1:
+    v = np.linalg.norm(np.diff(C, axis=0), axis=1) / (np.diff(k) / 15)
+    print(f"step speed m/s p50 {np.median(v):.1f} p90 {np.percentile(v, 90):.1f}; over 40 m/s: {(v > 40).sum()} of {len(v)}; "
+          f"still steps (< 0.05 m/s): {(v < 0.05).sum()}", flush=True)
