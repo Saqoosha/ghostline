@@ -10,6 +10,7 @@ while true; do
   python3 -I tools/mgp/livefpv_laps.py data/mgp/livefpv_laps.json > /dev/null 2>&1
   ssh studio 'cat ~/mgp/new.log' 2>/dev/null | while IFS=$'\t' read -r f alias size; do
     n=$(echo "$alias" | sed -nE 's/.*Race ([0-9]+).*/\1/p'); [ -z "$n" ] && continue
+    [[ "$f" =~ ^[A-Za-z0-9._-]+$ ]] || continue          # the name comes from the public manifest and goes into a remote shell line
     laps=$(python3 -c "import json;r=[x for x in json.load(open('data/mgp/livefpv_laps.json')) if x['round']==$n];print(sum(len(p['laps']) for x in r for p in x['pilots']))")
     [ "${laps:-0}" -eq 0 ] && continue
     url="https://race-dvr-public.s3.us-east-1.amazonaws.com/pilot-review/races/$(echo "$f" | sed 's/_/%20/')"
