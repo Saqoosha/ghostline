@@ -77,7 +77,9 @@ function drawCams() {
   $('cams').replaceChildren(btn('orbit', 'ORBIT'), btn('top', 'TOP'),
     Object.assign(document.createElement('button'), { textContent: 'FOLLOW', className: k >= 0 ? 'on' : '', onclick: () => { if (up.length) stage.setMode(`p${up[(k + 1) % up.length].stream}`) } }))
 }
-stage.onMode = () => { drawCams(); redrawPilots(); resorted = false }; drawCams()
+// once more after the camera stops: a drag or a wheel while paused, the end of a switch's glide
+stage.onMode = () => { drawCams(); redrawPilots(); setTimeout(() => { resorted = false }, 800) }; drawCams()
+for (const ev of ['pointerup', 'wheel']) $('c').addEventListener(ev, () => { resorted = false })
 
 let last = performance.now(), resorted = false
 function frame(now: number) {

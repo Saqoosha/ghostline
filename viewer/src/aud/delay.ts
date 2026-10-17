@@ -34,7 +34,7 @@ const msgKey = (m: Msg) => m.k === 'h' ? `h${m.id}|${m.at ?? m.t}` : m.k === 'e'
 export class Timeline {
   private kept: Msg[] = []                             // answers and lost frames, in time order
   marks: Msg[] = []                                    // every h and e, in time order
-  private newest = 0; private seen = new Map<string, number>()
+  private newest = 0; private pruned = 0; private seen = new Map<string, number>()
   push(msgs: Msg[]) {
     for (const m of msgs) {
       const k = msgKey(m); if (this.seen.has(k)) continue; this.seen.set(k, when(m))
@@ -45,7 +45,7 @@ export class Timeline {
     this.kept.sort((a, b) => when(a) - when(b)); this.marks.sort((a, b) => when(a) - when(b))
     const old = this.newest - KEEP; let k = 0; while (k < this.kept.length && when(this.kept[k]) < old) k++
     if (k) this.kept.splice(0, k)
-    if (this.seen.size > 20_000) for (const [s, t] of this.seen) if (t < old) this.seen.delete(s)
+    if (this.newest - this.pruned > 10_000) { this.pruned = this.newest; for (const [s, t] of this.seen) if (t < old) this.seen.delete(s) }   // every 10 s, not every batch
   }
   // the answers and lost frames in (from, to]
   between(from: number, to: number): Msg[] {

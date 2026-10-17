@@ -66,9 +66,9 @@ export class LiveRoom extends DurableObject<RoomEnv> {
       if (x.k === 'e') this.ended.add(x.id)
       // the 10 s repeat of an unchanged start: nothing to store or write
       if (x.k === 'h' && was?.id === x.id && was.heat === x.heat && was.cls === x.cls && JSON.stringify(was.cells) === JSON.stringify(x.cells)) continue
+      await this.index(event, ix => applyToIndex(ix, x))                // first: a failed write leaves lastH as it was, so the next repeat tries again
       if (x.k === 'h') { this.lastH = x; await this.ctx.storage.put('lastH', x) }
       else if (was?.id === x.id) { this.lastH = null; await this.ctx.storage.delete('lastH') }
-      await this.index(event, ix => applyToIndex(ix, x))
     }
   }
 

@@ -212,6 +212,24 @@ class RelayTest(unittest.TestCase):
     def test_bad_event_name_refused(self):
         with self.assertRaises(ValueError): Relay("http://x/", "http://y", "FDF 2026", "k", out_dir=self.dir)
 
+    def test_heat_started_after_the_gap_reads_the_order_again(self):
+        order = [["A", "B"]]
+        r = Relay("http://x/", "http://y", "e", "k", out_dir=self.dir, post=lambda *a: None, order=lambda: order[0])
+        r.on_row(dict(stream="A", i=1, lat=0, how="none"), T0); order[0] = ["B", "A"]
+        r.on_row(dict(stream="A", i=2, lat=0, how="none"), T0 + 31)
+        self.assertEqual([m["order"] for m in r.queue if m["k"] == "h"], [["A", "B"], ["B", "A"]])
+
+    def test_upload_into_an_unwritable_folder_reports(self):
+        open(os.path.join(self.dir, "blocked"), "w").close()
+        r = Relay("http://x/", "http://y", "e", "k", out_dir=os.path.join(self.dir, "blocked"), post=lambda *a: None)
+        rec = dict(id="133156", start=round(T0 * 1000), end=round(T0 * 1000) + 5000, heat=None, cls=None, cells={}, order=["R2"], answers={})
+        self.assertFalse(r.upload(rec)); self.assertIn("133156", r.status(T0)["err"])
+
+    def test_pending_without_its_record_stops_retrying(self):
+        day = os.path.join(self.dir, "20261017"); os.makedirs(day); open(os.path.join(day, "133156.json.pending"), "w").close()
+        self.r.retry_pending(T0)
+        self.assertFalse(os.path.exists(os.path.join(day, "133156.json.pending"))); self.assertTrue(os.path.exists(os.path.join(day, "133156.json.lost")))
+
     def test_order_from_venue_config(self):
         r = Relay("http://x/", "http://y", "e", "k", out_dir=self.dir, post=lambda *a: None, order=lambda: ["A", "B", "C", "D"])
         r.on_row(dict(stream="A", i=1, lat=0, how="none"), T0)

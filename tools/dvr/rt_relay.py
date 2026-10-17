@@ -102,7 +102,7 @@ class Relay:
         s = r.get("stream")
         if not s: return
         with self.lock:
-            if not self.heats.cur: self.heats.order = self._order(self.heats.order)
+            if not self.heats.cur or now - self.heats.last > self.heats.gap: self.heats.order = self._order(self.heats.order)   # a heat about to start
             for m in self.heats.row(now, s): self.close(m) if m["k"] == "e" else self.start(m, now)
             for w in r.get("win") or []:              # BA's revisions of answers still held
                 a = self.held.get((s, w[0]))
@@ -202,19 +202,23 @@ class Relay:
 
     def upload(self, rec):
         entry = dict(id=rec["id"], start=rec["start"], end=rec["end"], heat=rec["heat"], cls=rec["cls"], pilots=[rec["cells"].get(s, "") for s in rec["order"]])
-        f = self.path(rec); os.makedirs(os.path.dirname(f), exist_ok=True)
-        open(f + ".pending", "w").close()            # before the network: a failure of any kind leaves it to be tried again
+        f = self.path(rec)
         try:
+            os.makedirs(os.path.dirname(f), exist_ok=True)
+            open(f + ".pending", "w").close()        # before the network: a failure of any kind leaves it to be tried again
             self.post(f"heats/{rec['id']}", gzip.compress(json.dumps(rec, separators=(",", ":"), ensure_ascii=False).encode()),
                       {"x-heat-entry": json.dumps(entry, ensure_ascii=True)})   # ASCII: header values go out as latin-1
         except Exception as e: self.upload_err = f"heat upload {rec['id']}: {why(e)}"; return False
-        os.remove(f + ".pending"); self.upload_err = None; return True
+        os.remove(f + ".pending")
+        if not glob.glob(f"{self.out}/*/*.json.pending"): self.upload_err = None   # another heat may still be failing
+        return True
 
     def retry_pending(self, now):
         self.last_retry = now
         for p in sorted(glob.glob(f"{self.out}/*/*.json.pending")):
             try: rec = json.load(open(p[:-len(".pending")]))
-            except Exception as e: self.bg_err = f"pending {os.path.basename(p)}: {why(e)}"; continue
+            except Exception as e:                   # its record never reached the disk: nothing to send, ever
+                self.bg_err = f"pending {os.path.basename(p)}: {why(e)} (kept as .lost)"; os.replace(p, p[:-len(".pending")] + ".lost"); continue
             self.upload(rec)
 
     # --- threads
@@ -227,7 +231,9 @@ class Relay:
         while True:
             try:
                 for raw in urllib.request.urlopen(self.push_url, timeout=86400): self.line(raw, time.time())
-            except OSError: time.sleep(1)            # the tracker is not running, or went away: its next start is read again
+            except Exception as e:                   # the tracker is not running, or went away: its next start is read again
+                if not isinstance(e, OSError): self.bg_err = f"read: {why(e)}"
+                time.sleep(1)
 
     def loop(self):
         next_tick = 0.0
