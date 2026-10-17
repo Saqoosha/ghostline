@@ -32,7 +32,7 @@ for f in sorted(os.listdir(src)):
 
 
 def score(cross, off):
-    """(mean abs difference between a cell's laps and the official ones over the overlap, the run's [first, last] pass).
+    """(score_run's score, the run's [first, last] pass, path laps matched).
     A recording can hold two heats (a restart, or the next round recorded on): minutes without a pass split the passes
     into runs, each scored on its own, and the best run is the one the official laps belong to."""
     runs, cur = [], []
@@ -41,32 +41,68 @@ def score(cross, off):
             runs.append(cur); cur = []
         cur.append(x)
     runs.append(cur)
-    best = (9e9, None)
+    best = (9e9, None, 0)
     for r in runs:
         if len(r) >= 2:
-            best = min(best, (score_run(np.diff(r).tolist(), off), (r[0], r[-1])))
+            s, n = score_run(np.diff(r).tolist(), off)
+            if s < best[0]:
+                best = (s, (r[0], r[-1]), n)
     return best
 
 
 GAP_S = 120                                                # no qualifier lap is this long
 
 
+LEN_PEN = 0.15                                             # per lap the path has more or fewer than the official list
+ONE_LAP_TOL = 0.1                                          # s; one lap alone is weak evidence (Q153: 0.27 s off would have named a stranger)
+
+
+MERGE = 1.4                                                # a path lap this many times the official median may be 2-3 laps run together
+
+
 def score_run(laps, off):
-    best = 9e9
-    for k in range(-2, 3):                                 # the path may miss / add a crossing at the ends
-        a = laps[max(0, k):]; b = off[max(0, -k):]
-        m = min(len(a), len(b))
-        if m >= 1:
-            best = min(best, float(np.mean(np.abs(np.array(a[:m]) - np.array(b[:m])))) + 0.5 * abs(len(a) - len(b)))
-    return best
+    """mean |path lap - official| over the best alignment, plus LEN_PEN per lap left out on either side.
+    The path may carry up to 2 extra passes before the race, start late or stop early (fewer laps), and miss a pass
+    mid-race: then one path lap is the sum of 2-3 consecutive official laps (only for a lap well over the usual length).
+    One lap on its own names a cell only when it is exact (ONE_LAP_TOL)."""
+    if not laps or not off:
+        return (9e9, 0)
+    med = float(np.median(off)); best = [(9e9, 0)]
+
+    def walk(i, j, j0, skip, diffs, merged):
+        if diffs and (i == len(laps) or j == len(off)):
+            # one lap alone: only an exact, unmerged one (one number fits some sum of 2-3 laps by chance)
+            if not (len(diffs) == 1 and (merged or diffs[0] > ONE_LAP_TOL)):
+                left = j0 + (len(off) - j) + skip + (len(laps) - i)
+                best[0] = min(best[0], (float(np.mean(diffs)) + LEN_PEN * left, len(diffs)))
+        if i == len(laps) or j == len(off):
+            return
+        for g in (1, 2, 3):
+            if j + g > len(off) or (g > 1 and laps[i] < MERGE * med):
+                continue
+            d = abs(laps[i] - sum(off[j:j + g]))
+            if d < 3.0:
+                walk(i + 1, j + g, j0, skip, diffs + [d], merged or g > 1)
+
+    for skip in range(min(3, len(laps))):
+        for j0 in range(len(off)):
+            walk(skip, j0, j0, skip, [], False)
+    return best[0]                                         # (score, path laps matched)
 
 
 S = {(cell, p): score(v["cross"], off) for cell, v in cells.items() for p, off in official.items() if off}
 os.makedirs(out, exist_ok=True)
 used_c, used_p = set(), set()
-for (cell, p), (s, run) in sorted(S.items(), key=lambda kv: kv[1][0]):
+def ambiguous(cell, p):
+    """a cell named by one lap that another pilot's laps fit as well (Q150: 25.81 s is THE_HERDER's lap 1 and BENNETT's lap 3)."""
+    return S[(cell, p)][2] == 1 and any(q != p and v[2] == 1 for (c_, q), v in S.items() if c_ == cell and v[0] <= 1.0)
+
+
+for (cell, p), (s, run, nl) in sorted(S.items(), key=lambda kv: kv[1][0]):
     if cell in used_c or p in used_p or s > 1.0:
         continue
+    if ambiguous(cell, p):
+        print(f"{cell}: one lap fits more than one pilot, left unnamed"); used_c.add(cell); continue
     used_c.add(cell); used_p.add(p)
     J = json.load(open(f"{src}/{cells[cell]['file']}")); J["pilot"] = p
     J["run"] = [round(run[0], 3), round(run[1], 3)]       # the passes (video s) its official laps were matched in
