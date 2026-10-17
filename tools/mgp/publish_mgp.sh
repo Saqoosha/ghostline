@@ -28,6 +28,7 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT INT TERM
 say "build the page"
 ( cd "$ROOT/viewer" && VITE_BASE="/$NAME/" VITE_MGP_DATA="data" bun run build )
 PAGE="$TMP/page"; mkdir -p "$PAGE"; cp -R "$ROOT/viewer/dist/." "$PAGE/"
+cp "$PAGE/mgp.html" "$PAGE/index.html"      # /<name>/ opens the MGP page itself, not the single-flight viewer
 
 say "data"
 UP="$TMP/data"; mkdir -p "$UP/scene"

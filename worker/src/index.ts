@@ -2,7 +2,8 @@
  * ghostline.saqoo.sh - DVR flight viewers, served from R2.
  *
  * /<name>/<path> is the object dvr/<name>/<path>: the built page (index.html, race.html, assets/, flights.json) and
- * its data (data/...: scenes, videos, poses) side by side, uploaded by tools/publish-dvr-viewer.sh. / lists the viewers.
+ * its data (data/...: scenes, videos, poses) side by side, uploaded by tools/publish-dvr-viewer.sh. / is the landing page dvr/index.html (tools/publish-site.sh),
+ * or a bare listing of the viewers when there is none.
  */
 export interface Env {
   BUCKET: R2Bucket
@@ -30,10 +31,11 @@ export default {
     if (request.method !== 'GET' && request.method !== 'HEAD')
       return new Response('method not allowed', { status: 405, headers: { Allow: 'GET, HEAD' } })
     const url = new URL(request.url)
-    if (url.pathname === '/') return listing(env)
+    // / is the landing page (dvr/index.html, tools/publish-site.sh); the bare listing until one is uploaded
+    if (url.pathname === '/' && (await env.BUCKET.head(PREFIX + 'index.html')) === null) return listing(env)
     const path = decodeURIComponent(url.pathname.slice(1))
     if (path.split('/').includes('..')) return new Response('bad path', { status: 400 })
-    let key = PREFIX + (path.endsWith('/') ? path + 'index.html' : path)
+    let key = PREFIX + (path === '' || path.endsWith('/') ? path + 'index.html' : path)
 
     let head = await env.BUCKET.head(key)
     if (head === null && !path.endsWith('/') && !/\.[^/]+$/.test(path)) {

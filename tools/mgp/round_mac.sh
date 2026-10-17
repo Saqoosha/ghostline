@@ -5,8 +5,10 @@
 set -e
 N="$1"; Q=$(printf "q%02d" "$N"); ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
 L="build/mgp/loc/$Q"; mkdir -p "$L"
-scp -q "rt4090:/mnt/data/mgp/rounds/${Q}_loc/*.json" "$L/"
-scp -q rt4090:mgp/w01/top_frame.json rt4090:mgp/fit01.png.json "$L/"
+# the cells' poses from the machine that localized them (LOC_HOST:LOC_DIR), unless already here
+LOC_HOST="${LOC_HOST:-studio}"; LOC_DIR="${LOC_DIR:-mgp/rounds}"
+ls "$L"/${Q}_s*.json >/dev/null 2>&1 || scp -q "$LOC_HOST:$LOC_DIR/${Q}_loc/*.json" "$L/"
+[ -e "$L/top_frame.json" ] || scp -q "$LOC_HOST:mgp/top_frame.json" "$LOC_HOST:mgp/fit01.png.json" "$L/"
 SPECS=$(cd "$L" && ls ${Q}_s*.json | sed -E "s|(${Q}_s([0-9]+))\.json|$L/\1.json=s\2:\2|")
 uv run -q --with numpy --with scipy python tools/mgp/poses_from_loc.py "$L/top_frame.json" "$L/fit01.png.json" "build/mgp/poses/${Q}_slots" $SPECS --smooth 2>&1 | grep -v Warning
 uv run -q --with numpy python tools/mgp/name_slots.py "$N" "build/mgp/poses/${Q}_slots" "build/mgp/poses/$Q" 60
