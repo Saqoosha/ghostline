@@ -1,11 +1,12 @@
 """Official lap times from LiveFPV (mgp.livefpv.com) for every qualifier round: the results index
 gives round -> race result id and completion time; each result page embeds racerLaps in JS.
 usage: livefpv_laps.py <out.json>"""
-import json, re, sys, urllib.request
+import json, os, re, sys, urllib.request
 
 BASE = "https://mgp.livefpv.com/results/"
 get = lambda u: urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})).read().decode("utf-8", "replace")
-idx = get(BASE)
+EVENT = os.environ.get("EVENT", "521396")   # 2026 MultiGP Championship (qualifiers); the bare results page shows whichever event is newest
+idx = get(f"{BASE}?p=view_event&id={EVENT}")
 rounds = re.findall(r"<th>(Qualifier Round (\d+))</th>.*?view_race_result&id=(\d+).*?<td>([^<]+)</td>", idx, re.S)
 out = []
 for _, n, rid, done in rounds:
@@ -17,4 +18,6 @@ for _, n, rid, done in rounds:
         pilots.append({"pilot": name, "laps": laps})
     out.append({"round": int(n), "id": rid, "completed": done.strip(), "pilots": pilots})
     print(n, done.strip(), ", ".join(f"{p['pilot']} {[t for _, t in p['laps']]}" for p in pilots), flush=True)
+if not out:                                     # never replace a good file with an empty scrape
+    sys.exit("no rounds found; " + sys.argv[1] + " left as it was")
 json.dump(sorted(out, key=lambda r: r["round"]), open(sys.argv[1], "w"), indent=1)
