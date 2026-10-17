@@ -5,15 +5,16 @@ FPV ゴーグルの DVR 映像（HDZero）だけから、全フレームのカ�
 https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply` / `.sog`）と空（`sky.jpg`）を作るのは VDGS 側の道具で、
 ここはその出力を読むだけ。
 
-通し・設定・罠の正本は [docs/dvr-localization.ja.md](docs/dvr-localization.ja.md)。ライブ（飛行中）の位置推定は [docs/realtime-tracking.ja.md](docs/realtime-tracking.ja.md)。
+通し・設定・罠の正本は [docs/dvr-localization.ja.md](docs/dvr-localization.ja.md)。ライブ（飛行中）の位置推定は [docs/realtime-tracking.ja.md](docs/realtime-tracking.ja.md)。その日のコースを 360 動画から作り直して会場で回した通しは [docs/fdf-2026-10-17-field-test.ja.md](docs/fdf-2026-10-17-field-test.ja.md)。
 
 ## 構成
 
 | 場所 | 中身 |
 |---|---|
 | `tools/dvr/` | 姿勢推定（CPR 照合 `cpr_track.py` → 束調整 `cpr_ba.py` → 2 周目 `cpr_rematch.py` → `takeoff.py`、評価 `eval_align.py`）、`make_race.py`（race.json） |
-| `tools/dvr/rt_*` | ライブの位置推定（`rt_map.py` で他の飛行からキーフレーム地図、`rt_track.py` で過去のフレームだけで追跡・複数人をバッチ・答えを SSE で配信（`PUSH`）・直近の答えの束調整（`BA`））、`rt_trt.py`（LighterGlue と XFeat を TensorRT のエンジンに）、`rt_render.py`（`RENDER=1`：予測姿勢でその場で 3DGS を描いて照合。キーフレームより精度が高い）、`rt_capture.sh`（USB キャプチャ → SRT、録画つき）、`rt_replay.sh`、`ndi_send.py`（録画を NDI で流す試験用）、`rt_power*`（電力の記録）、`rt_day_gate.py` → `rt_day_power.py`（大会の配信の録画から 1 日ぶんの電力量を見積もる）、`rt_linux_setup.sh`（会場用の Linux の環境作り）、`rt_gpu_idle.sh`（合間の GPU を 21 → 7 W に戻す見張り。rt4090 で常駐）、`rt_rec.py`（NDI の送り手を全部、どれかのマスに絵があるあいだ録画。一覧は操作ページの `/rec`、判定は `rt_signal.py` を tracker と共有）、`rt_control.py`＋`rt_control.html`（会場の操作ページ `http://rt4090:8080`：NDI の送り手とマスを選んで tracker を開始 / 停止、状態・届いた映像・上から見た軌跡の表示、レンズは「自動」で tracker が見分ける。rt4090 で常駐。真上からの絵は `rt_topview.py`、`/obs` は図だけのページ（OBS のブラウザソース用）、描く部分は `rt_topview.js` を両ページで共有）。入力は SRT のほか `ndi://<名前>` で NDI を直接受ける。正本は [docs/realtime-tracking.ja.md](docs/realtime-tracking.ja.md) |
-| `viewer/` | Vite + PlayCanvas。`index.html` は 1 飛行のビューア（mark / pad の道具つき、`live` でライブの答えの再生：`src/live.ts` が 100 ms 遅らせた内挿で描く）、`race.html` はレースの再生、`live.html` はライブの表示と録画の再生（`?replay=`） |
+| `tools/dvr/rt_*` | ライブの位置推定（`rt_map.py` で他の飛行からキーフレーム地図、`rt_track.py` で過去のフレームだけで追跡・複数人をバッチ・答えを SSE で配信（`PUSH`）・直近の答えの束調整（`BA`））、`rt_trt.py`（LighterGlue と XFeat を TensorRT のエンジンに）、`rt_render.py`（`RENDER=1`：予測姿勢でその場で 3DGS を描いて照合。キーフレームより精度が高い）、`rt_capture.sh`（USB キャプチャ → SRT、録画つき）、`rt_replay.sh`、`ndi_send.py`（録画を NDI で流す試験用）、`rt_power*`（電力の記録）、`rt_day_gate.py` → `rt_day_power.py`（大会の配信の録画から 1 日ぶんの電力量を見積もる）、`rt_linux_setup.sh`（会場用の Linux の環境作り）、`rt_gpu_idle.sh`（合間の GPU を 21 → 7 W に戻す見張り。rt4090 で常駐）、`rt_rec.py`（NDI の送り手を全部、どれかのマスに絵があるあいだ録画。一覧は操作ページの `/rec`、判定は `rt_signal.py` を tracker と共有）、`rt_control.py`＋`rt_control.html`（会場の操作ページ `http://rt4090:8080`：NDI の送り手とマスを選んで tracker を開始 / 停止、状態・届いた映像・上から見た軌跡の表示、レンズは「自動」で tracker が見分ける。rt4090 で常駐。真上からの絵は `rt_topview.py`、`/obs` は図だけのページ（OBS のブラウザソース用）、描く部分は `rt_topview.js` を両ページで共有）。`/view/` は 3D のページ（`viewer/live.html` のビルド、`~/rt/view/`）、`/api/pilots` は会場のヒート管理からマスごとの名前。入力は SRT のほか `ndi://<名前>` で NDI を直接受ける。`usb_ndi.py` は rt4090 に挿した USB キャプチャを NDI の送り手にする。`rt_trackline.py` はライブの答えだけからコースの線（周回を DTW で平均）。正本は [docs/realtime-tracking.ja.md](docs/realtime-tracking.ja.md) |
+| `viewer/` | Vite + PlayCanvas。`index.html` は 1 飛行のビューア（mark / pad の道具つき、`live` でライブの答えの再生：`src/live.ts` が 100 ms 遅らせた内挿で描く）、`race.html` はレースの再生、`live.html` はライブの表示と録画の再生（`?replay=`）：マスごとに 1 人、MGP のページと同じ球・軌跡・名前タグ・コースの線・カメラ（Orbit / Top / Free / Follow） |
+| `tools/theta/` | THETA V の 360 動画からシーンを作り、縮尺の無い SfM を前のスキャンに合わせ（形の一致 → MASt3R → Umeyama）、地図まで（rt4090）。手順は field-test 文書 |
 | `data/dvr/` | 結果の小さな JSON（姿勢・評価・pad・race.json）。映像と中間物は `build/dvr/`（git の外） |
 | `worker/` | https://ghostline.saqoo.sh 。R2（バケット `vdgs`）の `dvr/<name>/` を `/<name>/` として返す |
 | `tools/publish-dvr-viewer.sh` | ビューアを組んでページとデータを R2 に上げる。Worker の deploy は要らない |
@@ -46,6 +47,10 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 - **上から見た図（`rt_topview.js`）の点の時刻は、届いた時刻でなくフレーム番号（`i / fps`）で置く。** 届いた時刻だと処理の 30〜40 ms の揺れで点の間隔が乱れ、軌跡がカクつく（ページは 60 fps で軽いのに、動きだけが不揃いに見える）。操作ページと OBS ページ（`/obs`）は描く部分とスライダーの設定を共有する
 - **ライブの速度や精度をいじる前に、設計の報告書を読む**（`docs/realtime-architecture.html`。オフラインの通しは `docs/offline-architecture.html`）。解像度は効かない、1 人 60 fps・4 人で 1 周 9 ms など、測り直しになる数字がそこにある
 - **cyndilib の NDI の Receiver は使い回す。** 捨てて作り直すと、ガベージコレクションの中の `NDIlib_framesync_destroy` が GIL を握ったまま止まり、操作ページのサーバーごと固まった（`rt_rec.py`）
+- **ピンホールの動画を tracker や `cpr_track.py` に入れるときは、カメラ定義の `source_fisheye` を同じ大きさにする。** 両方とも HDZero の OSD を消すマスクをそこから作り、別のカメラの魚眼（THETA の 1920 px）が入るとマスクが全面「使わない」になって 0 フレームしか解けない
+- **rt4090 で長い処理は `sudo systemd-run --uid=saqoosha ...` で回す。** ユーザーの systemd（`--user`）は ssh が切れると止まる（linger が切ってある）。`ghostline-control` を再起動すると子の tracker も止まる
+- **tracker が落ちると、その走りの答え（`live/<マス>.jsonl`）は書かれない。** 2026-10-17 に gsplat の中の 0 除算（SIGFPE、`gsplat_cuda.so`）で 2 回、どちらもレンズの切り替えの 20〜40 秒後（原因は未確認）。止めたら `live/archive/` に退避する
+- **スキャンの光とレースの時間帯を合わせる。** 朝のスキャンを夕方に使うと照合の点が減り、解ける回数もレンズの判定も揺れた。学習を短くしても追跡は悪くなる（30,000 回まで回す）
 - **race ページの splat がぼやける**：PlayCanvas の CPU ソートは走行中の依頼を捨てる。カメラが止まったら `resortWhenIdle` がソートを頼み直す
   （PlayCanvas の内部フィールドを読んでいるので、上げたら確かめる）
 
