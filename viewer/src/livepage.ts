@@ -87,7 +87,7 @@ function setMode(v: string) {
 }
 const camSeg = $('camseg'); let segKey = ''
 function drawCamSeg() {                                    // Orbit / Top / Free, then a follow button per pilot heard
-  const ps = [...pilots.values()], key = camMode + '|' + ps.map(p => p.name).join(',')
+  const ps = [...pilots.values()], key = camMode + '|' + ps.map(p => p.name + p.color).join(',')   // a colour can change once names arrive
   if (key === segKey) return; segKey = key
   const btn = (v: string, label: string, color?: string) => { const b = document.createElement('button'); b.textContent = label; b.className = v === camMode ? 'on' : ''
     if (color) b.style.borderLeft = `6px solid ${color}`; b.onclick = () => { setMode(v === camMode && v[0] === 'p' ? 'orbit' : v); b.blur() }; return b }
@@ -239,7 +239,8 @@ class Pilot {
   mat = new pc.StandardMaterial(); dot = new pc.Entity('dot'); trail = trailMesh(); tag = document.createElement('div')
   // the colour follows the cell's place in the heat manager's list (the config's order), so every viewer sees the same; arrival order without it
   get color() { const k = names.cells ? Object.keys(names.cells).indexOf(this.name) : -1; return PALETTE[(k >= 0 ? k : this.seq) % PALETTE.length] }
-  get col() { return hex(this.color) }
+  private colOf = ['', new pc.Color()]
+  get col() { const c = this.color; if (c !== this.colOf[0]) this.colOf = [c, hex(c)]; return this.colOf[1] as pc.Color }
   constructor(public name: string, public seq: number) {
     const m = this.mat; m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.emissive = this.col; m.depthWrite = true; m.depthTest = true; m.update()
     this.dot.addComponent('render', { type: 'sphere', material: m, castShadows: false })   // opaque with depth, as mgp.ts': behind what stands in front of it
@@ -254,10 +255,10 @@ class Pilot {
 }
 const pilots = new Map<string, Pilot>()
 // who flies each cell: rt_control.py's /api/pilots (the venue's heat manager), every 5 s; nothing when it is not there
-let names: { cells?: Record<string, string>; heat?: string; cls?: string } = {}
+let names: { cells?: Record<string, string>; heat?: string; cls?: string; stale?: boolean } = {}
 let namesErr = ''
 const pollNames = () => fetch('/api/pilots').then(r => { if (r.status === 404) { clearInterval(namesTimer); throw new Error('no /api/pilots here') } if (!r.ok) throw new Error(String(r.status)); return r.json() })
-  .then(j => { names = j ?? {}; namesErr = '' }).catch(e => { if (String(e) !== namesErr) console.warn('pilot names:', e); namesErr = String(e); names = {} })
+  .then(j => { names = j ?? {}; namesErr = '' }).catch(e => { if (String(e) !== namesErr) console.warn('pilot names:', e); namesErr = String(e); names = { ...names, stale: true } })   // keep the last names: colours stay put
 const namesTimer = REPLAY ? 0 : setInterval(pollNames, 5000); if (!REPLAY) pollNames()
 // a flag beside each name, as mgp.ts': the heat manager gives names only, so the country is guessed from the name - kana or
 // kanji: JP; a Korean family name among the romanized words: KR - unless <data>/countries.json ({name: ISO-2}) says
@@ -430,7 +431,7 @@ app.on('update', (dt: number) => {
   }
   if (best) { stateEl.textContent = ['', 'LOST', 'HOLD', 'TRACKING'][best]; stateEl.className = ['', '', 'hold', 'ok'][best] }
   else if (REPLAY && rp?.live) { stateEl.textContent = 'NO ANSWER YET'; stateEl.className = '' }
-  info.replaceChildren(document.createTextNode(names.heat ? `Heat ${names.heat} ${names.cls ?? ''}` : ''), ...(names.heat ? rows : rows.slice(1)))
+  info.replaceChildren(document.createTextNode(names.heat ? `Heat ${names.heat} ${names.cls ?? ''}${names.stale ? '  (names stale)' : ''}` : ''), ...(names.heat ? rows : rows.slice(1)))
 })
 app.start()
 

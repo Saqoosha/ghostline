@@ -52,16 +52,15 @@ L = (X - mu) @ B.T; lg = np.percentile(L[:, 1], 5)
 best = []
 for s in np.exp(np.linspace(np.log(S_LO), np.log(S_HI), 36)):
     for yaw in np.radians(np.arange(0, 360, 2)):
-        for _ in (0,):                                 # (no mirror search: the assert on det(B) keeps the frame right-handed)
-            c, si = np.cos(yaw), np.sin(yaw); Ry = np.array([[c, 0, si], [0, 1, 0], [-si, 0, c]])
-            P = s * (L @ Ry.T); P[:, 1] -= s * lg - og      # ground to the old ground
-            G = tallmap(P, og, np.array([-N / 2 * CELL, -N / 2 * CELL]), N)
-            if G.sum() == 0: continue
-            cc = np.fft.irfft2(F_old * np.conj(np.fft.rfft2(G - G.mean())), s=(N, N))
-            j, i = np.unravel_index(np.argmax(cc), cc.shape)
-            score = cc[j, i] / (np.linalg.norm(G - G.mean()) * np.linalg.norm(G_old - G_old.mean()))
-            di, dj = (i if i < N // 2 else i - N), (j if j < N // 2 else j - N)
-            best.append((score, s, yaw, di * CELL + olo[0] + N / 2 * CELL, dj * CELL + olo[1] + N / 2 * CELL))
+        c, si = np.cos(yaw), np.sin(yaw); Ry = np.array([[c, 0, si], [0, 1, 0], [-si, 0, c]])
+        P = s * (L @ Ry.T); P[:, 1] -= s * lg - og      # ground to the old ground
+        G = tallmap(P, og, np.array([-N / 2 * CELL, -N / 2 * CELL]), N)
+        if G.sum() == 0: continue
+        cc = np.fft.irfft2(F_old * np.conj(np.fft.rfft2(G - G.mean())), s=(N, N))
+        j, i = np.unravel_index(np.argmax(cc), cc.shape)
+        score = cc[j, i] / (np.linalg.norm(G - G.mean()) * np.linalg.norm(G_old - G_old.mean()))
+        di, dj = (i if i < N // 2 else i - N), (j if j < N // 2 else j - N)
+        best.append((score, s, yaw, di * CELL + olo[0] + N / 2 * CELL, dj * CELL + olo[1] + N / 2 * CELL))
 best.sort(key=lambda r: -r[0])
 for r in best[:8]: print(f"score {r[0]:.3f} scale {r[1]:.2f} yaw {np.degrees(r[2]):.0f} shift {r[3]:.1f},{r[4]:.1f}")
 score, s, yaw, tx, tz = best[0]

@@ -355,8 +355,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if "\0" in rel: return self.send(404, dict(error="not found"))
             path = os.path.realpath(f"{HERE}/view/{rel}")   # symlinks out of view/ are refused too
             if not path.startswith(os.path.realpath(HERE + "/view") + os.sep) or not os.path.isfile(path): return self.send(404, dict(error="not found"))
-            try: self.send_file(path, mimetypes.guess_type(path)[0] or "application/octet-stream")
-            except FileNotFoundError: self.send(404, dict(error="not found"))   # replaced while being sent
+            self.send_file(path, mimetypes.guess_type(path)[0] or "application/octet-stream")
         elif u.path == "/api/preview.jpg":
             jpg = preview.get(q.get("source", "").strip()[:80])
             if jpg: self.send(200, jpg, "image/jpeg")

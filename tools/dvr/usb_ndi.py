@@ -13,7 +13,8 @@ cap.set(cv2.CAP_PROP_FPS, 60); cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 if not cap.isOpened(): sys.exit(f"cannot open {dev}")
 w, h, fps = cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT), cap.get(cv2.CAP_PROP_FPS)
 print(f"{dev}: {w:.0f}x{h:.0f} {fps:g} fps -> NDI '{name}'", flush=True)
-if (w, h) != (1920, 1080) or fps < 50: sys.exit(f"{dev} gave {w:.0f}x{h:.0f} {fps:g} fps, not MJPEG 1920x1080 60")   # the service restarts and the journal says why
+if (w, h) != (1920, 1080): sys.exit(f"{dev} gave {w:.0f}x{h:.0f}, not 1920x1080")   # the service restarts and the journal says why
+if fps < 50: print(f"{dev}: the driver says {fps:g} fps (60 asked); some report a nominal rate, check the arrival rate", flush=True)
 vf = VideoSendFrame(); vf.set_resolution(1920, 1080); vf.set_frame_rate(Fraction(60, 1)); vf.set_fourcc(FourCC.BGRX)
 s = Sender(name, clock_video=False); s.set_video_frame(vf)   # the capture sets the pace
 buf = np.empty((1080, 1920, 4), np.uint8); buf[..., 3] = 255; t0 = time.time(); n = 0

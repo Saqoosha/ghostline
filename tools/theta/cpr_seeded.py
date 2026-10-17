@@ -3,13 +3,13 @@ coarse similarity (shape_align.py): render at that pose (and +-25 deg yaw), MASt
 scene, renderer and solver by running its source up to the frames section.
   cpr_seeded.py <old.ply> <pin-s8.mp4> <scan_cameras.json> <sparse dir> <lens prefix v134/cam1> <coarse.json> <out.jsonl> [every]
 Run it in the folder that holds cpr_track.py (tools/dvr, or ~/rt on rt4090). The video's .json is fish2pin.py's with "stride" (8 for
-every 8th frame of the lens video, as the SfM frames) added."""
+every 8th frame of the lens video, as the SfM frames) added; without it every frame is taken as the SfM's."""
 import sys, json, struct, math, numpy as np
 ply, video, scan_json, sparse, prefix, coarse, out = sys.argv[1:8]; EVERY = int(sys.argv[8]) if len(sys.argv) > 8 else 10
 src = open("cpr_track.py").read(); src = src[:src.index("# ---- frames")]
 sys.argv = [sys.argv[0], ply, video, scan_json, "/tmp/cpr_seeded_scratch"]; exec(src)
 qvalid[:] = True                                   # cpr_track masks the HDZero OSD through the DVR fisheye; not here
-cam = json.load(open(video + ".json")); stride, roll = cam["stride"], math.radians(cam["roll_deg"])
+cam = json.load(open(video + ".json")); stride, roll = cam.get("stride", 1), math.radians(cam["roll_deg"])
 Rz = np.array([[math.cos(roll), -math.sin(roll), 0], [math.sin(roll), math.cos(roll), 0], [0, 0, 1]])
 co = json.load(open(coarse)); S, RS, tS = co["scale"], np.array(co["R"]), np.array(co["t"])
 pose = {}
@@ -43,3 +43,4 @@ while True:
     fo.write(json.dumps(row) + "\n"); fo.flush(); good += bool(r and r[0]["inliers"] >= 100)
     print(f"#{j * stride} inl {r[0]['inliers'] if r else None} dpos {d if d is None else round(d, 2)}", flush=True)
 print(f"done: {good}/{tried} with >= 100 inliers")
+if not tried: sys.exit(f"no frame of {video} is in the SfM under {prefix}/: is \"stride\" in its .json right?")
