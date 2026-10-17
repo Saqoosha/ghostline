@@ -1,5 +1,7 @@
 #!/bin/bash
-# rt4090: trained splats -> the old scan's frame (align/fine.json, sim_align.py) -> the live tracker's keyframe map.
+# rt4090: trained splats -> the old scan's frame (align/fine.json: the chosen sim_align.py output, align/fine68.json on 2026-10-17)
+# -> the live tracker's keyframe map. Needs VDGS tools/fit_transform.py and splat_sh.py copied into <work dir>, a python with
+# numpy and plyfile as $HOME/m3env (any env with them; m3env was removed after 2026-10-17), and align/map_poses.json (mapposes.py).
 #   theta_post.sh <work dir> <name> [ckpt dir]   (default: the newest checkpoint of scene/out/model0)
 #   writes ~/scenes/<name>-s<step>.ply and ~/rt/map_<name>-s<step>.npz
 set -euo pipefail

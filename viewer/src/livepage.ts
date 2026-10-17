@@ -1,14 +1,16 @@
 // The live page: the tracker's answers as they are solved (rt_track.py PUSH, server-sent events), drawn on the scan.
-//   ?data=<flight folder>   its index.json gives the scene and where the camera starts ("scene", "orbit"), and for a
-//                           scanned room the room ("room", occlude.ts): the near walls are then hidden from outside
-//   ?feed=http://host:port  the tracker's PUSH port
-//   ?stream=<name>          only this cell of the feed (rt_track.py's output name, e.g. F1); default every cell, each a pilot as on mgp.html
+//   ?data=<flight folder>   its index.json gives the scene and where the camera starts ("scene", "orbit"), the course line
+//                           ("track": a race.json-like {"track": [[x, y, z], ...]}: the dashed line, and the orbit turns round its
+//                           middle), and for a scanned room the room ("room", occlude.ts). <data>/countries.json ({name: ISO-2}) overrides the flags
+//   ?feed=http://host:port  the tracker's PUSH port (default: this page's host, :8765 - right when rt_control.py serves it at /view/)
+//   ?stream=<name>          only this cell of the feed (rt_track.py's output name, e.g. F1); default every cell, each a pilot
+// The look follows the MGP page (viewer/mgp.html, src/mgp.ts, on the branch reconstruct-mgp-qualifier-tracks): "as mgp.ts" below points there.
 //   ?cam=<regex>            the capture device shown as the live image (its label; default the Guermok USB capture)
 //   ?replay=<name>          a recorded flight instead of the feed: <data>/rec/<name>.json (the feed's rows, as an array)
 //                           and <name>.mp4 if it is there (what the sender sent). Each answer shows up when it did live
 //                           (its frame's time plus the tracker's latency), so the sliders can be tried on the same flight.
 //   ?from=30&to=175         the part of the recording that is played (seconds); it loops
-// The camera view and the sliders are remembered in this browser (localStorage), so the view left is the view found.
+// The sliders and the Free camera's view are remembered in this browser (localStorage); the page always opens on Orbit.
 // The dot and the trail are live.ts': the dot 100 ms late, fitted between the answers around it; the trail refitted as
 // answers arrive (the dot's delay is the slider's, 100 ms to start with). The clock is the tracker's (when each frame reached it), and "now" is the newest time on it that an
 // answer could have arrived for, taken from the fastest recent answer (so a slow answer shows as lag, not as time).
@@ -18,7 +20,7 @@ import { RoomOcclusion } from './occlude'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const QS = new URLSearchParams(location.search)
-const DATA = import.meta.env.BASE_URL + (QS.get('data') ?? 'data') + '/'
+const DATA = import.meta.env.BASE_URL + (/^[\w.-]+$/.test(QS.get('data') ?? '') ? QS.get('data') : 'data') + '/'   // a folder name only: never another site
 const FEED = QS.get('feed') ?? `http://${location.hostname}:8765`   // served by rt_control.py (/view/): its tracker's PUSH
 const REPLAY = QS.get('replay')
 const ONLY = QS.get('stream')                     // one cell (rt_track.py's output name) to draw; unset: every cell on the feed
@@ -34,7 +36,7 @@ const cam = new pc.Entity('cam')
 cam.addComponent('camera', { clearColor: new pc.Color(0.91, 0.92, 0.94), fov: 60, nearClip: 0.1, farClip: 500 })
 app.root.addChild(cam)
 
-// --- orbit (drag: orbit, shift or right drag: pan, wheel: dolly), as the viewer's
+// --- Free mode: drag orbits, shift or right drag pans, the wheel dollies (as the viewer's). The other modes: drag turns and tilts, the wheel zooms
 const orbit = { target: new pc.Vec3(0, 1, 0), yaw: 0, pitch: -45, dist: 12 }, tmpV = new pc.Vec3()
 let drag: { x: number; y: number; btn: number } | null = null
 canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, btn: e.button }; canvas.setPointerCapture(e.pointerId) })
@@ -128,16 +130,18 @@ function cameraAt(t: number, dt: number) {
 }
 
 // --- scene
-fetch(DATA + 'index.json').then(r => r.json()).then(ix => {
+const fail = (what: string) => (e: unknown) => { console.error(what, e); stateEl.textContent = 'NO ' + what.toUpperCase(); stateEl.className = '' }
+const json = (url: string) => fetch(url).then(r => { if (!r.ok) throw new Error(`${url}: ${r.status}`); return r.json() })
+json(DATA + 'index.json').then(ix => {
   setView(stored.orbit ?? ix.orbit ?? {})               // the view this browser left, else the flight's own start
   if (ix.orbit?.target) { home.target.set(ix.orbit.target[0], ix.orbit.target[1], ix.orbit.target[2]); home.dist = ix.orbit.dist ?? home.dist; orb.init = false }
-  if (ix.track) fetch(DATA + ix.track).then(r => r.json()).then(j => {   // the course's middle (its bounds' centre, at its median height) becomes the orbit's
+  if (ix.track) json(DATA + ix.track).then(j => {   // the course's middle (its bounds' centre, at its median height) becomes the orbit's
     const t: number[][] = j.track; if (!t?.length) return
     course = t.filter((_, k) => k % 8 === 0).map(q => new pc.Vec3(q[0], q[1], q[2]))
     line = t.map(q => new pc.Vec3(q[0], q[1], q[2])); lineS = [0]; for (let k = 1; k < line.length; k++) lineS.push(lineS[k - 1] + line[k].distance(line[k - 1]))
     const mid = (k: number) => { const v = t.map(q => q[k]); return (Math.min(...v) + Math.max(...v)) / 2 }, ys = t.map(q => q[1]).sort((a, b) => a - b)
     home.target.set(mid(0), ys[ys.length >> 1], mid(2)); orb.init = false
-  }).catch(() => {})
+  }).catch(e => console.error('course line', e))     // the page still works: no line, and the orbit turns round the pilots
   $('resetview').onclick = () => { setView(ix.orbit ?? {}); keepView(); Object.assign(view, { yawOffset: 30, topYaw: 0, pitch: PITCH0, zoom: 1 }); orb.init = false; setMode('orbit') }
   const a = new pc.Asset(ix.scene, 'gsplat', { url: `${DATA}scene/${ix.scene}.sog` })
   app.assets.add(a); a.on('load', () => {
@@ -147,14 +151,14 @@ fetch(DATA + 'index.json').then(r => r.json()).then(ix => {
       occ = new RoomOcclusion(e.gsplat!, ix.room); occ.enabled = box.checked
       box.onchange = () => { occ!.enabled = box.checked; store({ seein: box.checked }) }
     }
-  }); app.assets.load(a)
-})
+  }); a.on('error', fail('scene')); app.assets.load(a)
+}).catch(fail('index.json'))
 let occ: RoomOcclusion | null = null                   // the scene entity sits at the origin: the camera's position is in its frame
 
 
 // --- the pilots: one per cell of the feed (rt_track.py's "stream"), drawn as the MGP page draws them (mgp.ts): a small sphere,
 // a trail in the pilot's colour that thins and fades to its old end, and a name tag. Each keeps its own answers and its own clock.
-const PALETTE = ['#ff3b30', '#34c759', '#0a84ff', '#ff9f0a']   // the race page's three, then orange
+const PALETTE = ['#ff3b30', '#34c759', '#0a84ff', '#ff9f0a']   // the FDF semifinal race.json's three, then orange
 const hex = (h: string) => new pc.Color(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255)
 const cHold = new pc.Color(0.85, 0.55, 0.05), cLost = new pc.Color(0.55, 0.57, 0.6)
 
@@ -232,9 +236,12 @@ class Pilot {
   base = 0; trailFrom = 0; resmooth = true; state = 0; fwd = new pc.Vec3(0, 0, -1); prev: pc.Vec3 | null = null   // state: 1 lost, 2 hold, 3 tracking; fwd: the level heading, for follow
   offs: number[][] = []; got: number[] = []                     // (local, local - tau) of recent answers; arrival times, for the rate
   byFrame = new Map<number, Stored>()                            // the tracker's frame number -> the answer
-  col: pc.Color; mat = new pc.StandardMaterial(); dot = new pc.Entity('dot'); trail = trailMesh(); tag = document.createElement('div')
-  constructor(public name: string, public color: string) {
-    this.col = hex(color); const m = this.mat; m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.emissive = this.col; m.depthWrite = true; m.depthTest = true; m.update()
+  mat = new pc.StandardMaterial(); dot = new pc.Entity('dot'); trail = trailMesh(); tag = document.createElement('div')
+  // the colour follows the cell's place in the heat manager's list (the config's order), so every viewer sees the same; arrival order without it
+  get color() { const k = names.cells ? Object.keys(names.cells).indexOf(this.name) : -1; return PALETTE[(k >= 0 ? k : this.seq) % PALETTE.length] }
+  get col() { return hex(this.color) }
+  constructor(public name: string, public seq: number) {
+    const m = this.mat; m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.emissive = this.col; m.depthWrite = true; m.depthTest = true; m.update()
     this.dot.addComponent('render', { type: 'sphere', material: m, castShadows: false })   // opaque with depth, as mgp.ts': behind what stands in front of it
     this.dot.setLocalScale(0.12, 0.12, 0.12); this.dot.enabled = false; app.root.addChild(this.dot)
     this.tag.className = 'tag'; this.tag.style.display = 'none'; document.body.appendChild(this.tag)
@@ -248,16 +255,19 @@ class Pilot {
 const pilots = new Map<string, Pilot>()
 // who flies each cell: rt_control.py's /api/pilots (the venue's heat manager), every 5 s; nothing when it is not there
 let names: { cells?: Record<string, string>; heat?: string; cls?: string } = {}
-const pollNames = () => fetch('/api/pilots').then(r => r.ok ? r.json() : {}).then(j => { names = j ?? {} }).catch(() => { names = {} })
-if (!REPLAY) { pollNames(); setInterval(pollNames, 5000) }
+let namesErr = ''
+const pollNames = () => fetch('/api/pilots').then(r => { if (r.status === 404) { clearInterval(namesTimer); throw new Error('no /api/pilots here') } if (!r.ok) throw new Error(String(r.status)); return r.json() })
+  .then(j => { names = j ?? {}; namesErr = '' }).catch(e => { if (String(e) !== namesErr) console.warn('pilot names:', e); namesErr = String(e); names = {} })
+const namesTimer = REPLAY ? 0 : setInterval(pollNames, 5000); if (!REPLAY) pollNames()
 // a flag beside each name, as mgp.ts': the heat manager gives names only, so the country is guessed from the name - kana or
 // kanji: JP; a Korean family name among the romanized words: KR - unless <data>/countries.json ({name: ISO-2}) says
-const KR = new Set('kim lee yi park choi jung jeong kang cho jo yoon yun jang lim im han oh seo shin kwon hwang ahn an song yoo yu hong jeon ko go moon yang son bae baek heo nam noh ha kwak sung cha joo woo min ryu na jin ji uhm chae won byun bang yeo pyo myung'.split(' '))
+// (not the ones that are also romanized Japanese or English: yu, ko, go, jin, han, jo, an, min, son, ha, na, ji, im)
+const KR = new Set('kim lee yi park choi jung jeong kang cho yoon yun jang lim oh seo shin kwon hwang ahn song yoo hong jeon moon yang bae baek heo nam noh kwak sung cha joo woo ryu uhm chae won byun bang yeo pyo myung'.split(' '))
 let countries: Record<string, string> = {}
-fetch(DATA + 'countries.json').then(r => r.ok ? r.json() : {}).then(j => { countries = j ?? {} }).catch(() => {})
-const country = (name: string) => countries[name] ?? (/[\u3040-\u30ff\u4e00-\u9fff]/.test(name) ? 'JP' : name.toLowerCase().split(/[\s-]+/).some(w => KR.has(w)) ? 'KR' : '')
+fetch(DATA + 'countries.json').then(r => r.ok ? r.json() : {}).then(j => { countries = j ?? {} }).catch(e => console.warn('countries.json', e))   // optional
+const country = (name: string) => (Object.hasOwn(countries, name) ? countries[name] : null) ?? (/[\u3040-\u30ff\u4e00-\u9fff]/.test(name) ? 'JP' : name.toLowerCase().split(/[\s-]+/).some(w => KR.has(w)) ? 'KR' : '')
 const flagOf = (cc: string) => /^[A-Z]{2}$/.test(cc) ? String.fromCodePoint(...[...cc].map(c => 0x1f1e6 + c.charCodeAt(0) - 65)) : ''
-const pilot = (name: string) => { let p = pilots.get(name); if (!p) { p = new Pilot(name, PALETTE[pilots.size % PALETTE.length]); pilots.set(name, p) } return p }
+const pilot = (name: string) => { let p = pilots.get(name); if (!p) { p = new Pilot(name, pilots.size); pilots.set(name, p) } return p }
 const resmoothAll = () => { for (const p of pilots.values()) p.resmooth = true }   // fit the visible trails again from the answers
 
 const dur = $<HTMLInputElement>('dur'); if (stored.trail) dur.value = String(stored.trail)
@@ -275,7 +285,7 @@ const showDelay = () => { $('delayv').textContent = delayIn.value.padStart(3) + 
 delayIn.oninput = () => { showDelay(); store({ delay: Number(delayIn.value) }) }
 
 // --- the live image: the capture device itself, read by the browser (it is on this machine; the tracker gets the same
-// frames over SRT). Raw and undelayed, so it runs ahead of the dot by the tracker's latency plus the dot's delay.
+// frames over SRT or NDI). Raw and undelayed, so it runs ahead of the dot by the tracker's latency plus the dot's delay.
 async function startVideo() {
   const video = $<HTMLVideoElement>('video'), note = $('dvrinfo'), want = new RegExp(QS.get('cam') ?? 'Guermok|USB3 Video', 'i')
   try {
@@ -300,14 +310,17 @@ const nowS = () => performance.now() / 1000
 function connect() {
   const es = new EventSource(FEED)
   es.onopen = () => { for (const p of pilots.values()) p.reset(); stateEl.textContent = 'WAITING'; stateEl.className = 'hold' }
-  es.onerror = () => { stateEl.textContent = 'NO FEED'; stateEl.className = '' }   // EventSource retries by itself
+  es.onerror = () => {                               // EventSource retries a dropped connection itself, but not a refused or failed one
+    stateEl.textContent = 'NO FEED'; stateEl.className = ''
+    if (es.readyState === EventSource.CLOSED) setTimeout(connect, 3000)
+  }
   es.onmessage = ev => {
     // The stream's clock is the tracker's: an answer's frame arrived there at done - lat. Counting frames instead
     // (i / fps) runs slow against real time - the capture delivers 59.2 fps, not 60 - and the page's "now" then creeps
     // ahead of the newest answer until everything reads as lost. Frames are numbered on that clock (tau * fps).
     const m = JSON.parse(ev.data), name = m.stream ?? 'feed'
     if (ONLY && name !== ONLY) return
-    const p = pilot(name), t = nowS(); p.lastMsg = t; p.fps = m.fps
+    const p = pilot(name), t = nowS(); p.lastMsg = t; p.fps = m.fps || p.fps
     const tau = m.done - (m.lat ?? 0) / 1000, fi = Math.round(tau * p.fps)
     if (tau < p.lastTau - 1) p.reset()                // the tracker started again
     p.lastTau = tau
@@ -378,11 +391,11 @@ app.on('update', (dt: number) => {
     const n = upTo(rt), last = n ? (live.byDone[n - 1] as any) : null
     replayRate = (n - upTo(rt - 2)) / 2; rp.lastLat = last?.lat ?? 0; rp.lastInl = last?.inl ?? 0; rp.lastMsg = t
   }
+  drawLine(eye)
   // a new dither pattern every frame, so the thinned-out end shimmers into a fade instead of showing fixed dots (the
   // engine only moves the pattern for a jittered camera, i.e. with TAA)
-  drawLine(eye)
   trailMat.setParameter('blueNoiseJitter', [Math.random(), Math.random(), Math.random(), Math.random()])
-  const rows: Node[] = []; let best = 0                    // 1 lost, 2 hold, 3 tracking. Text nodes only: names come from the feed and the heat manager
+  const rows: Node[] = []; let best = 0                    // 1 lost, 2 hold, 3 tracking. No innerHTML: names (from the feed and the heat manager) go in as textContent only
   for (const p of pilots.values()) {
     while (p.got.length && p.got[0] < t - 2) p.got.shift()
     const live = p.live
@@ -407,12 +420,12 @@ app.on('update', (dt: number) => {
     if (p.resmooth) { live.trail = new Array(Math.max(0, from)).fill(null); live.trailT = -1; p.resmooth = false }   // only what is drawn is fitted again
     const tr = live.trailAt(ts, d.frame, Math.max(0.5, 2 * ws))   // a point settles once the answers after it are all in
     drawTrail(p.trail, tr.slice(from), state === 1 ? cLost : p.col, eye, pxWorld)
-    // the name tag, as the race page's: over the sphere on screen, hidden when the pilot is behind the camera
+    // the name tag, as mgp.ts': over the sphere on screen, hidden when the pilot is behind the camera
     tmpD.set(d.pos[0], d.pos[1], d.pos[2]); const s = cam.camera!.worldToScreen(tmpD, tmpS), behind = cam.forward.dot(tmpD.sub(eye)) < 0
     p.tag.style.display = behind ? 'none' : ''; p.tag.style.left = s.x + 'px'; p.tag.style.top = s.y + 'px'; const b = document.createElement('b'); b.style.background = state === 1 ? '#8c9199' : p.color; b.textContent = p.name   // as mgp.ts: a dark tag, the pilot's colour at its left
-    const who = names.cells?.[p.name] ?? '', sm = document.createElement('small'); sm.textContent = stale ? 'NO ANSWERS' : state === 1 ? 'LOST' : ''
+    const who = names.cells && Object.hasOwn(names.cells, p.name) ? String(names.cells[p.name]) : '', sm = document.createElement('small'); sm.textContent = stale ? 'NO ANSWERS' : state === 1 ? 'LOST' : ''
     p.tag.replaceChildren(b, ...(who ? [Object.assign(document.createElement('span'), { className: 'who', textContent: (flagOf(country(who)) + ' ' + who).trim() })] : []), ...(sm.textContent ? [sm] : []))
-    const nm = names.cells?.[p.name] ?? '', dotS = Object.assign(document.createElement('span'), { textContent: '●' }); dotS.style.color = p.color
+    const nm = names.cells && Object.hasOwn(names.cells, p.name) ? String(names.cells[p.name]) : '', dotS = Object.assign(document.createElement('span'), { textContent: '●' }); dotS.style.color = p.color
     rows.push(document.createTextNode('\n'), dotS, document.createTextNode(` ${p.name.padEnd(4)} ${nm ? (flagOf(country(nm)) + ' ' + nm).trim() + '  ' : ''}${rate.toFixed(0).padStart(2)} Hz  ${p.lastLat.toFixed(0).padStart(3)} ms  ${String(p.lastInl).padStart(4)} inl  h ${d.pos[1].toFixed(2)} m`))
   }
   if (best) { stateEl.textContent = ['', 'LOST', 'HOLD', 'TRACKING'][best]; stateEl.className = ['', '', 'hold', 'ok'][best] }

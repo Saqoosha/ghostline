@@ -34,7 +34,13 @@ MIN_INL, GAP, MIN_LEN, NEAR, FPS = E("MIN_INL", 80), E("GAP", 0.5), E("MIN_LEN",
 out, files = sys.argv[1], sys.argv[2:]
 flights = []
 for f in files:
-    rows = sorted((r["done"], r["pos"]) for r in map(json.loads, open(f)) if "pos" in r and r.get("inl", 0) >= MIN_INL)
+    rows, bad = [], 0
+    for line in open(f):                        # a live file can end in half a line
+        try: r = json.loads(line)
+        except ValueError: bad += 1; continue
+        if "pos" in r and "done" in r and r.get("inl", 0) >= MIN_INL: rows.append((r["done"], r["pos"]))
+    rows.sort()
+    if bad: print(f"{f}: {bad} unreadable lines skipped")
     if not rows: continue
     t = np.array([r[0] for r in rows]); P = np.array([r[1] for r in rows]); cut = np.where(np.diff(t) > GAP)[0] + 1
     for a, b in zip(np.r_[0, cut], np.r_[cut, len(t)]):

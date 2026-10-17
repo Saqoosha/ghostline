@@ -1,13 +1,15 @@
 """Place chosen frames of a 1-in-STRIDE pinhole video on the old scan, starting from today's SfM pose carried over by a
 coarse similarity (shape_align.py): render at that pose (and +-25 deg yaw), MASt3R match, PnP. Reuses cpr_track.py's
 scene, renderer and solver by running its source up to the frames section.
-  cpr_seeded.py <old.ply> <pin-s8.mp4> <scan_cameras.json> <sparse dir> <lens prefix v134/cam1> <coarse.json> <out.jsonl> [every]"""
+  cpr_seeded.py <old.ply> <pin-s8.mp4> <scan_cameras.json> <sparse dir> <lens prefix v134/cam1> <coarse.json> <out.jsonl> [every]
+Run it in the folder that holds cpr_track.py (tools/dvr, or ~/rt on rt4090). The video's .json is fish2pin.py's with "stride" (8 for
+every 8th frame of the lens video, as the SfM frames) added."""
 import sys, json, struct, math, numpy as np
 ply, video, scan_json, sparse, prefix, coarse, out = sys.argv[1:8]; EVERY = int(sys.argv[8]) if len(sys.argv) > 8 else 10
 src = open("cpr_track.py").read(); src = src[:src.index("# ---- frames")]
 sys.argv = [sys.argv[0], ply, video, scan_json, "/tmp/cpr_seeded_scratch"]; exec(src)
 qvalid[:] = True                                   # cpr_track masks the HDZero OSD through the DVR fisheye; not here
-cam = json.load(open(video + ".json")); stride, roll = cam.get("stride", 1), math.radians(cam["roll_deg"])
+cam = json.load(open(video + ".json")); stride, roll = cam["stride"], math.radians(cam["roll_deg"])
 Rz = np.array([[math.cos(roll), -math.sin(roll), 0], [math.sin(roll), math.cos(roll), 0], [0, 0, 1]])
 co = json.load(open(coarse)); S, RS, tS = co["scale"], np.array(co["R"]), np.array(co["t"])
 pose = {}

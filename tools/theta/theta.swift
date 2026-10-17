@@ -6,12 +6,13 @@ import ImageCaptureCore
 
 let args = CommandLine.arguments
 let mode = args.count > 1 ? args[1] : "list"
+if mode == "get" && args.count < 4 { print("usage: theta get <out dir> <name> ..."); exit(2) }
 let outDir = mode == "get" ? URL(fileURLWithPath: args[2]) : nil
 let wanted = mode == "get" ? Set(args.dropFirst(3)) : []
 
 final class D: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate, ICCameraDeviceDownloadDelegate {
     var cam: ICCameraDevice?
-    var pending = 0
+    var pending = 0, failed = 0
     func deviceBrowser(_ b: ICDeviceBrowser, didAdd d: ICDevice, moreComing: Bool) {
         guard cam == nil, let c = d as? ICCameraDevice else { return }
         cam = c; c.delegate = self; c.requestOpenSession()
@@ -37,7 +38,8 @@ final class D: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate, ICCame
             exit(0)
         }
         let todo = files.filter { wanted.contains($0.name ?? "") }
-        if todo.isEmpty { print("nothing matched"); exit(1) }
+        let missing = wanted.subtracting(todo.compactMap { $0.name })
+        if !missing.isEmpty { print("not on the camera: \(missing.sorted().joined(separator: " "))"); exit(1) }
         pending = todo.count
         for x in todo {
             c.requestDownloadFile(x, options: [.downloadsDirectoryURL: outDir!, .overwrite: true],
@@ -46,7 +48,8 @@ final class D: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate, ICCame
     }
     @objc func didDownload(_ file: ICCameraFile, error: Error?, options: [String: Any] = [:], contextInfo: UnsafeMutableRawPointer?) {
         print(error == nil ? "got \(file.name ?? "?")" : "fail \(file.name ?? "?"): \(error!)")
-        pending -= 1; if pending == 0 { exit(error == nil ? 0 : 1) }
+        if error != nil { failed += 1 }
+        pending -= 1; if pending == 0 { exit(failed == 0 ? 0 : 1) }
     }
 }
 

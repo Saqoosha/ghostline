@@ -52,7 +52,7 @@ L = (X - mu) @ B.T; lg = np.percentile(L[:, 1], 5)
 best = []
 for s in np.exp(np.linspace(np.log(S_LO), np.log(S_HI), 36)):
     for yaw in np.radians(np.arange(0, 360, 2)):
-        for flip in (1,):
+        for _ in (0,):                                 # (no mirror search: the assert on det(B) keeps the frame right-handed)
             c, si = np.cos(yaw), np.sin(yaw); Ry = np.array([[c, 0, si], [0, 1, 0], [-si, 0, c]])
             P = s * (L @ Ry.T); P[:, 1] -= s * lg - og      # ground to the old ground
             G = tallmap(P, og, np.array([-N / 2 * CELL, -N / 2 * CELL]), N)

@@ -6,7 +6,10 @@ shows the source's picture: its low-bandwidth stream, two JPEGs a second, receiv
 Beside all that, every NDI source is recorded while any cell of its grid shows a picture (rt_rec.py), tracker or not; /rec lists the files.
 usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080, the top view alone at /obs
 env: PORT (8080), PUSH (8765: the tracker's answers, also what viewer/live.html reads), ENG (eng_linux),
-     REC, REC_* (rt_rec.py), CONF (~/.ghostline-control.json: the last start, shown again when the page opens), VIEW (~/.ghostline-view.json: the trails' delay and smoothing)
+     REC, REC_* (rt_rec.py), CONF (~/.ghostline-control.json: the last start, shown again when the page opens), VIEW (~/.ghostline-view.json: the trails' delay and smoothing),
+     PILOTS_URL (unset: no names; the venue heat manager's current_pilots, e.g. http://192.168.3.20:8001/current_pilots at FDF)
+routes beside the page: /api/state, /rec (recordings), /obs (top view for OBS), /view/ (the 3D live page, viewer/live.html built with VITE_BASE=/view/,
+     and its data folders in view/), /api/pilots (the pilot per cell, from the heat manager)
 No login: whoever reaches the port can start and stop the tracker. Keep it on the venue LAN / Tailscale."""
 import collections, glob, http.server, json, mimetypes, os, re, signal, subprocess, sys, threading, time, traceback, urllib.parse, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
@@ -110,19 +113,25 @@ def topview(name, scene, line=""):
     threading.Thread(target=run, daemon=True).start()
 
 _opt = [0.0, None]
-PILOTS_URL = E("PILOTS_URL", "http://192.168.3.20:8001/current_pilots")   # the venue's heat manager: [name per channel ..., heat, class]
-_pilots = [0.0, {}]
+PILOTS_URL = E("PILOTS_URL", "")                   # the venue's heat manager: [name per channel ..., heat, class]; a venue address, so no default
+_pilots = [0.0, {}, None]                           # when asked, the last good answer, the last failure (printed once)
+def cell_name(x): return re.sub(r"[^A-Za-z0-9_-]", "", str(x.get("name") or ""))[:24] or str(x.get("cell"))   # as the tracker's stream names
 def pilots():
-    """the current heat's pilot per cell, from the heat manager (asked at most every 3 s): its names come in the cells' order,
-    the order the cells were started in (R2, F1, R4, R5). {} when it cannot be reached; the page then shows the cell names alone."""
-    if time.time() - _pilots[0] > 3:
+    """the current heat's pilot per cell, from the heat manager (asked at most every 3 s). Its list has a name per channel, every
+    channel, an empty one "" (FDF 2026-10-17), in the order of the config's cells (R2, F1, R4, R5 there), then the heat and the class.
+    A failed ask keeps the last good answer, marked stale; {} when there is none, and the page shows the cell names alone."""
+    if PILOTS_URL and time.time() - _pilots[0] > 3:
         _pilots[0] = time.time()
         try:
-            r = json.load(urllib.request.urlopen(PILOTS_URL, timeout=1))
-            cells = [x["name"] for x in ((S["config"] or {}).get("cells") or json.load(open(CONF)).get("cells", [])) if x.get("on")]
-            _pilots[1] = dict(cells=dict(zip(cells, [str(n) for n in r[:len(cells)]])), heat=r[len(cells)] if len(r) > len(cells) else None,
+            with urllib.request.urlopen(PILOTS_URL, timeout=1) as f: r = json.loads(f.read(65536))
+            cells = [cell_name(x) for x in ((S["config"] or {}).get("cells") or json.load(open(CONF)).get("cells", []))]
+            if not isinstance(r, list) or len(r) < len(cells): raise ValueError(f"expected [{len(cells)} names, heat, class], got {str(r)[:80]}")
+            _pilots[1] = dict(cells={c: str(n) if n else "" for c, n in zip(cells, r)}, heat=r[len(cells)] if len(r) > len(cells) else None,
                               cls=r[len(cells) + 1] if len(r) > len(cells) + 1 else None)
-        except Exception: _pilots[1] = {}
+            if _pilots[2]: print("pilots: the heat manager answers again", flush=True); _pilots[2] = None
+        except Exception as e:                      # unreachable (a venue LAN changes), or an answer of another shape
+            if str(e) != _pilots[2]: print(f"pilots: {PILOTS_URL}: {e}", flush=True); _pilots[2] = str(e)
+            if _pilots[1]: _pilots[1] = dict(_pilots[1], stale=True)
     return _pilots[1]
 
 def options():
@@ -164,7 +173,7 @@ def start(c):
     if c.get("track") and c["track"] not in o["tracks"]: raise ValueError("コースの線が見つからない")
     on = [x for x in c.get("cells", []) if x.get("on")]
     if not on: raise ValueError("使うマスが 1 つも無い")
-    names = [re.sub(r"[^A-Za-z0-9_-]", "", str(x.get("name") or ""))[:24] or str(x.get("cell")) for x in on]
+    names = [cell_name(x) for x in on]
     if len(set(names)) < len(names): raise ValueError("マスの名前が重なっている")
     with lock:
         if S["phase"] != "stopped": raise ValueError("もう動いている")
@@ -339,12 +348,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif u.path == "/view" or u.path.startswith("/view/"):   # the 3D page: the viewer's build (VITE_BASE=/view/) and its data folders, in view/
             rel = urllib.parse.unquote(u.path[6:])
             if not rel:                                  # the newest scene folder (view/<name>/index.json)
-                ix = sorted(glob.glob(f"{HERE}/view/*/index.json"), key=os.path.getmtime)
+                ix = sorted(glob.glob(f"{HERE}/view/*/index.json"), key=lambda f: os.stat(f).st_mtime if os.path.exists(f) else 0)
                 if not ix: return self.send(404, dict(error="view/ に index.json のあるフォルダが無い"))
-                self.send_response(302); self.send_header("Location", "/view/live.html?data=" + os.path.basename(os.path.dirname(ix[-1]))); self.send_header("Content-Length", "0"); return self.end_headers()
-            path = os.path.realpath(f"{HERE}/view/{rel}")
+                self.send_response(302); self.send_header("Location", "/view/live.html?data=" + urllib.parse.quote(os.path.basename(os.path.dirname(ix[-1]))))
+                self.send_header("Content-Length", "0"); return self.end_headers()
+            if "\0" in rel: return self.send(404, dict(error="not found"))
+            path = os.path.realpath(f"{HERE}/view/{rel}")   # symlinks out of view/ are refused too
             if not path.startswith(os.path.realpath(HERE + "/view") + os.sep) or not os.path.isfile(path): return self.send(404, dict(error="not found"))
-            self.send_file(path, mimetypes.guess_type(path)[0] or "application/octet-stream")
+            try: self.send_file(path, mimetypes.guess_type(path)[0] or "application/octet-stream")
+            except FileNotFoundError: self.send(404, dict(error="not found"))   # replaced while being sent
         elif u.path == "/api/preview.jpg":
             jpg = preview.get(q.get("source", "").strip()[:80])
             if jpg: self.send(200, jpg, "image/jpeg")

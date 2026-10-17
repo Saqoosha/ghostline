@@ -1,5 +1,6 @@
 """Camera heights above the old scan's ground after the similarity: ground under each camera = 10th pct of y of the
-old splats within 1.5 m (xz). Old scan is y up."""
+old splats within 1.5 m (xz). Old scan is y up.
+  heightcheck.py <old.ply> <sparse dir> <sim.json>"""
 import sys, json, struct, numpy as np
 from plyfile import PlyData; from scipy.spatial import cKDTree
 v = PlyData.read(sys.argv[1])["vertex"].data; v = v[1 / (1 + np.exp(-v["opacity"])) >= 0.3]

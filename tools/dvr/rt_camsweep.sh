@@ -1,6 +1,6 @@
 #!/bin/bash
 # rt_camsweep.sh <start s> <seconds> <cell x:y:w:h> <sx:sy[:k1[:k2[:k3[:k4]]]]> ...: which camera definition fits the pilot in a cell?
-# One stretch of the semifinal grid (~/semi.MOV, 1280x720) from this box over SRT on localhost into the same cell once per variant
+# One stretch of a recorded grid (SRC, default the semifinal ~/semi.MOV at 1280x720) from this box over SRT on localhost into the same cell once per variant
 # (four fit one pass): the fisheye's focal lengths scaled by sx, sy and its distortion coefficients by k1.., from the definition of
 # the Nano 90 with the upgrade lens. No truth is needed: the right definition shows as more inliers, fewer relocalizations and less
 # wobble (distance of an answer from a quadratic through its neighbours). This is how data/dvr/cams/hdzero-nano90-stock-lens.json was found.

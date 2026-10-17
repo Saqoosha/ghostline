@@ -1,4 +1,6 @@
-"""One THETA V lens video (1920x1920 fisheye, split from the dual-fisheye) -> a pinhole video rt_track.py can read.
+"""One THETA V lens video (1920x1920 fisheye, split from the dual-fisheye) -> a level pinhole video for cpr_seeded.py.
+For rt_track.py, replace "source_fisheye" in its .json with the pinhole's own fx / cx / cy and k 0.0: the tracker builds its OSD
+mask from it (docs/fdf-2026-10-17-field-test.ja.md).
   fish2pin.py <lens.mp4> <sparse dir> <camera id> <roll deg> <out.mp4> [hfov 100]
 The fisheye intrinsics come from the SfM (COLMAP cameras.bin, OPENCV_FISHEYE). roll turns the view about the optical
 axis so the ground is at the bottom (THETA V lenses lie on their side). Writes out.mp4 and out.mp4.json."""
@@ -18,9 +20,10 @@ def cameras(path):
     return cams
 
 model, w, h, p = cameras(f"{sparse}/cameras.bin")[cid]
-assert model == 5, f"camera {cid} is model {model}, not OPENCV_FISHEYE"
+if model != 5: sys.exit(f"camera {cid} is model {model}, not OPENCV_FISHEYE")
 fx, fy, cx, cy, k1, k2, k3, k4 = p
 cap = cv2.VideoCapture(src); fps = cap.get(cv2.CAP_PROP_FPS)
+if not cap.isOpened() or not fps: sys.exit(f"cannot read {src}")
 W, H = 960, 720; f = W / 2 / math.tan(math.radians(hfov) / 2)
 u, v = np.meshgrid(np.arange(W) + 0.5 - W / 2, np.arange(H) + 0.5 - H / 2)
 r = math.radians(roll); c, s = math.cos(r), math.sin(r)
@@ -38,7 +41,8 @@ while True:
     ok, im = cap.read()
     if not ok: break
     enc.stdin.write(cv2.remap(im, mx, my, cv2.INTER_LINEAR).tobytes()); n += 1
-enc.stdin.close(); enc.wait()
+enc.stdin.close()
+if enc.wait() or not n: sys.exit(f"{out}: ffmpeg failed or no frames ({n})")
 json.dump(dict(width=W, height=H, fx=f, fy=f, cx=W / 2, cy=H / 2, hfov_deg=hfov, fps=fps, t0=0, roll_deg=roll,
                source_fisheye=dict(fx=fx, fy=fy, cx=cx, cy=cy, k=[k1, k2, k3, k4], size=[w, h])), open(out + ".json", "w"), indent=1)
 print(f"{n} frames, {fps:.3f} fps -> {out}")

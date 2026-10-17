@@ -259,7 +259,7 @@ bash tools/dvr/rt_replay.sh build/dvr/office-whoop-1/rec [名前]      # 録っ�
   判定は PlayCanvas の work buffer modifier で、カメラが動いたときだけ書き直す（動いている間はソートが約 12 ms を占め、差はノイズに埋もれる。M1 Max）
 - **答えはその場で流れる**：`rt_track.py` の `PUSH=<ポート>` が Server-Sent Events で 1 行ずつ出す（`.jsonl` の行＋`stream`・`fps`）。
   ページ（`viewer/src/livepage.ts`）は `live.ts` の描き方（遅らせた内挿、軌跡の当て直し）をそのまま使い、`trail`・`smooth`（当てはめの窓、
-  端に向けて重みを下げる）・`delay` をスライダーで変える。視点とスライダーはブラウザに残る
+  端に向けて重みを下げる）・`delay` をスライダーで変える。スライダーと Free の視点はブラウザに残る（ページは Orbit で開く）
 - **ページの時計は tracker の時刻（`done − lat`）で数える。** フレーム番号 ÷ 60 だと、キャプチャが 59.2 fps のとき 1 秒に 13 ms ずつ先走り、
   追跡できているのに LOST になる
 - **地図は前の飛行の答えから育てられる**：キーフレームは 3DGS を描いた画なので、視点は飛んだあたりにあれば足りる。ライブの答え

@@ -1,5 +1,5 @@
 #!/bin/bash
-# rt4090: a course from THETA V videos -> 3DGS (spirula). Same shape as SkiPlace3DGS stage1/stage3.
+# rt4090: a course from THETA V videos -> 3DGS (spirula). Same steps as the X5 scans of ~/repos/Personal/SkiPlace3DGS (tools/stage1, stage3).
 #   theta_build.sh <work dir>   (THETA MP4s in <work dir>/raw; run under `sudo systemd-run --uid=...`, see docs/fdf-2026-10-17-field-test.ja.md)
 # THETA V video is dual-fisheye side by side (3840x1920, two 1920 circles): split into one video per lens first,
 # then extract both at the same fixed frame indices (--keep 0) so cam0/cam1 pair up as a rig.
@@ -17,14 +17,14 @@ for f in raw/R*.MP4; do
   for t in 0 1; do
     s="split/$n-cam$t.mp4"; d="scene/images/$n/cam$t"; m="scene/masks/$n/cam$t"
     [ -f "$d/.done" ] && continue
-    [ -f "$s" ] || ffmpeg -nostdin -hide_banner -loglevel error -i "$f" -an -vf "crop=1920:1920:$((t * 1920)):0" \
-      -c:v h264_nvenc -preset p5 -cq 16 -y "$s"
+    [ -f "$s" ] || { ffmpeg -nostdin -hide_banner -loglevel error -i "$f" -an -vf "crop=1920:1920:$((t * 1920)):0" \
+      -c:v h264_nvenc -preset p5 -cq 16 -f mp4 -y "$s.tmp" && mv "$s.tmp" "$s"; }   # never keep half a split
     rm -rf "$d" "$m"
     echo "-- $n cam$t $(date +%T)"
     "$SP" sam extract "$s" -o "$d" --skip 8 --keep 0 \
       --model "$MODEL" --text "$TEXT" --mask-mode image --mask-out "$m" > "logs/extract-$n-cam$t.log" 2>&1
     "$SP" sam mask "$d" --out "$m" --shape "ellipse 0.5,0.5,0.48,0.48" > "logs/mask-$n-cam$t.log" 2>&1
-    [ "$(ls "$d"/*.jpg | wc -l)" = "$(ls "$m"/*.png | wc -l)" ] || { echo "mask count mismatch $d"; exit 1; }
+    nj=$(find "$d" -name "*.jpg" | wc -l); [ "$nj" -gt 0 ] && [ "$nj" = "$(find "$m" -name "*.png" | wc -l)" ] || { echo "no frames, or masks do not match: $d"; exit 1; }
     echo "   $(ls "$d"/*.jpg | wc -l) frames"
     touch "$d/.done"
   done
