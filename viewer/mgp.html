@@ -96,10 +96,10 @@
          height; the 3D canvas is everything left of it, full height (the page sizes it; nothing renders under the
          column). The round header, the standings and the control bar float over the canvas.
          The round header and the standings float over the canvas's top-left corner.
-         The DVR column: one column of equal tiles, sized by the page so the column fills its height exactly (--rows is
+         The DVR column: one column of equal tiles, sized by the page so the column fills its height exactly, at most a quarter of the window wide (--rows is
          the tile count, --ah the clips' height over width); the followed pilot's tile is the same size, outlined, and
          moves to the top. The CSS formula here is only the fallback */
-      #dvr { --rows: 1; --tilew: calc((100vh - (var(--rows) - 1) * 2px) / var(--rows) / var(--ah, 0.75));
+      #dvr { --rows: 1; --tilew: min(25vw, calc((100vh - (var(--rows) - 1) * 2px) / var(--rows) / var(--ah, 0.75)));
         position: fixed; z-index: 2; right: 0; top: 0; bottom: 0; padding: 0; background: var(--solid); border-left: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-end; gap: 2px; overflow: hidden; }   /* the tiles are sized to fit: a scrollbar from a rounding overflow would widen the column */
       #dvr[hidden], #dvr:empty { display: none; }
       .tile { position: relative; width: var(--tilew); flex: none; overflow: hidden; background: #000; cursor: pointer; transition: width .25s; }

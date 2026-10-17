@@ -469,7 +469,8 @@ function layoutStrip() {
   dvr.style.setProperty('--ah', ah.toFixed(4)); dvr.style.setProperty('--rows', String(Math.max(1, n)))
   if (!n || narrow()) { dvr.style.removeProperty('--tilew'); return }   // the row above the bar: CSS sizes
   const gap = 2, h = (innerHeight - (n - 1) * gap) / n
-  dvr.style.setProperty('--tilew', (Math.floor(h * 2) / 2 / ah).toFixed(1) + 'px')   // rounded down to a half pixel: a hair of overflow would add a scrollbar
+  const w = Math.min(h / ah, innerWidth * 0.25)                         // a round with one or two pilots would make the column most of the window
+  dvr.style.setProperty('--tilew', (Math.floor(w * 2) / 2).toFixed(1) + 'px')   // rounded down to a half pixel: a hair of overflow would add a scrollbar
 }
 const yawAt = (tc: number) => view.yawOffset + (camMode === 'orbit' ? TURN * (tc - R!.T0) : 0)
 const gauss = (xs: number[], sigma: number) => { const r = Math.ceil(3 * sigma / DT), w = Array.from({ length: 2 * r + 1 }, (_, k) => Math.exp(-0.5 * ((k - r) * DT / sigma) ** 2))
