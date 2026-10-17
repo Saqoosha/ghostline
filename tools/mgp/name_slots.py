@@ -21,6 +21,8 @@ for f in sorted(os.listdir(src)):
     if not f.endswith(".json"):
         continue
     J = json.load(open(f"{src}/{f}")); F = J["frames"]
+    if len(F) < 10:                                         # a cell that never localized (noisy feed): nothing to name
+        print(f"{f[:-5]}: {len(F)} frames, skipped"); continue
     t = np.array([x["t_ms"] for x in F]) / 1000; c = np.array([x["center"] for x in F])
     P = dict(t=t, c=c)
     n = int((t[-1] - t[0]) * fps) + 1
