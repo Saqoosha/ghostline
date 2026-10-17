@@ -210,7 +210,8 @@ def start(c):
         made = f"{c['map']}|{c.get('scene')}"; tag = f"{HERE}/{KF_DIR}/made-with"   # frames posed on another map are in another world frame
         if os.path.isdir(f"{HERE}/{KF_DIR}") and (not os.path.exists(tag) or open(tag).read() != made):
             for f in glob.glob(f"{HERE}/{KF_DIR}/*.npz"): os.remove(f)
-        os.makedirs(f"{HERE}/{KF_DIR}", exist_ok=True); open(tag, "w").write(made)
+        os.makedirs(f"{HERE}/{KF_DIR}", exist_ok=True)
+        with open(tag, "w") as f: f.write(made)
         G.update(last=None, error=None, heat=False, quiet=None, using=None)
         p = subprocess.Popen([sys.executable, "-u", "rt_track.py", *specs], cwd=HERE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         S.update(phase="loading", proc=p, since=time.time(), exit=None, ndi=None, config=c, input=f"{w}×{h} · {fps:g} fps" + (f" → {cap:g}" if cap < fps else ""),
@@ -230,13 +231,13 @@ def grow(reason):
         if S["phase"] != "running" or not c: raise ValueError("tracker が動いていない")
         if not c.get("render"): raise ValueError("地図を育てるには「描いて照合」が要る")
         if G["phase"] == "growing": raise ValueError("いま育てている")
-        G.update(phase="growing", error=None)
-    threading.Thread(target=run_grow, args=(c, reason, S["since"]), daemon=True).start()
+        G.update(phase="growing", error=None); run = S["since"]
+    threading.Thread(target=run_grow, args=(c, reason, run), daemon=True).start()
 
 def run_grow(c, reason, run):                       # run: the start it belongs to; a grow that outlives its tracker is thrown away
     out, t0 = time.strftime("live/map-grow-%Y%m%d-%H%M%S.npz"), time.time()
     try:
-        for f in glob.glob(f"{HERE}/{KF_DIR}/*.npz"):   # ~280 KB each, thousands a day; never used past the window (2x: a margin)
+        for f in glob.glob(f"{HERE}/{KF_DIR}/*.npz") + glob.glob(f"{HERE}/live/*.part") + glob.glob(f"{HERE}/{KF_DIR}/*.part"):   # ~280 KB each, thousands a day; never used past the window (2x: a margin); .part: a killed write
             if t0 - os.path.getmtime(f) > 2 * GROW_WINDOW: os.remove(f)
         r = subprocess.run([sys.executable, "-u", "rt_map_grow.py", c["map"], c["scene"], out, KF_DIR], cwd=HERE, capture_output=True, text=True, timeout=600,
                            env=dict(os.environ, SINCE=str(GROW_WINDOW), PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}"))
@@ -245,7 +246,7 @@ def run_grow(c, reason, run):                       # run: the start it belongs 
             tail = (r.stdout + r.stderr).strip().splitlines()
             raise RuntimeError("直前のフレームが無い" if "no frame to add" in r.stdout + r.stderr else (tail[-1][:200] if tail else f"終了コード {r.returncode}"))
         with lock:
-            if S["since"] != run or S["phase"] == "stopped": G.update(phase="idle"); return
+            if S["since"] != run or S["phase"] == "stopped": G.update(phase="idle"); os.remove(f"{HERE}/{out}"); return
             point(out)
         for f in sorted(glob.glob(f"{HERE}/live/map-grow-*.npz"), key=os.path.getmtime)[:-2]: os.remove(f)   # the one in use and the one before
         with lock: G.update(phase="idle", last=dict(t=time.time(), n=int(m[1]), reason=reason, s=round(time.time() - t0), map=out))
@@ -317,8 +318,9 @@ def note(line):
             elif m := re.search(r": receiving (.+)$", line): S["ndi"] = m[1]
             elif line == "listening" and S["phase"] == "loading": S["phase"] = "running"
             elif m := re.match(r"map (\S+): (\d+ keyframes|.+)", line):   # the tracker's word on a swap: done, or why not
-                if m[2].endswith("keyframes"): G["using"] = m[1]
+                if m[2].endswith("keyframes"): G.update(using=m[1], error=None)
                 else: G["error"] = f"tracker が地図を読めなかった：{m[2][:150]}"
+            elif line.startswith("KFOUT off"): G["error"] = f"tracker が実フレームを書けなくなった（{line[11:150]}）。次の開始まで育たない"
 
 def answers(p):                                     # the PUSH stream: one row per processed frame, "pos" when it was solved
     while p.poll() is None:

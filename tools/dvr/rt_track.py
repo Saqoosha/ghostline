@@ -582,7 +582,7 @@ if REAL:                                            # the warm-up's blank frame 
     print("listening", flush=True)
 else: print("tracking", flush=True)
 cycles.clear(); clock, t_all, pending, steps = 0.0, time.time(), None, []
-swap = []                                           # MAPWATCH: (path, map) loaded on the watcher's thread, put in by the loop
+swap, swap_lock = [], threading.Lock()             # MAPWATCH: (path, map) loaded on the watcher's thread, put in by the loop
 def mapwatch():
     cur = streams[0].map_npz
     while True:
@@ -593,7 +593,7 @@ def mapwatch():
         try:
             m = load_map(want); cur = want
             if m["size"] != [RW, RH] or not np.allclose(m["K"], streams[0].K): print(f"map {want}: not the running map's camera, kept the old one", flush=True); continue
-            swap.append((want, m))
+            with swap_lock: swap.append((want, m))
         except Exception as e: print(f"map {want}: {type(e).__name__}: {e}", flush=True); cur = want   # tried once; a new name tries again
 if MAPWATCH: threading.Thread(target=mapwatch, daemon=True).start()
 def loop():
@@ -601,7 +601,7 @@ def loop():
   while True:
       t0, clock0 = time.perf_counter(), clock
       if swap:                                        # between cycles: the matches in flight already hold their points, not map indices
-          path, m = swap[-1]; swap.clear()            # only the newest: an older one left behind would swap back
+          with swap_lock: path, m = swap[-1]; swap.clear()   # only the newest: an older one left behind would swap back
           for s in streams: s.m, s.map_npz = m, path
           print(f"map {path}: {len(m['pos'])} keyframes, {int(m['real'].sum())} real", flush=True)
       futs = [pool.submit(solve, pending, b) for b in range(len(pending["batch"]))] if pending else None
