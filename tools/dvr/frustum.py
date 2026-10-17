@@ -23,7 +23,9 @@ def rasterize_culled(means, quats, scales, opac, colors, viewmats, Ks, W, H, **k
     if CULL <= 0: return rasterization(means, quats, scales, opac, colors, viewmats, Ks, W, H, **kw)
     keep = keep_mask(means, viewmats, Ks, W, H, kw.get("near_plane", 0.01)); outs, alphas = [], []
     for c in range(viewmats.shape[0]):
-        i = keep[c].nonzero()[:, 0]
-        o, a, _ = rasterization(means[i], quats[i], scales[i], opac[i], colors[i], viewmats[c:c + 1], Ks[c:c + 1], W, H, **kw)
+        i = keep[c].nonzero()[:, 0]; op = opac[i]
+        if not len(i):                              # no splat in view: gsplat 1.5.3 dies on none (SIGFPE). One invisible splat draws the empty picture
+            i = torch.zeros(1, dtype=torch.long, device=means.device); op = opac[i] * 0
+        o, a, _ = rasterization(means[i], quats[i], scales[i], op, colors[i], viewmats[c:c + 1], Ks[c:c + 1], W, H, **kw)
         outs.append(o); alphas.append(a)
     return torch.cat(outs), torch.cat(alphas), None
