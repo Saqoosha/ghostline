@@ -53,3 +53,8 @@ test('an ended heat stays ended when its start arrives again afterwards (review 
   expect(tl.heatAt(104_000)!.id).toBe('A')
   expect(tl.heatAt(115_000)).toBeNull(); expect(tl.heatAt(500_000)).toBeNull()
 })
+test('a reconnect pushing the backlog again adds nothing twice', () => {
+  const tl = new Timeline(), backlog = [h('A', 0, {}, 0), a(1000), a(2000), e('A', 3000)]
+  tl.push(backlog); tl.push(backlog)
+  expect(tl.between(0, 5000).length).toBe(2); expect(tl.marks.length).toBe(2)
+})

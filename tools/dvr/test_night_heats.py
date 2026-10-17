@@ -1,6 +1,6 @@
 """tests for night_heats.py (python -m unittest test_night_heats -v, from tools/dvr)"""
 import unittest
-from night_heats import clip_window, grid, heats_of
+from night_heats import clip_window, grid, heats_of, read_jsonl, replay_time
 
 REC = dict(start=1000.0, fps=60.0, frames=6000)       # 100 s from wall 1000
 
@@ -31,6 +31,24 @@ class HeatsOfTest(unittest.TestCase):
                 dict(k="e", t=9000, id="a"), dict(k="h", t=20000, at=20000, id="b", heat=None, cls=None, cells={}, order=["R2"])]
         hs = heats_of(rows)
         self.assertEqual([(h["id"], h["start"], h["end"], h["heat"]) for h in hs], [("a", 1000, 9000, "7")])   # b has not ended
+
+
+class ReplayTimeTest(unittest.TestCase):
+    def test_srt_replay_starts_120_frames_late(self):     # CLAUDE.md: the tracker's frame numbers start 120 frames after the recording's
+        self.assertAlmostEqual(replay_time(REC, 0), 1002.0); self.assertAlmostEqual(replay_time(REC, 60, shift=0), 1001.0)
+
+
+class ReadTest(unittest.TestCase):
+    def test_truncated_last_line_skipped(self):
+        import tempfile, os
+        f = os.path.join(tempfile.mkdtemp(), "x.jsonl"); open(f, "w").write('{"k": "h"}\n{"k": "e", "t"')
+        self.assertEqual(read_jsonl(f), [{"k": "h"}])
+
+
+class HeatsOfDupTest(unittest.TestCase):
+    def test_second_end_ignored(self):
+        rows = [dict(k="h", t=1000, at=1000, id="a", heat=None, cls=None, cells={}, order=["R2"]), dict(k="e", t=9000, id="a"), dict(k="e", t=9500, id="a")]
+        self.assertEqual(len(heats_of(rows)), 1)
 
 
 if __name__ == "__main__": unittest.main()

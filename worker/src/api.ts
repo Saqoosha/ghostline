@@ -21,12 +21,13 @@ export function authorized(req: Request, key: string): boolean {
   if (!key) return false
   const got = req.headers.get('authorization') ?? '', want = 'Bearer ' + key
   if (got.length !== want.length) return false
-  let d = 0; for (let i = 0; i < want.length; i++) d |= got.charCodeAt(i) ^ want.charCodeAt(i)   // the same time for every wrong key
+  let d = 0; for (let i = 0; i < want.length; i++) d |= got.charCodeAt(i) ^ want.charCodeAt(i)   // the same time for every wrong key of its length
   return d === 0
 }
 
 // h starts the live heat or renames it (same id), e moves it to the top of the list with its end
 export function applyToIndex(ix: HeatIndex, m: Msg): HeatIndex {
+  if (m.k === 'h' && ix.heats.some(h => h.id === m.id)) return ix          // a start arriving after its heat ended
   if (m.k === 'h') {
     const pilots = m.order.map(s => m.cells[s] ?? '')
     const start = ix.live?.id === m.id ? ix.live.start : m.t
@@ -36,4 +37,9 @@ export function applyToIndex(ix: HeatIndex, m: Msg): HeatIndex {
   }
   if (m.k === 'e' && ix.live?.id === m.id) return { ...ix, live: null, heats: [{ ...ix.live, end: m.t }, ...ix.heats.filter(h => h.id !== m.id)] }
   return ix
+}
+
+// a heat's list entry as the sender's upload carries it (x-heat-entry): ended, for the heat named in the path
+export function validEntry(e: any, id: string): e is HeatEntry & { end: number } {
+  return e?.id === id && typeof e.start === 'number' && typeof e.end === 'number' && Array.isArray(e.pilots)
 }

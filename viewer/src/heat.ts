@@ -51,9 +51,9 @@ load()
 // --- the timeline
 const seek = $<HTMLInputElement>('seek')
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
-function setPlaying(v: boolean) { playing = v; $('play').textContent = v ? 'PAUSE' : 'PLAY'; for (const el of videos()) v ? el.play().catch(() => {}) : el.pause() }
+function setPlaying(v: boolean) { playing = v; resorted = false; $('play').textContent = v ? 'PAUSE' : 'PLAY'; for (const el of videos()) v ? el.play().catch(() => {}) : el.pause() }
 $('play').onclick = () => { if (rp && t >= rp.dur) t = 0; setPlaying(!playing) }
-seek.oninput = () => { t = Number(seek.value); syncVideos(true) }
+seek.oninput = () => { t = Number(seek.value); syncVideos(true); resorted = false }
 $('speed').replaceChildren(...[0.5, 1, 2].map(v => Object.assign(document.createElement('button'), { textContent: `${v}×`, className: v === speed ? 'on' : '',
   onclick: (e: Event) => { speed = v; for (const b of Array.from($('speed').children)) b.classList.toggle('on', b === e.target); for (const el of videos()) el.playbackRate = v } })))
 window.addEventListener('keydown', e => {
@@ -77,15 +77,15 @@ function drawCams() {
   $('cams').replaceChildren(btn('orbit', 'ORBIT'), btn('top', 'TOP'),
     Object.assign(document.createElement('button'), { textContent: 'FOLLOW', className: k >= 0 ? 'on' : '', onclick: () => { if (up.length) stage.setMode(`p${up[(k + 1) % up.length].stream}`) } }))
 }
-stage.onMode = () => { drawCams(); redrawPilots() }; drawCams()
+stage.onMode = () => { drawCams(); redrawPilots(); resorted = false }; drawCams()
 
-let last = performance.now()
+let last = performance.now(), resorted = false
 function frame(now: number) {
   requestAnimationFrame(frame)
   const dt = Math.min(0.1, (now - last) / 1000); last = now
   if (!rp) return
   if (playing) { t += dt * speed; if (t >= rp.dur) { t = rp.dur; setPlaying(false) } }
-  else resortWhenIdle(stage.app)
+  else if (!resorted) resorted = resortWhenIdle(stage.app)   // once after it stops, as race.ts: the splat order of a still camera
   if (document.activeElement !== seek) seek.value = String(t)
   $('clock').textContent = `${fmt(t)} / ${fmt(rp.dur)}`
   if (playing) syncVideos()

@@ -13,8 +13,8 @@ export type Replay = { id: string; start: number; heat: string | null; cls: stri
 const slotOf = (order: string[], s: string): Slot => SLOTS[order.indexOf(s)] ?? 'tl'
 const WS = 0.25, GAP = 0.3                             // the fit's half window (s, as the live page's), the longest gap filled (s)
 
-// the answers smoothed onto a grid of frames from the heat's start, as the live page draws them; a frame further than GAP
-// from an answer on either side is left empty
+// the answers smoothed onto a grid of frames from the heat's start, as the live page draws them; a frame is empty where
+// the answers around it are more than GAP apart, and outside the answers
 export function fromLive(r: HeatRecord, fps = 30): Replay {
   const n = Math.max(1, Math.ceil((r.end - r.start) / 1000 * fps) + 1), W = WS * fps
   const pilots = r.order.filter(s => r.answers[s]?.length).map(s => {

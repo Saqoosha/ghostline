@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { applyToIndex, authorized, parseEventPath, type HeatIndex } from '../src/api'
+import { applyToIndex, authorized, parseEventPath, validEntry, type HeatIndex } from '../src/api'
 
 test('parseEventPath', () => {
   expect(parseEventPath('/jdl-2026-10-25/api/push')).toEqual({ event: 'jdl-2026-10-25', rest: 'push' })
@@ -30,4 +30,17 @@ test('applyToIndex: a new heat while one is live keeps the old one in the list (
   ix = applyToIndex(ix, { k: 'h', t: 1000, id: '100000', heat: null, cls: null, cells: {}, order: ['R2'] })
   ix = applyToIndex(ix, { k: 'h', t: 9000, id: '100500', heat: null, cls: null, cells: {}, order: ['R2'] })
   expect(ix.live!.id).toBe('100500'); expect(ix.heats.map(h => [h.id, h.end])).toEqual([['100000', 9000]])
+})
+test('applyToIndex: a start of a heat already ended does not make it live again', () => {
+  let ix: HeatIndex = { event: 'e', title: 'e', live: null, heats: [] }
+  ix = applyToIndex(ix, { k: 'h', t: 1000, id: '100000', heat: null, cls: null, cells: {}, order: ['R2'] })
+  ix = applyToIndex(ix, { k: 'e', t: 5000, id: '100000' })
+  expect(applyToIndex(ix, { k: 'h', t: 1000, at: 9000, id: '100000', heat: null, cls: null, cells: {}, order: ['R2'] })).toEqual(ix)
+})
+test('validEntry', () => {
+  const ok = { id: '100000', start: 1, end: 2, heat: null, cls: null, pilots: [''] }
+  expect(validEntry(ok, '100000')).toBe(true)
+  expect(validEntry({ ...ok, end: null }, '100000')).toBe(false)
+  expect(validEntry({ ...ok, pilots: undefined }, '100000')).toBe(false)
+  expect(validEntry(ok, '100001')).toBe(false)
 })

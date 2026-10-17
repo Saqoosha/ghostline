@@ -1,13 +1,13 @@
 // One race day's live relay (a Durable Object per event name). The venue posts its Msgs here once; every viewer's
 // WebSocket gets them from here, so the venue's battery and uplink carry one stream however many watch.
-// It keeps the last 60 s of Msgs for a viewer who just connected (a delayed viewer draws at once), the last heat start
+// It keeps the last KEEP of Msgs for a viewer who just connected (a delayed viewer draws at once), the last heat start
 // (in storage: it outlives the object sleeping), and writes the day's heat list (dvr/<event>/heats.json) when a heat
-// starts, is renamed or ends - nowhere else, so R2 sees a few writes per heat.
+// starts, is renamed or ends, and when its record is uploaded - a few writes per heat.
 import { DurableObject } from 'cloudflare:workers'
-import { applyToIndex, HEAT_ID, type HeatEntry, type HeatIndex, type HMsg, type Msg } from './api'
+import { applyToIndex, HEAT_ID, validEntry, type HeatIndex, type HMsg, type Msg } from './api'
 
 export interface RoomEnv { BUCKET: R2Bucket }
-const KEEP = 80_000                                      // 60 s of delay, the page's 0.7 s lag and one 10 s repeat of the heat start
+const KEEP = 80_000                                      // 60 s of delay, the page's 0.7 s lag, one 10 s repeat of the heat start, and margin
 
 export class LiveRoom extends DurableObject<RoomEnv> {
   recent: Msg[] = []
@@ -33,14 +33,14 @@ export class LiveRoom extends DurableObject<RoomEnv> {
     if (m && req.method === 'PUT') {
       if (!HEAT_ID.test(m[1])) return new Response('bad heat id', { status: 400 })
       // the heat's list entry rides along: the push carrying its end may have been dropped on the venue's uplink
-      let entry: HeatEntry
-      try { entry = JSON.parse(req.headers.get('x-heat-entry') ?? '') } catch { return new Response('x-heat-entry missing', { status: 400 }) }
-      if (entry?.id !== m[1] || typeof entry.start !== 'number') return new Response('x-heat-entry does not match', { status: 400 })
+      let entry: unknown
+      try { entry = JSON.parse(req.headers.get('x-heat-entry') ?? '') } catch { return new Response('x-heat-entry missing or not JSON', { status: 400 }) }
+      if (!validEntry(entry, m[1])) return new Response('x-heat-entry is not this heat ended (id, start, end, pilots)', { status: 400 })
       await this.env.BUCKET.put(`dvr/${event}/heats/${m[1]}/live.json`, req.body,
         { httpMetadata: { contentType: 'application/json', contentEncoding: 'gzip' } })
       await this.index(event, ix => ({ ...ix, live: ix.live?.id === entry.id ? null : ix.live, heats: [entry, ...ix.heats.filter(h => h.id !== entry.id)].sort((a, b) => b.start - a.start) }))
       // still live here: the end's push was dropped. It ends now, for new viewers and for those watching
-      if ((await this.heat())?.id === entry.id && entry.end !== null) await this.push(event, [{ k: 'e', t: entry.end, id: entry.id }])
+      if ((await this.heat())?.id === entry.id) await this.push(event, [{ k: 'e', t: entry.end, id: entry.id }])
       return new Response(null, { status: 204 })
     }
     return new Response('not found', { status: 404 })
@@ -53,8 +53,10 @@ export class LiveRoom extends DurableObject<RoomEnv> {
 
   async push(event: string, msgs: Msg[]) {
     const now = Date.now()
-    // a heat start's t is the heat's start; when it was sent ("at") is what ages it
-    this.recent.push(...msgs); this.recent = this.recent.filter(x => (x.k === 'h' ? x.at ?? x.t : x.t) > now - KEEP)
+    // a heat start's t is the heat's start; when it was sent ("at") is what ages it. An end takes its heat's starts out of
+    // the backlog: the end (aged by its t, the last row) would leave it first, and a new viewer would see the heat as live
+    const gone = new Set(msgs.filter(x => x.k === 'e').map(x => (x as { id: string }).id))
+    this.recent.push(...msgs); this.recent = this.recent.filter(x => (x.k === 'h' ? x.at ?? x.t : x.t) > now - KEEP && !(x.k === 'h' && gone.has(x.id)))
     const sockets = this.ctx.getWebSockets()
     if (sockets.length && msgs.length) { const s = JSON.stringify({ now, msgs }); for (const ws of sockets) { try { ws.send(s) } catch { /* closing */ } } }
     for (const x of msgs) {
@@ -62,6 +64,8 @@ export class LiveRoom extends DurableObject<RoomEnv> {
       const was = await this.heat()
       if (x.k === 'h' && this.ended.has(x.id)) continue                // a late start of a heat already ended
       if (x.k === 'e') this.ended.add(x.id)
+      // the 10 s repeat of an unchanged start: nothing to store or write
+      if (x.k === 'h' && was?.id === x.id && was.heat === x.heat && was.cls === x.cls && JSON.stringify(was.cells) === JSON.stringify(x.cells)) continue
       if (x.k === 'h') { this.lastH = x; await this.ctx.storage.put('lastH', x) }
       else if (was?.id === x.id) { this.lastH = null; await this.ctx.storage.delete('lastH') }
       await this.index(event, ix => applyToIndex(ix, x))

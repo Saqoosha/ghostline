@@ -35,7 +35,7 @@ function load() {
   fetch(BASE + 'heats.json', { cache: 'no-cache' }).then(r => {
     const d = Date.parse(r.headers.get('date') ?? ''); if (Number.isFinite(d)) skew = d - Date.now()
     if (!r.ok) throw new Error(String(r.status)); return r.json()
-  }).then(j => { ix = j; render() }).catch(e => { console.warn('heats.json', e); $('empty').hidden = false })
+  }).then(j => { ix = j; $('fail').hidden = true; render() }).catch(e => { console.warn('heats.json', e); $('fail').hidden = false })   // not "no heats yet": the list could not be read
 }
 fetch(BASE + 'countries.json').then(r => r.ok ? r.json() : {}).then(j => { countries = j ?? {}; render() }).catch(() => {})
 load(); setInterval(load, 10_000); setInterval(render, 1000)   // a heat ending reaches a delayed viewer between loads

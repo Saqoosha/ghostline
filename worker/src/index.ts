@@ -3,6 +3,7 @@
  *
  * /<name>/<path> is the object dvr/<name>/<path>: the built page (index.html, race.html, assets/, flights.json) and
  * its data (data/...: scenes, videos, poses) side by side, uploaded by tools/publish-dvr-viewer.sh. / lists the viewers.
+ * A race day's audience pages (tools/publish-event.sh) live the same way; /<event>/api/* is its live relay (room.ts).
  */
 import { authorized, parseEventPath } from './api'
 export { LiveRoom } from './room'

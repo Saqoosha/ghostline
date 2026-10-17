@@ -1,5 +1,7 @@
 # 観客向けビューア 実装計画
 
+> 実装で変えたところ（Timeline.between、送り手の work スレッドと keepalive、backlog 80 秒、描く遅れ 0.7 秒ほか）はコードと AGENTS.md が正本。この計画は当時のまま残す。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 会場の tracker の答えを Cloudflare の中継で LAN の外へ出し、ghostline.saqoo.sh で大会の 1 日の入口・ライブ（遅れ付き）・ヒート直後のリプレイ・夜の DVR 付きリプレイを見られるようにする。

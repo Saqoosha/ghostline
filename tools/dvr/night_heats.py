@@ -6,13 +6,27 @@ The heats are rt_relay.py's (<relay>/heats-<date>.jsonl: start, end, names). A h
 rec/<date>-*.mp4 and its .json - "start" the wall clock of its first frame, fps, frames) over [start - 3 s, end + 2 s], one
 quarter per cell in the grid's order (tl, tr, bl, br); the clip's first frame is the replay's t = 0.
 The path: the recording replayed through the tracker (rt_replay_day.sh: <answers>/<recording stem>/<cell>.jsonl) when there
-is one - its frame i is the recording's frame i (ffmpeg -fps_mode passthrough; measured 2026-10-18 on 20261017-164422: 60.0
-frames a second of the tracker's clock in every cell, the last i inside the file), so its wall time is start + i / fps - else
-the answers the relay kept live (<relay>/<date>/<id>.json). Both are smoothed onto the grid as the live page draws them."""
-import argparse, glob, json, os, subprocess
+is one - its frame i is the recording's frame i + SHIFT (an SRT replay loses the recording's first 120 frames; --shift, per run
+from rt_replay_verify.py), so its wall time is start + (i + SHIFT) / fps - else the answers the relay kept live
+(<relay>/<date>/<id>.json). Both are smoothed onto the grid as the live page draws them.
+A heat without answers from either is left out (its live.json stays the replay); a heat whose clip fails is left out too."""
+import argparse, glob, json, os, shutil, subprocess
 
 WS, GAP, PAD_BEFORE, PAD_AFTER = 0.25, 0.3, 3.0, 2.0    # the fit's half window (s), the longest gap filled (s), the clip's margins (s)
 SLOTS = ("tl", "tr", "bl", "br")
+SHIFT = 120                                           # CLAUDE.md: 120-121 frames on all eight evening replays of 2026-10-17
+
+
+def replay_time(rec, i, shift=SHIFT):                # a replayed answer's frame -> wall seconds
+    return rec["start"] + (i + shift) / rec["fps"]
+
+
+def read_jsonl(f):                                   # a crash can leave a truncated last line: skipped, not fatal
+    out = []
+    for n, l in enumerate(open(f), 1):
+        try: out.append(json.loads(l))
+        except ValueError: print(f"{f}:{n}: unreadable line skipped")
+    return out
 
 
 def clip_window(rec, t0, t1):
@@ -37,7 +51,7 @@ def _fit(pts, t):                                    # weighted quadratic throug
 
 
 def grid(ans, t0, t1, fps=30):
-    """answers [(wall s, [x, y, z])] on frames t0 + k / fps up to t1; a frame further than GAP from an answer on a side is None"""
+    """answers [(wall s, [x, y, z])] on frames t0 + k / fps up to t1; None where the answers around are more than GAP apart, and outside them"""
     ans = sorted(ans); n = int(round((t1 - t0) * fps)) + 1; out = [None] * n; lo = hi = 0; prev = -1
     for k in range(n):
         t = t0 + k / fps
@@ -56,15 +70,16 @@ def heats_of(rows):
     hs, out = {}, []
     for r in rows:
         if r["k"] == "h": hs[r["id"]] = dict(hs.get(r["id"], {}), id=r["id"], start=r["t"], heat=r.get("heat"), cls=r.get("cls"), cells=r.get("cells") or {}, order=r["order"])
-        elif r["k"] == "e" and r["id"] in hs: out.append(dict(hs[r["id"]], end=r["t"]))
+        elif r["k"] == "e" and r["id"] in hs and all(o["id"] != r["id"] for o in out): out.append(dict(hs[r["id"]], end=r["t"]))
     return out
 
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("date"); ap.add_argument("out"); ap.add_argument("--answers"); ap.add_argument("--relay", default="live/relay")
     ap.add_argument("--rec", default="rec"); ap.add_argument("--fps", type=int, default=30); ap.add_argument("--nvenc", action="store_true")
+    ap.add_argument("--shift", type=int, default=SHIFT)
     a = ap.parse_args()
-    heats = heats_of([json.loads(l) for l in open(f"{a.relay}/heats-{a.date}.jsonl")])
+    heats = heats_of(read_jsonl(f"{a.relay}/heats-{a.date}.jsonl"))
     recs = []
     for f in sorted(glob.glob(f"{a.rec}/{a.date}-*.json")):
         r = json.load(open(f))
@@ -79,21 +94,23 @@ def main():
         for k, s in enumerate(h["order"]):
             src = f"{a.answers}/{rec['stem']}/{s}.jsonl" if a.answers else None
             if src and os.path.exists(src):
-                ans = [(rec["start"] + x["i"] / rec["fps"], x["pos"]) for x in map(json.loads, open(src)) if "pos" in x]; how = "replay"
+                ans = [(replay_time(rec, x["i"], a.shift), x["pos"]) for x in read_jsonl(src) if "pos" in x]; how = "replay"
             else:
                 if live is None:
                     f = f"{a.relay}/{a.date}/{h['id']}.json"; live = json.load(open(f))["answers"] if os.path.exists(f) else {}
                 ans = [(x[0] / 1000, x[1:4]) for x in live.get(s, [])]; how = "live"
             ans = [x for x in ans if c0 - 1 <= x[0] <= c1 + 1]
-            if len(ans) < 30: continue                    # this cell had nobody flying
+            if len(ans) < 30: print(f"{h['id']} {s}: {len(ans)} answers ({how}), left out"); continue
             x, y = k % 2 * (W // 2), k // 2 * (H // 2)
             # 30 fps, about 1.5 Mbit/s: the 60 fps quarter at the encoder's defaults was 4.6 Mbit/s (71-89 MB for 155 s), too much for a phone
             enc = (["-c:v", "h264_nvenc", "-rc", "vbr", "-cq", "30", "-b:v", "1500k", "-maxrate", "2000k", "-bufsize", "4000k"] if a.nvenc
                    else ["-c:v", "libx264", "-crf", "28", "-preset", "veryfast", "-maxrate", "2000k", "-bufsize", "4000k"]) + ["-r", "30"]
-            subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{w[0]:.3f}", "-i", rec["mp4"], "-t", f"{w[1] - w[0]:.3f}", "-vf", f"crop={W // 2}:{H // 2}:{x}:{y}",
-                            "-an", *enc, "-pix_fmt", "yuv420p", "-movflags", "+faststart", f"{d}/{s}.mp4"], check=True)
+            r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{w[0]:.3f}", "-i", rec["mp4"], "-t", f"{w[1] - w[0]:.3f}", "-vf", f"crop={W // 2}:{H // 2}:{x}:{y}",
+                                "-an", *enc, "-pix_fmt", "yuv420p", "-movflags", "+faststart", f"{d}/{s}.mp4"], capture_output=True, text=True)
+            if r.returncode: print(f"{h['id']} {s}: ffmpeg failed: {r.stderr.strip()[-300:]}"); pilots = None; break
             pilots.append(dict(stream=s, name=h["cells"].get(s, ""), pos=grid(ans, c0, c1, a.fps), video=f"{s}.mp4", source=how))
             print(f"{h['id']} {s}: {how}, {len(ans)} answers, {SLOTS[k]}")
+        if not pilots: shutil.rmtree(d, ignore_errors=True); print(f"{h['id']}: left out"); continue
         json.dump(dict(id=h["id"], start=round(c0 * 1000), end=round(c1 * 1000), heat=h["heat"], cls=h["cls"], fps=a.fps, version="night", order=h["order"],
                        recording=rec["stem"], pilots=pilots), open(f"{d}/race.json", "w"), separators=(",", ":"), ensure_ascii=False)
 

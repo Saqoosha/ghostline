@@ -30,13 +30,15 @@ const note = (s: string) => { $('note').textContent = s; $('note').hidden = !s }
 
 // --- the scene, the course line, the day's title and flags
 stage.loadScene().then(ix => { if (ix.title) $('title').textContent = ix.title }).catch(e => { console.error(e); note('スキャンを読めなかった') })
-const course = () => fetch(BASE + 'track.json', { cache: 'no-cache' }).then(r => r.ok ? r.json() : null).then(j => stage.setCourse(j?.track ?? null)).catch(() => {})
+// a failed read keeps what was there (only a 404 means there is no line yet)
+const course = () => fetch(BASE + 'track.json', { cache: 'no-cache' }).then(r => r.status === 404 ? stage.setCourse(null) : r.ok ? r.json().then(j => stage.setCourse(j?.track ?? null)) : null)
+  .catch(e => console.warn('track.json', e))
 course(); setInterval(course, 60_000)
 fetch(BASE + 'countries.json').then(r => r.ok ? r.json() : {}).then(j => { countries = j ?? {} }).catch(() => {})
-const heats = () => fetch(BASE + 'heats.json', { cache: 'no-cache' }).then(r => r.ok ? r.json() : null).then(j => { index = j }).catch(() => {})
+const heats = () => fetch(BASE + 'heats.json', { cache: 'no-cache' }).then(r => r.ok ? r.json().then(j => { index = j }) : null).catch(e => console.warn('heats.json', e))
 heats(); setInterval(heats, 15_000)
 
-// --- the relay: a backlog of the last 60 s on connecting, then every batch as it comes
+// --- the relay: the room's backlog on connecting, then every batch as it comes
 let wait = 2000
 function connect() {
   const ws = new WebSocket(`${RELAY}/${EVENT}/api/live`)
@@ -50,7 +52,7 @@ function connect() {
 }
 connect()
 
-// --- DELAY: 0-60 s in 0.5 s steps, and the two usual ones; kept in this browser
+// --- DELAY, kept in this browser
 function showDelay() { $('dv').textContent = delay.toFixed(1) + ' s'; for (const b of Array.from($("dp").children)) b.classList.toggle('on', Number((b as HTMLElement).dataset.s) === delay) }
 const setDelay = (s: number) => { delay = clampDelay(s); saveDelay(EVENT, delay); showDelay() }
 $('dminus').onclick = () => setDelay(delay - DELAY.step); $('dplus').onclick = () => setDelay(delay + DELAY.step)
@@ -126,7 +128,7 @@ function frame() {
   drawRows()
   // the newest heat this viewer has seen end: the replay link (not before the broadcast shows its end)
   const last = index ? visibleIndex(index, clk.now(Date.now()), delay * 1000).done[0] : null
-  $('prev').hidden = !last; if (last) { const a = $<HTMLAnchorElement>('prev'); a.href = `heat.html?h=${encodeURIComponent(last.id)}${QS.has('e') ? '&e=' + EVENT : ''}`; a.textContent = `前のヒート ${heatName(last)}（${clock(last.start)}）を見返す →` }
+  $('prev').hidden = !last; if (last) { const a = $<HTMLAnchorElement>('prev'); a.href = `heat.html?h=${encodeURIComponent(last.id)}${QS.has('e') ? '&e=' + EVENT : ''}`; a.textContent = `前のヒート ${heatName(last)}${last.heat ? `（${clock(last.start)}）` : ''}を見返す →` }
 }
 requestAnimationFrame(frame)
 $<HTMLAnchorElement>('home').href = BASE + (QS.has('e') ? `?e=${EVENT}` : '')

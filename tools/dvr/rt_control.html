@@ -277,7 +277,7 @@ function render(s) {
   num("cyc", s.lat != null ? s.lat.toFixed(0) : "–");
   $("rec").classList.toggle("on", s.rec > 0); $("rec").textContent = s.rec > 0 ? `録画中 ${s.rec}` : "録画";
   // the audience relay, when it is on: sending, or how long since it last got a post through
-  $("relay").hidden = !s.relay; if (s.relay) { $("relay").classList.toggle("off", !s.relay.ok); $("relay").textContent = s.relay.ok ? "送信中" : s.relay.age == null ? "未送信" : `未送信 ${Math.round(s.relay.age)} 秒`; $("relay").title = `観客向けページへの送信 → ${s.relay.event}${s.relay.err ? "\n" + s.relay.err : ""}` }
+  $("relay").hidden = !s.relay; if (s.relay) { $("relay").classList.toggle("off", !s.relay.ok); $("relay").textContent = (s.relay.ok ? "送信中" : s.relay.age == null ? "未送信" : `未送信 ${Math.round(s.relay.age)} 秒`) + (s.relay.pending ? ` · ヒート ${s.relay.pending} 本が未送信` : ""); $("relay").title = `観客向けページへの送信 → ${s.relay.event}${s.relay.err ? "\n" + s.relay.err : ""}` }
   $("ndi").textContent = (!stopped && s.ndi) || ""; $("ndi-sub").textContent = (!stopped && s.input) || "";
   const byCell = Object.fromEntries(Object.entries(s.cells).map(([n, c]) => [c.cell, { n, ...c }]));
   for (const [cell] of CELLS) {

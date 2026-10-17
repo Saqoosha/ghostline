@@ -33,6 +33,7 @@ ENTRY8="{\"id\":\"151800-h8\",\"start\":$((T+9000)),\"end\":$((T+20000)),\"heat\
 sleep 1; grep -q '"k":"e","t":'$((T+20000))',"id":"151800-h8"' "$TMP/ws.txt" || { cat "$TMP/ws.txt"; fail "no end sent to viewers after the upload"; }
 bun -e "const w = new WebSocket(process.argv[1]); w.onmessage = e => { console.log(e.data); process.exit(0) }" "ws://127.0.0.1:$PORT/$E/api/live" > "$TMP/ws2.txt"
 grep -q '"heat":null' "$TMP/ws2.txt" || { cat "$TMP/ws2.txt"; fail "a new viewer still gets the uploaded heat as live"; }
+! grep -q '"k":"h","t":'$T',"id":"151700-h7"' "$TMP/ws2.txt" || { cat "$TMP/ws2.txt"; fail "an ended heat's start is still in the backlog"; }
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST --data '{"msgs":[]}' "$B/$E/api/push")" = 401 ] || fail "push without key"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H "authorization: Bearer $KEY" -H "x-heat-entry: $ENTRY" --data x "$B/$E/api/heats/..%2Fx")" = 400 ] || fail "bad heat id"
 ! curl -s "$B/" | grep -q "$E" || fail "staging listed"

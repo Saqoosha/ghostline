@@ -27,14 +27,17 @@ export class ServerClock {
 }
 
 const when = (m: Msg) => m.k === 'h' ? m.at ?? m.t : m.t
-const KEEP = 120_000                                   // the relay's 60 s plus the longest delay
+const KEEP = 120_000                                   // the longest delay (60 s), the page's 15 s window, and margin
+// one key per message: a reconnect sends the room's backlog again
+const msgKey = (m: Msg) => m.k === 'h' ? `h${m.id}|${m.at ?? m.t}` : m.k === 'e' ? `e${m.id}|${m.t}` : `${m.k}${m.s}|${m.t}`
 
 export class Timeline {
-  private kept: Msg[] = []                             // answers and lost frames of the last 120 s, in time order
-  private marks: Msg[] = []                            // every h and e, in time order
-  private newest = 0
+  private kept: Msg[] = []                             // answers and lost frames, in time order
+  marks: Msg[] = []                                    // every h and e, in time order
+  private newest = 0; private seen = new Map<string, number>()
   push(msgs: Msg[]) {
     for (const m of msgs) {
+      const k = msgKey(m); if (this.seen.has(k)) continue; this.seen.set(k, when(m))
       this.newest = Math.max(this.newest, when(m))
       if (m.k === 'h' || m.k === 'e') this.marks.push(m)
       if (m.k === 'a' || m.k === 'x') this.kept.push(m)
@@ -42,9 +45,9 @@ export class Timeline {
     this.kept.sort((a, b) => when(a) - when(b)); this.marks.sort((a, b) => when(a) - when(b))
     const old = this.newest - KEEP; let k = 0; while (k < this.kept.length && when(this.kept[k]) < old) k++
     if (k) this.kept.splice(0, k)
+    if (this.seen.size > 20_000) for (const [s, t] of this.seen) if (t < old) this.seen.delete(s)
   }
-  // the answers and lost frames in (from, to]. The page asks for its last 15 s every frame instead of taking what is new:
-  // an answer reaches it ~0.55 s after its frame (late for a page with no delay), and a longer delay sends the view back
+  // the answers and lost frames in (from, to]
   between(from: number, to: number): Msg[] {
     let lo = 0, hi = this.kept.length
     while (lo < hi) { const m = (lo + hi) >> 1; if (when(this.kept[m]) <= from) lo = m + 1; else hi = m }

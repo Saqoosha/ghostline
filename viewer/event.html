@@ -23,7 +23,7 @@
       li .t { font: 400 12px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
       li b { font: 400 13px var(--sans); letter-spacing: .08em; }
       li .who { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      #empty { color: var(--dim); padding: 12px 4px; }
+      #empty, #fail { color: var(--dim); padding: 12px 4px; } #fail { color: var(--alarm); }
       footer { margin-top: 48px; font-size: 11px; color: var(--dim); }
       @media (max-width: 720px) { .now { grid-template-columns: auto 1fr; } .now .who, .now .go { grid-column: 1 / -1; } li a { grid-template-columns: 56px 1fr; } li .who { grid-column: 2; } }
     </style>
@@ -37,6 +37,7 @@
       <h2>HEATS</h2>
       <ol id="list"></ol>
       <div id="empty" hidden>まだ終わったヒートはありません</div>
+      <div id="fail" hidden>ヒートの一覧を読み込めませんでした（10 秒ごとに読み直します）</div>
       <footer>位置は各機の DVR 映像から推定したもので、公式の記録ではありません。</footer>
     </main>
     <script type="module" src="/src/event.ts"></script>

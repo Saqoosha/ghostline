@@ -402,6 +402,8 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   **観客向けページへの送信**（`rt_relay.py`、ghostline.saqoo.sh/<大会>/）：`scp tools/dvr/rt_relay.py tools/dvr/rt_control.* rt4090:~/rt/`、
   `sudo systemctl edit ghostline-control` で `[Service]` に `Environment=RELAY_BASE=https://ghostline.saqoo.sh RELAY_EVENT=<大会> PILOTS_URL=<ヒート管理の current_pilots>`、鍵は `~/.config/ghostline/key`（600、Worker の secret `RELAY_KEY` と同じ値）。
   再起動は tracker が止まっているときだけ（子の tracker も止まる）。操作ページの上の帯に「送信中」「未送信 N 秒」が出る。ヒートの答えは `live/relay/<日付>/<ヒート>.json`、区切りは `live/relay/heats-<日付>.jsonl`。
+  答えの時刻は rt4090 の壁の時計のまま中継に渡る。会場の箱の時計がずれると、見る人の遅れと中継の backlog（80 秒）も同じだけずれる（2026-10-18 は timesyncd で +3.3 ms）。
+  夜の作り直し（`night_heats.py`）は流し直しのフレーム番号に 120 フレーム（`--shift`）を足して録画に合わせる。
 
   | 準決勝、1080p NDI、4 マス、`SIGNAL=1`、Linux | 解けたフレーム | GPU＋CPU 平均 / ヒート中 / あいだ |
   |---|---|---|

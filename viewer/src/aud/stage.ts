@@ -112,25 +112,29 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   // --- a pilot: sphere, trail and tag; drawn each frame from what the page last showed
   class Pilot implements StagePilot {
     color: string; col: pc.Color; pos: pc.Vec3 | null = null; state: PilotState = 'nopic'; fwd = new pc.Vec3(0, 0, -1); prev: pc.Vec3 | null = null
-    mat = new pc.StandardMaterial(); dot = new pc.Entity('dot'); trail: pc.Mesh; pts: (number[] | null)[] = []; tag = document.createElement('div')
+    mat = new pc.StandardMaterial(); dot = new pc.Entity('dot'); trail: pc.Mesh; trailE = new pc.Entity('trail'); pts: (number[] | null)[] = []; tag = document.createElement('div'); label = ''
     constructor(public stream: string, public slot: Slot) {
       this.color = css('--' + slot) || '#5b4bff'; this.col = hex(this.color)
       const m = this.mat; m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.emissive = this.col; m.update()
       this.dot.addComponent('render', { type: 'sphere', material: m, castShadows: false }); this.dot.setLocalScale(0.14, 0.14, 0.14); this.dot.enabled = false; app.root.addChild(this.dot)
       this.trail = new pc.Mesh(app.graphicsDevice); this.trail.clear(true, false); emptyMesh(this.trail)
-      const e = new pc.Entity('trail'); e.addComponent('render', { meshInstances: [new pc.MeshInstance(this.trail, trailMat)] }); app.root.addChild(e)
+      this.trailE.addComponent('render', { meshInstances: [new pc.MeshInstance(this.trail, trailMat)] }); app.root.addChild(this.trailE)
       this.tag.className = 'tag'; this.tag.style.setProperty('--c', this.color); this.tag.hidden = true; document.body.appendChild(this.tag)
     }
     show(pos: number[], trail: (number[] | null)[], state: PilotState, label: { name: string; flag: string; note: string }) {
       const now = new pc.Vec3(pos[0], pos[1], pos[2]), flat = new pc.Vec3(pos[0], 0, pos[2])
       if (this.prev) { const v = flat.clone().sub(this.prev); if (v.length() > 0.02) this.fwd.lerp(this.fwd, v.normalize(), 0.08).normalize() }
       this.prev = flat; this.pos = now; this.state = state; this.pts = trail
-      this.dot.enabled = true; this.dot.setPosition(now); this.mat.emissive = state === 'flying' ? this.col : cLost; this.mat.update()
+      this.dot.enabled = true; this.dot.setPosition(now)
+      const key = [state, label.flag, label.name, label.note].join('|')
+      if (key === this.label) return; this.label = key                 // the material and the tag only when they change
+      this.mat.emissive = state === 'flying' ? this.col : cLost; this.mat.update()
       const b = document.createElement('b'); b.textContent = this.stream
       const who = Object.assign(document.createElement('span'), { textContent: (label.flag + ' ' + label.name).trim() })
       const note = Object.assign(document.createElement('small'), { textContent: label.note })
       this.tag.classList.toggle('lost', state !== 'flying'); this.tag.replaceChildren(b, ...(label.name ? [who] : []), ...(label.note ? [note] : []))
     }
+    destroy() { this.dot.destroy(); this.trailE.destroy(); this.tag.remove() }
     hide() { this.pos = null; this.state = 'nopic'; this.pts = []; this.prev = null; this.dot.enabled = false; this.tag.hidden = true; emptyMesh(this.trail) }
     draw(eye: pc.Vec3, pxWorld: number) {
       if (!this.pos) return
@@ -170,7 +174,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
       const mid = (k: number) => { const v = track.map(q => q[k]); return (Math.min(...v) + Math.max(...v)) / 2 }, ys = track.map(q => q[1]).sort((a, b) => a - b)
       home.target.set(mid(0), ys[ys.length >> 1], mid(2)); orb.init = false
     },
-    pilot(stream, slot) { let p = pilots.get(stream); if (!p || p.slot !== slot) { p?.hide(); p = new Pilot(stream, slot); pilots.set(stream, p) } return p },
+    pilot(stream, slot) { let p = pilots.get(stream); if (!p || p.slot !== slot) { p?.destroy(); p = new Pilot(stream, slot); pilots.set(stream, p) } return p },
     setMode(m) { if (m === stage.mode) return; blendFrom.pos.copy(cam.getPosition()); blendFrom.rot.copy(cam.getRotation()); blendT = 0; stage.mode = m; stage.onMode(m) },
     clear() { for (const p of pilots.values()) p.hide() },
   }

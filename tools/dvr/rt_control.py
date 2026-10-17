@@ -141,11 +141,13 @@ def cell_order():                                   # the cells' names in grid o
     by = {x.get("cell"): cell_name(x) for x in conf.get("cells", []) if isinstance(x, dict)}
     return [by.get(c, c) for c in CELLS]
 
-relay = None
-if E("RELAY_BASE") and E("RELAY_EVENT"):
+relay = relay_off = None                            # relay_off: why a configured relay is not running, shown on the page
+if E("RELAY_BASE") or E("RELAY_EVENT"):
     from rt_relay import Relay, read_key
-    try: relay = Relay(f"http://127.0.0.1:{PUSH}/", E("RELAY_BASE"), E("RELAY_EVENT"), read_key(), pilots=lambda: pilots(), out_dir=HERE + "/live/relay", order=cell_order).start_threads()
-    except OSError as e: print("relay off: no key:", e, flush=True)
+    try:
+        if not (E("RELAY_BASE") and E("RELAY_EVENT")): raise ValueError("RELAY_BASE と RELAY_EVENT の両方が要る")
+        relay = Relay(f"http://127.0.0.1:{PUSH}/", E("RELAY_BASE"), E("RELAY_EVENT"), read_key(), pilots=lambda: pilots(), out_dir=HERE + "/live/relay", order=cell_order).start_threads()
+    except (OSError, ValueError) as e: relay_off = f"送信しない: {e}"; print("relay off:", e, flush=True)
 
 def options():
     if time.time() - _opt[0] < 2 and _opt[1]: return _opt[1]   # every open page asks once a second: the globs and the finder are read at most every 2 s
@@ -321,7 +323,7 @@ def state():
             try: conf = json.load(open(CONF))
             except Exception: conf = None
         return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], lat=latency(now) if S["phase"] != "stopped" else None, ndi=S["ndi"], input=S["input"],
-                    config=conf, view=view(), cells=cells, rec=recorders.recording(), relay=relay and relay.status(), log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
+                    config=conf, view=view(), cells=cells, rec=recorders.recording(), relay=relay.status() if relay else relay_off and dict(ok=False, age=None, event=E("RELAY_EVENT"), err=relay_off, pending=0), log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
                     hist=dict(n=HIST, w=[h["w"] for h in hist], temp=[h["temp"] for h in hist], lat=[h["lat"] for h in hist],
                               cells={c: [h["cells"].get(c) for h in hist] for c in CELLS}))
 

@@ -45,15 +45,28 @@ class HeatsTest(unittest.TestCase):
         hs.row(T0 + 5, "R2"); out = hs.names(T0 + 6, {"cells": {"R2": "A"}, "heat": "8", "cls": "Expert"})
         self.assertEqual([m["k"] for m in out], ["h"]); self.assertEqual(out[0]["id"], first["id"])
 
-    def test_stale_names_not_given_to_a_new_heat(self):          # review I1
+    def test_stale_names_not_given_to_a_new_heat(self):       
         hs = Heats(); hs.names(T0, {"cells": {"R2": "A"}, "heat": "7", "cls": "X"}); hs.row(T0, "R2"); hs.tick(T0 + 40)
         hs.names(T0 + 50, {"cells": {"R2": "A"}, "heat": "7", "cls": "X", "stale": True})
         h = hs.row(T0 + 3600, "R2")[0]
         self.assertEqual(h["id"], hms(T0 + 3600)); self.assertIsNone(h["heat"]); self.assertEqual(h["cells"], {})
 
-    def test_heat_id_ascii_only(self):                            # review I5: the Worker's id pattern is ASCII
+    def test_heat_id_ascii_only(self):                            # the Worker's id pattern is ASCII
         hs = Heats(); hs.names(T0, {"cells": {}, "heat": "予選 7", "cls": None})
         self.assertEqual(hs.row(T0, "R2")[0]["id"], hms(T0) + "-h7")
+
+    def test_row_after_the_gap_starts_a_new_heat(self):          # a row 30.4 s after the last, before tick ran, was merged
+        hs = Heats(); a = hs.row(T0, "R2")[0]; out = hs.row(T0 + 30.4, "R2")
+        self.assertEqual([m["k"] for m in out], ["e", "h"]); self.assertEqual(out[0]["id"], a["id"]); self.assertNotEqual(out[1]["id"], a["id"])
+
+    def test_names_after_the_gap_do_not_rename_the_old_heat(self):
+        hs = Heats(); hs.row(T0, "R2")
+        out = hs.names(T0 + 40, {"cells": {"R2": "B"}, "heat": "8", "cls": "X"})
+        self.assertEqual([m["k"] for m in out], ["e"]); self.assertIsNone(hs.cur)
+
+    def test_null_name_is_empty(self):
+        hs = Heats(); hs.names(T0, {"cells": {"R2": None, "F1": "A"}, "heat": None, "cls": None})
+        self.assertEqual(hs.row(T0, "R2")[0]["cells"], {"R2": "", "F1": "A"})
 
     def test_heat_manager_down(self):
         hs = Heats(); hs.row(T0, "R2"); hs.names(T0, {"cells": {"R2": "A"}, "heat": "7", "cls": "Expert"})
@@ -120,12 +133,12 @@ class RelayTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(day, hms(T0) + ".json.pending")))
         self.assertTrue(any(s[0].startswith("heats/") for s in self.sent))
 
-    def test_no_heat_start_resent_after_the_last_row(self):       # review C1: resends after the last row revived an ended heat
+    def test_no_heat_start_resent_after_the_last_row(self):       # resends after the last row revived an ended heat
         self.row(T0, 1); self.r.flush(T0 + 0.6); n = len(self.r.queue)
         for k in range(1, 5): self.r.tick(T0 + 10 * k)
-        self.assertFalse(any(m["k"] == "h" for m in self.r.queue[n:] if True))
+        self.assertFalse(any(m["k"] == "h" for m in self.r.queue[n:]))
 
-    def test_end_resent_until_a_post_goes_through(self):           # review I2
+    def test_end_resent_until_a_post_goes_through(self):        
         self.row(T0, 1); self.r.flush(T0 + 0.6)
         fail = [True]
         def post(path, body, headers):
@@ -136,30 +149,68 @@ class RelayTest(unittest.TestCase):
         es = [m for p, b, _ in self.sent if p == "push" for m in json.loads(b)["msgs"] if m["k"] == "e"]
         self.assertEqual(len(es), 1)
 
-    def test_tick_does_not_upload(self):                          # review I3: the 100 ms loop never waits on a heat upload
+    def test_tick_does_not_upload(self):                          # the 100 ms loop never waits on a heat upload
         for k in range(10): self.row(T0 + k / 30, k)
         self.r.flush(T0 + 1); self.r.tick(T0 + 40)
         self.assertFalse([s for s in self.sent if s[0].startswith("heats/")])
         self.r.work(T0 + 40)
         self.assertEqual(len([s for s in self.sent if s[0].startswith("heats/")]), 1)
 
-    def test_open_record_closed_at_start(self):                    # review I4: a restart mid-heat left it open for good
+    def test_open_record_closed_at_start(self):                    # a restart mid-heat left it open for good
         self.row(T0, 1); self.r.flush(T0 + 1); self.r.tick(T0 + 11)          # saved at 10 s, still open
         r2 = Relay("http://x/", "http://y", "staging-test", "k", out_dir=self.dir, post=lambda path, body, headers: self.sent.append((path, body, headers)))
         r2.recover(T0 + 100)
         put = [s for s in self.sent if s[0].startswith("heats/")]
-        self.assertEqual(len(put), 1); self.assertEqual(json.loads(put[0][2]["x-heat-entry"])["end"], round((T0 - 0.04) * 1000))
+        self.assertEqual(len(put), 1); self.assertEqual(json.loads(put[0][2]["x-heat-entry"])["end"], round(T0 * 1000))   # its last answer (T0 - 0.04) is before its start
         self.assertEqual([json.loads(l)["k"] for l in open(os.path.join(self.dir, "heats-20261017.jsonl"))], ["h", "e"])
 
-    def test_keepalive_between_heats(self):                        # review I6: the room stays awake, its backlog with it
+    def test_keepalive_between_heats(self):                        # the room stays awake, its backlog with it
         self.r.flush(T0); self.r.flush(T0 + 4); self.assertEqual(self.sent, [])
         self.r.flush(T0 + 5.1); self.assertEqual(json.loads(self.sent[0][1])["msgs"], [])
 
-    def test_order_falls_back_when_config_missing(self):           # review M5: a fresh box has no config yet
+    def test_order_falls_back_when_config_missing(self):           # a fresh box has no config yet
         def order(): raise FileNotFoundError("no ~/.ghostline-control.json")
         r = Relay("http://x/", "http://y", "e", "k", out_dir=self.dir, post=lambda *a: None, order=order)
         r.on_row(dict(stream="R2", i=1, lat=0, how="none"), T0)
         self.assertEqual(r.queue[0]["order"], ["R2", "F1", "R4", "R5"])
+
+    def test_upload_failure_into_a_missing_folder_stays_pending(self):
+        def put_fails(path, body, headers):
+            if path.startswith("heats/"): raise OSError("uplink down")
+        self.r.post = put_fails
+        rec = dict(id="133156", start=round(T0 * 1000), end=round(T0 * 1000) + 5000, heat=None, cls=None, cells={}, order=["R2"], answers={})
+        self.assertFalse(self.r.upload(rec))
+        self.assertTrue(os.path.exists(os.path.join(self.dir, "20261017", "133156.json.pending")))
+
+    def test_bad_row_is_skipped_and_reported(self):
+        self.r.line(b'data: {"stream": "R2", "i": 1, "pos": [0, 1], "how": "track"}', T0)
+        self.r.line(b'data: not json', T0)
+        self.assertIn("read", self.r.status(T0)["err"])
+        self.row(T0 + 0.1, 2); self.assertTrue(self.r.held)                 # the next row still goes in
+
+    def test_upload_error_survives_a_good_push(self):
+        def put_fails(path, body, headers):
+            if path.startswith("heats/"): raise OSError("uplink down")
+            self.sent.append((path, body, headers))
+        self.r.post = put_fails
+        self.row(T0, 1); self.r.flush(T0 + 1); self.r.tick(T0 + 40); self.r.work(T0 + 40); self.r.flush(T0 + 41)
+        st = self.r.status(T0 + 41); self.assertEqual(st["pending"], 1); self.assertIn("uplink down", st["err"])
+
+    def test_names_with_kana_go_up_ascii(self):
+        self.row(T0, 1); self.r.on_names({"cells": {"R2": "佐藤"}, "heat": "7", "cls": None}, T0 + 1)
+        self.r.flush(T0 + 2); self.r.tick(T0 + 40); self.r.work(T0 + 40)
+        h = [s[2]["x-heat-entry"] for s in self.sent if s[0].startswith("heats/")][0]
+        self.assertTrue(h.isascii()); self.assertEqual(json.loads(h)["pilots"][0], "佐藤")
+
+    def test_recovered_end_not_before_start(self):
+        self.row(T0, 1); self.r.flush(T0 + 1); self.r.tick(T0 + 11)
+        r2 = Relay("http://x/", "http://y", "staging-test", "k", out_dir=self.dir, post=lambda path, body, headers: self.sent.append((path, body, headers)))
+        r2.recover(T0 + 100)
+        e = json.loads([s for s in self.sent if s[0].startswith("heats/")][0][2]["x-heat-entry"])
+        self.assertGreaterEqual(e["end"], e["start"])
+
+    def test_bad_event_name_refused(self):
+        with self.assertRaises(ValueError): Relay("http://x/", "http://y", "FDF 2026", "k", out_dir=self.dir)
 
     def test_order_from_venue_config(self):
         r = Relay("http://x/", "http://y", "e", "k", out_dir=self.dir, post=lambda *a: None, order=lambda: ["A", "B", "C", "D"])
@@ -172,7 +223,7 @@ class RelayTest(unittest.TestCase):
         self.assertEqual([m["at"] for m in hs], [round(T0 * 1000), round((T0 + 4) * 1000)]); self.assertEqual(hs[1]["t"], round(T0 * 1000))
 
     def test_status_before_any_send(self):
-        self.assertEqual(self.r.status(), dict(ok=False, age=None, event="staging-test", err=None))
+        self.assertEqual(self.r.status(), dict(ok=False, age=None, event="staging-test", err=None, pending=0))
 
     def test_status_after_send(self):
         self.row(T0, 1); self.r.flush(T0 + 0.6)
