@@ -92,6 +92,9 @@ def score_run(laps, off):
 
 S = {(cell, p): score(v["cross"], off) for cell, v in cells.items() for p, off in official.items() if off}
 os.makedirs(out, exist_ok=True)
+for f in os.listdir(out):                                  # a pilot named by an earlier run must not linger
+    if f.endswith(".json"):
+        os.remove(f"{out}/{f}")
 used_c, used_p = set(), set()
 def ambiguous(cell, p):
     """a cell named by one lap that another pilot's laps fit as well (Q150: 25.81 s is THE_HERDER's lap 1 and BENNETT's lap 3)."""
