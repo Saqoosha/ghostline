@@ -1,13 +1,13 @@
 """localize.py output (SfM map frame) -> make_mgp_race.py pose files (world metres, y up, x = VelociDrone x,
 z = -VelociDrone z). Chain: map -> ground frame (topview.py *_frame.json) -> 2D similarity onto the track (fit2d.py
-.json). Drops excursions where the map holds a piece of course twice: a jump of more than JUMP m (beyond VMAX m/s over
-the time between the frames) that comes back (a JUMP m step) within BACK s; a jump that never comes back is kept.
+.json). Drops the map's mistakes (a piece of course held twice, a gate taken for its twin): short runs of frames that
+an impossible step (faster than VIMP) cuts off from the rest, the shortest first.
 usage: poses_from_loc.py <frame.json> <fit.json> <out_dir> <loc.json>=<PILOT>[:slot] ... [--dt-ms=N] [--smooth]
 --dt-ms shifts every frame time (frames named by an older extract.py are 0.5/fps early: pass +500/fps)."""
 import json, os, sys
 import numpy as np
 
-JUMP, BACK, VMAX = 15.0, 3.0, 50.0
+VIMP, GAP_RUN, MAX_EXC = 80.0, 0.5, 15     # m/s, s, frames
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 dt = next((float(a.split("=")[1]) for a in sys.argv[1:] if a.startswith("--dt-ms=")), 0.0)
 F, T = json.load(open(args[0])), json.load(open(args[1]))
@@ -96,21 +96,61 @@ for spec in args[3:]:
     down = storey_fix(t, C)
     if down:
         print(f"  {name}: {down} frames under the TBS gate brought down one storey")
+    # The map's mistakes (a piece of course held twice, a gate taken for its twin) show as stray frames and short runs
+    # of frames between impossible steps (faster than VIMP over more than 4 m). After the single stray frames, runs are
+    # cut at impossible steps and at gaps over GAP_RUN s; the shortest run (up to MAX_EXC frames) touching an
+    # impossible step goes, if its neighbours then make a possible step (a tie goes to the drop that leaves the slower
+    # bridge), until no impossible step is left. Distance-only tests both missed
+    # returns (a 16.1 m step in 66 ms, Round 54) and took good stretches for excursions: 2 s of the start straight
+    # after a gap (Round 61), the good frames after two stray ones (Round 82)
     keep = np.ones(len(C), bool)
-    i = 1
-    # leaving: a jump of JUMP m more than a quad could fly in the time between the two frames (VMAX). Across a gap of
-    # missing frames a plain 15 m test took a 2 s, 35 m stretch of the start straight for an excursion and dropped 3 s
-    # with a lap in them (Round 61 MINJAE_). Coming back stays a plain JUMP m step: with the allowance a 16.1 m return
-    # in 66 ms was missed and 15 good frames after a 3-frame excursion went too (Round 54 NIDO_FPV)
-    leaves = lambda a, b: np.linalg.norm(C[b] - C[a]) > JUMP + VMAX * (t[b] - t[a]) / 1000
-    while i < len(C):
-        if leaves(i - 1, i):
-            back = next((j for j in range(i + 1, len(C)) if t[j] - t[i] <= BACK * 1000
-                         and np.linalg.norm(C[j] - C[i - 1]) < JUMP + 30 * (t[j] - t[i - 1]) / 1000
-                         and np.linalg.norm(C[j] - C[j - 1]) > JUMP), None)
-            if back is not None:
-                keep[i:back] = False; i = back
-        i += 1
+
+    def speed(a, b):
+        return np.linalg.norm(C[b] - C[a]) / max((t[b] - t[a]) / 1000, 1 / 60)
+
+    def imposs(a, b):
+        return np.linalg.norm(C[b] - C[a]) > 4 and speed(a, b) > VIMP
+
+    # single stray frames first: an impossible step on one side, its neighbours a possible step without it (the
+    # largest gain first). A stray frame whose other step stays under VIMP would otherwise join the run beside it and
+    # leave the good run next to it to be dropped (Round 61: 60.90 s at 109 m/s in, 66 m/s out, and the 3 s before it)
+    while True:
+        idx = np.nonzero(keep)[0]; best = None
+        for k in range(1, len(idx) - 1):
+            p_, i_, n_ = idx[k - 1], idx[k], idx[k + 1]
+            if (imposs(p_, i_) or imposs(i_, n_)) and not imposs(p_, n_):
+                gain = max(speed(p_, i_), speed(i_, n_)) - speed(p_, n_)
+                if best is None or gain > best[0]: best = (gain, i_)
+        if best is None:
+            break
+        keep[best[1]] = False
+    while True:
+        idx = np.nonzero(keep)[0]
+        st = [imposs(idx[k], idx[k + 1]) for k in range(len(idx) - 1)]
+        if len(idx) < 3 or not any(st):
+            break
+        cuts = [k for k in range(len(idx) - 1) if st[k] or t[idx[k + 1]] - t[idx[k]] > GAP_RUN * 1000]
+        bounds = [0] + [k + 1 for k in cuts] + [len(idx)]
+        runs = list(zip(bounds[:-1], bounds[1:]))               # [start, end) positions in idx
+        best = None
+        for r, (a, b) in enumerate(runs):
+            if b - a > MAX_EXC or not ((a > 0 and st[a - 1]) or (b < len(idx) and st[b - 1])):
+                continue
+            if 0 < a and b < len(idx):
+                p_, n_ = idx[a - 1], idx[b]
+                if imposs(p_, n_):
+                    continue
+                v = np.linalg.norm(C[n_] - C[p_]) / max((t[n_] - t[p_]) / 1000, 1 / 60)
+            else:                                               # at an end: only if shorter than the run beyond the step
+                o = runs[r + 1] if a == 0 else runs[r - 1]
+                if b - a >= o[1] - o[0]:
+                    continue
+                v = 0.0
+            if best is None or (b - a, v) < best[0]:
+                best = ((b - a, v), a, b)
+        if best is None:
+            break
+        keep[idx[best[1]:best[2]]] = False
     kk = np.nonzero(keep)[0]
     Q = [quat_xyzw(M @ rot_wxyz(L[k]["qvec"]).T) for k in kk]             # camera -> world
     if SMOOTH:
@@ -132,4 +172,4 @@ for spec in args[3:]:
         frames = [{"t_ms": int(round(t[k])), "center": np.round(C[k], 3).tolist(), "qvec": np.round(q, 5).tolist()} for k, q in zip(kk, Q)]
     json.dump({"pilot": name, "slot": int(slot) if slot else None, "qvec_source": "localize.py", "frames": frames},
               open(f"{out}/{name}.json", "w"))
-    print(name, len(L), "frames,", int((~keep).sum()), "dropped as duplicate-map excursions")
+    print(name, len(L), "frames,", int((~keep).sum()), "dropped as impossible jumps")
