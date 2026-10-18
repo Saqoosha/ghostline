@@ -19,6 +19,8 @@
 - 一覧に録画がない Round：29〜36、49、50、121〜136（ほぼ公式ラップ 0）、142 ほか
 - 元のファイルが途中までしかない録画（一覧の大きさとも一致）：Round 51（10/15 14:36、4 秒、MINJAE_ の 17.4 秒台の回）、
   10/17 14:33 の C Main「Redemption Race 5」（7.9 秒）
+- 映像が入っていない録画（枠とラップ表示だけ、3〜10 MB）：Round 20〜22。Studio のキューは、結果の行が出なかった Round を
+  `rounds/failed.txt` に書いて以後飛ばす（行を消せばやり直す）。前は失敗した Round をすぐ拾い直し、後ろの Round が全部止まっていた
 
 ## 2. 最後の 5 ゲート：NEROS のゲートの表と裏のずれ（原因と直し）
 
@@ -52,8 +54,13 @@
 
 - 録画：10/16 夜の 13 本（Winner Bracket / Redemption / Final、**4 分割**）は Studio の `raw/` にある。
   10/17 の分は `watch_new.sh 2026-10-17` が拾う（`watch_new_1017.out`）
-- 録画は無音（−91 dB）。音は YouTube のライブから取る：A Main `_LDYBkr9M0M`、B `GKc9jo6_rYM`、C `ow1dZGNZYng`、D `GbT8_wnBErs`
-  （10/17 時点で配信前）。合わせ方は時計（録画のファイル名の時刻とライブの開始時刻）＋スタートの合図
+- 録画は無音（−91 dB）。音は YouTube のライブから取る。保存済み（Studio の `~/mgp/finals/stream/`、映像も 1080p）：
+  D Main `YKsDQQcNnDw`（8 分）＋`kJjxvG8cSBg`（64 分。最初の `GbT8_wnBErs` は非公開になった）、C Main `ow1dZGNZYng`（89 分）、
+  B Main `GKc9jo6_rYM`（Part 1、41 分）＋`e4-bupZseW8`（Part 2、42 分）、ほかに数十秒の切り直し 2 本。
+  A Main `_LDYBkr9M0M` は 10/18 10 時（日本時間）に生配信中。E Main の配信はチャンネルに無い。
+  合わせ方は時計（録画のファイル名の時刻とライブの開始時刻）＋スタートの合図
+- 配信が終わった直後に落とすと、映像だけ途中で切れることがある（B Main Part 1：映像 291 秒、音 2441 秒）。
+  `finals_collect.sh` は映像と音の長さを比べ、5 秒より離れていれば `<id>.short.mp4` に退けて次の周で落とし直す
 - 10/16 夜の 13 本は **E Main**（組み合わせ表 `view_heat_sheet&id=10928037`）。今日は D・C・B・A Main
   （表 10932212 / 10932213 / 10932214 / 10932232）。現地時刻で D 9:30〜11:30、C 12:30〜2:30、B 3:30〜5:30、A 7:00〜10:00 PM
 - ラップ：`tools/mgp/livefpv_bracket.py <結果ページ> <out.json>`。結果一覧の最初のページは**いちばん新しいイベント**しか出さない
@@ -64,8 +71,11 @@
 - **集め続けている（Studio、寝ている間も）**：`watch_new.sh 2026-10-17`（今日の録画。Archive へ移った後も拾う）、
   `finals_collect.sh`（15 分おき：LiveFPV の各 Main を `~/mgp/finals/livefpv_<x>_main.json` に、最初のページの HTML、
   YouTube の配信を終わったものから映像込み 1080p で `~/mgp/finals/stream/<id>.mp4`＋情報 JSON）
-- LiveFPV のイベント番号：C Main 521648、D Main 521649、B Main 521650（`?p=view_event&id=`）。E と A は不明
-  （E は保存済み、A は最初のページから拾う）
+- LiveFPV のイベント番号：C Main 521648、D Main 521649、B Main 521650（`?p=view_event&id=`）。E と A は不明（E は保存済み）。
+  最初のページは予選のイベント（178 レース）を出したままで、A Main を出さない。ただし各 Main のレースの結果ページは
+  14 個の続き番号で（D 7131333〜、C 7131347〜、B 7131361〜）、A Main は 7131418〜7131431（`[M1 Race #1]`〜`#14`、
+  組み合わせ表のページからリンクされている）。`livefpv_bracket.py ids:7131418-7131431:A-Main <out>` で読む。
+  結果ページには終了時刻が無いので、録画↔レースはラップの並びで決める
 - 配信は途中で切り直されて番号が変わる（D Main だけで 3 本）。だからチャンネルの配信一覧を毎回読む。
   Studio の yt-dlp は 2026.7.4 だと YouTube に 403 で断られた（2026.8.19 に上げて解決）
 - 4 分割の切り出しは `LAYOUT=4up extract.py`（720×540 の映像を 480×360 に縮めて、予選と同じ処理に流す）
