@@ -46,7 +46,7 @@ final class PathRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendable
     private var _viewport = SIMD2<Float>(0, 0)
     private var smooth: [SIMD3<Float>] = []
 
-    /// path: [t, x, y, z] per frame, in time order, evenly spaced. Smoothed as the PC pages do (viewer/src/live.ts fit, without
+    /// path: [t, x, y, z(, qx, qy, qz, qw)] per frame, in time order, evenly spaced (with the rotations, pose(at:) works). Smoothed as the PC pages do (viewer/src/live.ts fit, without
     /// its inlier weights): each frame a quadratic through the frames within `ws` seconds either side, biweight-tapered.
     func setPath(_ path: [[Double]], device: MTLDevice, ws: Double = 0.4) {
         let n = path.count, dt = n > 1 ? (path[n - 1][0] - path[0][0]) / Double(n - 1) : 0.04
@@ -85,8 +85,8 @@ final class PathRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendable
     }
     private var turns: [simd_quatf] = []
 
-    /// the drone's camera at t: (world-from-camera rotation in COLMAP axes - x right, y down, z forward - and position), or nil
-    /// without rotations in the path
+    /// the drone's camera at t: world-from-camera rotation in COLMAP axes (x right, y down, z forward) and the trail's smoothed
+    /// position; nil without rotations, with under 2 frames or at a t that is not a number
     func pose(at t: Double) -> (rot: simd_quatf, pos: SIMD3<Float>)? {
         let (times, sm, tr) = lock.withLock { (self.times, smooth, turns) }
         guard tr.count == times.count, let p = interpolate(t, times, sm) else { return nil }

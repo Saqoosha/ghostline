@@ -16,11 +16,11 @@ final class SplatOverlay: NSObject, MTKViewDelegate {
     /// (scene -> camera, projection) for this frame; nil draws nothing
     var camera: () -> (view: simd_float4x4, proj: simd_float4x4)? = { nil }
     var flight: PathRenderer?
-    /// The FPV transition: the frame is drawn through `camera` (a wide pinhole of focal fTex px) into a texture, then bent onto
-    /// the screen through the DVR's fisheye (Points.metal warpFragment). Layout as WU.
-    struct Warp { var size = SIMD2<Float>(0, 0); var fOut: Float; var fTex: Float; var s: Float; var bars: Float; var halfW: Float; var pad: Float = 0; var k: SIMD4<Float> }
-    var warp: Warp?
-    private var wide: (color: MTLTexture, depth: MTLTexture)?
+    /// The FPV transition: the frame is drawn through `camera` (a pinhole of focal fTex px, wider than the screen once the lens
+    /// bends in) into a texture, then bent onto the screen through the DVR's fisheye (Points.metal warpFragment). Layout as WU.
+    struct Warp { var size = SIMD2<Float>(0, 0); var fOut: Float; var fTex: Float; var s: Float; var bars: Float; var halfW: Float; var thMax: Float; var k: SIMD4<Float> }
+    var warp: Warp? { didSet { if warp == nil { wide = nil } } }   // the texture is let go between FPV round trips
+    private var wide: MTLTexture?
     private var warpPipe: MTLRenderPipelineState?
 
     override init() {
@@ -120,13 +120,10 @@ final class SplatOverlay: NSObject, MTKViewDelegate {
     private func drawWarped(_ w: inout Warp, _ cam: (view: simd_float4x4, proj: simd_float4x4), _ drawable: CAMetalDrawable, _ px: CGSize,
                             _ renderer: SplatRenderer) {
         let W = Int(px.width), H = Int(px.height)
-        if wide == nil || wide!.color.width != W || wide!.color.height != H {
+        if wide == nil || wide!.width != W || wide!.height != H {
             let c = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: view.colorPixelFormat, width: W, height: H, mipmapped: false)
             c.usage = [.renderTarget, .shaderRead]; c.storageMode = .private
-            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: view.depthStencilPixelFormat, width: W, height: H, mipmapped: false)
-            d.usage = [.renderTarget]; d.storageMode = .private
-            guard let ct = device.makeTexture(descriptor: c), let dt = device.makeTexture(descriptor: d) else { return }
-            wide = (ct, dt)
+            wide = device.makeTexture(descriptor: c)
         }
         if warpPipe == nil, let lib = device.makeDefaultLibrary() {
             let p = MTLRenderPipelineDescriptor()
@@ -134,7 +131,7 @@ final class SplatOverlay: NSObject, MTKViewDelegate {
             p.colorAttachments[0].pixelFormat = view.colorPixelFormat
             warpPipe = try? device.makeRenderPipelineState(descriptor: p)
         }
-        guard let wide, let warpPipe else { return }
+        guard let wide, let warpPipe, let depth = view.depthStencilTexture else { return }   // the view's own depth: same size
         let viewport = SplatRenderer.ViewportDescriptor(
             viewport: MTLViewport(originX: 0, originY: 0, width: px.width, height: px.height, znear: 0, zfar: 1),
             projectionMatrix: cam.proj, viewMatrix: cam.view, screenSize: SIMD2(W, H))
@@ -142,10 +139,10 @@ final class SplatOverlay: NSObject, MTKViewDelegate {
         guard let cb = queue.makeCommandBuffer() else { inFlight.signal(); return }
         let sem = inFlight
         cb.addCompletedHandler { _ in sem.signal() }
-        let drawn = (try? renderer.render(viewports: [viewport], colorTexture: wide.color, colorStoreAction: .store,
-                                          depthTexture: wide.depth, rasterizationRateMap: nil, renderTargetArrayLength: 0, to: cb)) ?? false
+        let drawn = (try? renderer.render(viewports: [viewport], colorTexture: wide, colorStoreAction: .store,
+                                          depthTexture: depth, rasterizationRateMap: nil, renderTargetArrayLength: 0, to: cb)) ?? false
         guard drawn else { cb.commit(); return }
-        encodeFlight(cb, wide.color, cam, px)
+        encodeFlight(cb, wide, cam, px)
         let rp = MTLRenderPassDescriptor()
         rp.colorAttachments[0].texture = drawable.texture
         rp.colorAttachments[0].loadAction = .dontCare
@@ -153,7 +150,7 @@ final class SplatOverlay: NSObject, MTKViewDelegate {
         if let enc = cb.makeRenderCommandEncoder(descriptor: rp) {
             w.size = SIMD2(Float(W), Float(H))
             enc.setRenderPipelineState(warpPipe)
-            enc.setFragmentTexture(wide.color, index: 0)
+            enc.setFragmentTexture(wide, index: 0)
             enc.setFragmentBytes(&w, length: MemoryLayout<Warp>.stride, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()

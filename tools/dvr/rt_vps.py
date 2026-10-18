@@ -17,9 +17,10 @@ usage (rt4090, mastenv, ~/xfeat): rt_vps.py map.npz scene.ply
   GET  /splats?n=600000          the n splats with the most opacity x size, as a .splat file (antimatter15's: position, scale,
                                  rgba with opacity, rotation w x y z as uint8) for the phone to draw
   GET  /flight, /dvr             with FLIGHT: a recorded flight to replay over the room - its poses ([t, x, y, z, qx, qy, qz, qw]
-                                 per frame, world from camera, COLMAP axes) and its DVR video (the whole mp4, cut to the 4:3
-                                 picture; the phone plays it from a file). /flight also carries the viewer's index.json "room"
-                                 (top view framing, ceiling cut) and lens.json's "source_fisheye" (the DVR's lens, for the FPV view)
+                                 per frame, world from camera, COLMAP axes; the rotation only where the pose has one) and its DVR
+                                 video (the whole mp4, already cut to the 4:3 picture; the phone plays it from a file). /flight
+                                 also carries the viewer's index.json "room" (top view framing, ceiling cut) and, as "lens",
+                                 lens.json's "source_fisheye" (the DVR's lens, for the FPV view)
 env: PORT (8790), RTOPK (8), RMIN (40), REFINE (2), RNEAR (0.1 m: the office map's near), TOPK (2048), PLAUS_M (0.5), PLAUS_DEG (10),
      LOG (dir: every request's JPEG and answer kept there; unset = none), FLIGHT (dir with poses60.json, dvr.mp4, optional
      index.json and lens.json = the flight's dvr_pinhole.mp4.json), XFEAT_DIR (~/xfeat). No authentication: serve it on the tailnet / LAN only."""
@@ -178,15 +179,15 @@ class H(http.server.BaseHTTPRequestHandler):
                 try: n = int(a.get("n", make[1]))
                 except ValueError as e: return self.fail(400, e)
                 return self.reply(200, cached(caches[u.path.strip("/")], n, make[0]), "application/octet-stream")
-            if u.path == "/flight" and FLIGHT:      # the recorded flight, slimmed to [t, x, y, z, qx, qy, qz, qw] per frame
+            if u.path == "/flight" and FLIGHT:      # the recorded flight, slimmed to [t, x, y, z(, qx, qy, qz, qw)] per frame
                 with open(os.path.join(FLIGHT, "poses60.json")) as f: p = json.load(f)
                 def optional(name, key):            # the viewer's index.json "room" (top view, ceiling); the camera json's "source_fisheye" (FPV)
                     path = os.path.join(FLIGHT, name)
                     if not os.path.exists(path): return None
                     try:
                         with open(path) as f: return json.load(f).get(key)
-                    except ValueError as e: print(f"{path}: {e}, no {key}", flush=True); return None
-                return self.reply(200, json.dumps(dict(fps=p.get("fps"), path=[[q["t"], *q["pos"], *q["quat"]] for q in p["poses"] if q],
+                    except (ValueError, OSError, AttributeError) as e: print(f"{path}: {e}, no {key}", flush=True); return None
+                return self.reply(200, json.dumps(dict(fps=p.get("fps"), path=[[q["t"], *q["pos"], *q.get("quat", [])] for q in p["poses"] if q],
                                                        room=optional("index.json", "room"), lens=optional("lens.json", "source_fisheye"))).encode(), "application/json")
             if u.path == "/dvr" and FLIGHT:
                 with open(os.path.join(FLIGHT, "dvr.mp4"), "rb") as f: return self.reply(200, f.read(), "video/mp4")

@@ -33,7 +33,7 @@ final class ARController {
     @ObservationIgnored private var fromCam = matrix_identity_float4x4   // camera -> scene, x right / y up / z back
     @ObservationIgnored private var topCam = matrix_identity_float4x4
     @ObservationIgnored private var virtualCam: simd_float4x4?
-    @ObservationIgnored private var flying = false   // toTop: the dissolve is over and the camera has left ARKit's
+    @ObservationIgnored private var flying = false   // the dissolve is over and the camera has left where it started
     @ObservationIgnored private var topSince = 0.0
     /// splats above this height (m, scene) are the ceiling: hidden while the view is above it
     @ObservationIgnored private var ceiling: Float?
@@ -191,8 +191,11 @@ final class ARController {
                     ceiling = Float(r.y1 - (r.margin ?? 0.25))
                     room = (Float(r.x0), Float(r.z0), Float(r.y0), r.circle?.map { Float($0) })
                 }
-                if let l = f.lens, l.k.count == 4 {
+                if let l = f.lens, l.k.count == 4, [l.fx, l.cx, l.cy].allSatisfy({ $0.isFinite && $0 > 0 }), l.k.allSatisfy(\.isFinite) {
                     lens = (Float(l.fx), Float(l.cx), Float(l.cy), SIMD4(l.k.map { Float($0) }))
+                    problems["レンズ"] = nil
+                } else {
+                    problems["レンズ"] = f.lensBroken ? "lens.json の source_fisheye が読めない（FPV は使えない）" : nil
                 }
                 problems["飛行"] = nil
             } catch { problems["飛行"] = error.localizedDescription }
@@ -234,7 +237,8 @@ final class ARController {
         anchor.isHidden = arFromScene == nil || !ar  // away from the camera image the splat view draws the flight itself
         cloud.isHidden = nPoints == 0 || showSplats
         let splatsOn = ar ? showSplats : mode != .fpv   // in FPV the DVR alone is on screen
-        if mode == .ar || mode == .top || mode == .toTop || mode == .toAR { splats.warp = nil; virtualProj = nil }
+        if !isFPV { splats.warp = nil; virtualProj = nil }
+        if ar { dvrAlpha = 0; fpvLens = nil }
         splats.view.isHidden = !splatsOn
         splats.view.isPaused = !splatsOn        // hidden, an MTKView still draws (and sorts 600k splats) every frame
         splats.flight = ar ? nil : path
@@ -356,7 +360,11 @@ final class ARController {
     func toggleFPV() {
         switch mode {
         case .ar:
-            guard canFly, lens != nil, let c = arCamera(), droneCamera() != nil else { status = "FPV にできない（位置合わせ・splat・DVR のレンズ・ドローンの向きのどれかが無い）"; return }
+            let why = arFromScene == nil ? "まだ位置が合っていない" : splats.splatCount == 0 ? "splat がまだ" : lens == nil ? "DVR のレンズが無い（サーバーの lens.json）"
+                : !player.currentTime().seconds.isFinite ? "DVR がまだ" : droneCamera() == nil ? "飛行にドローンの向きが無い" : nil
+            if let why { status = "FPV にできない：\(why)"; return }
+            guard let c = arCamera(), let l = lenses() else { status = "FPV にできない：ARKit のフレームがまだ"; return }
+            fpvLens = l                             // kept for the whole round trip: a reload clears `lens`
             virtualCam = c; flying = false
             splats.view.alpha = 0
             flyStart = CACurrentMediaTime(); mode = .toFPV
@@ -378,40 +386,53 @@ final class ARController {
     }
 
     /// pixels of the drawable, and the focal lengths of ARKit's camera and of the DVR fitted to the screen's height
-    private func lenses() -> (size: SIMD2<Float>, phone: Float, dvr: Float, halfW: Float, overscan: Float, k: SIMD4<Float>)? {
+    /// The drawable's pixels; the focal lengths of ARKit's camera and of the DVR with its picture (2cx x 2cy, principal point at
+    /// the centre, fx for both axes) fitted to the screen's height; halfW, that picture's half width on screen; overscan, how
+    /// much wider the pinhole render must reach for the bent picture's edges (its corners stay black); thMax, where the lens
+    /// polynomial stops growing (an upgrade lens turns back near 1.34 rad: past it the inversion has no answer); pp, ARKit's
+    /// principal point offset (projection column 2).
+    private func lenses() -> Lenses? {
         guard let lens, let P = projection() else { return nil }
         let s = Float(view.contentScaleFactor), W = Float(view.bounds.width) * s, H = Float(view.bounds.height) * s
-        let scale = H / (2 * lens.cy), dvr = lens.fx * scale
-        // how much wider than the screen the pinhole render must reach for the bent picture's edges (its corners stay black)
-        func theta(_ td: Float) -> Float {
-            var th = min(td, 1.5)
+        let scale = H / (2 * lens.cy), dvr = lens.fx * scale, k = lens.k
+        let g = { (th: Float) -> Float in let t2 = th * th; return 1 + t2 * (3 * k.x + t2 * (5 * k.y + t2 * (7 * k.z + t2 * 9 * k.w))) }
+        let thMax = stride(from: Float(0), through: 1.5, by: 0.001).first { g($0) <= 0 } ?? 1.5
+        func theta(_ td: Float) -> Float {          // as warpFragment
+            var th = min(td, thMax)
             for _ in 0..<6 {
-                let t2 = th * th, k = lens.k
-                let f = th * (1 + t2 * (k.x + t2 * (k.y + t2 * (k.z + t2 * k.w)))) - td
-                let g = 1 + t2 * (3 * k.x + t2 * (5 * k.y + t2 * (7 * k.z + t2 * 9 * k.w)))
-                th = min(max(th - f / g, 0), 1.5)
+                let t2 = th * th
+                th = min(max(th - (th * (1 + t2 * (k.x + t2 * (k.y + t2 * (k.z + t2 * k.w)))) - td) / g(th), 0), thMax)
             }
             return th
         }
         let overscan = max(tan(theta(lens.cx / lens.fx)) * dvr / (W / 2), tan(theta(lens.cy / lens.fx)) * dvr / (H / 2), 1)
-        return (SIMD2(W, H), P.columns.1.y * H / 2, dvr, lens.cx * scale, overscan, lens.k)
+        let out: Lenses = (SIMD2(W, H), P.columns.1.y * H / 2, dvr, lens.cx * scale, overscan, k, thMax, SIMD2(P.columns.2.x, P.columns.2.y))
+        return [out.phone, out.dvr, out.halfW, out.overscan].allSatisfy { $0.isFinite && $0 > 0 } ? out : nil
     }
 
-    /// a pinhole of focal f px over the drawable, the screen's centre on the axis (Metal depth 0...1, as ARKit's)
+    /// a pinhole of focal f px over the drawable, the screen's centre on the axis (Metal depth 0...1: near 0, far 1)
     private func perspective(_ f: Float, _ size: SIMD2<Float>, near: Float = 0.05, far: Float = 100) -> simd_float4x4 {
         let a = far / (near - far), b = near * far / (near - far)
         return simd_float4x4(SIMD4(2 * f / size.x, 0, 0, 0), SIMD4(0, 2 * f / size.y, 0, 0), SIMD4(0, 0, a, -1), SIMD4(0, 0, b, 0))
     }
 
     /// the lens at s (0 the phone's pinhole, 1 the DVR's fisheye): the render's projection and the bend that goes with it
-    private func lensAt(_ s: Float, _ l: (size: SIMD2<Float>, phone: Float, dvr: Float, halfW: Float, overscan: Float, k: SIMD4<Float>)) {
+    private func lensAt(_ s: Float, _ l: Lenses) {
         let fOut = l.phone + (l.dvr - l.phone) * s, fTex = fOut / (1 + (l.overscan - 1) * s)
-        virtualProj = perspective(fTex, l.size)
-        splats.warp = SplatOverlay.Warp(fOut: fOut, fTex: fTex, s: s, bars: s, halfW: s > 0 ? l.halfW : .greatestFiniteMagnitude, k: l.k)
+        var P = perspective(fTex, l.size)
+        P.columns.2.x = l.pp.x * (1 - s); P.columns.2.y = l.pp.y * (1 - s)   // ARKit's principal point at s = 0, the DVR's centred one at 1
+        virtualProj = P
+        splats.warp = SplatOverlay.Warp(fOut: fOut, fTex: fTex, s: s, bars: s, halfW: s > 0 ? l.halfW : .greatestFiniteMagnitude, thMax: l.thMax, k: l.k)
     }
 
+    private typealias Lenses = (size: SIMD2<Float>, phone: Float, dvr: Float, halfW: Float, overscan: Float, k: SIMD4<Float>, thMax: Float, pp: SIMD2<Float>)
+    @ObservationIgnored private var fpvLens: Lenses?
+
     private func flyFPV(_ t: Double, _ ease: (Float) -> Float) {
-        guard let l = lenses() else { return }
+        if mode == .fpv { if dvrAlpha != 1 { dvrAlpha = 1 }; return }
+        guard let l = fpvLens else {                // never started properly: back to the camera image, not stuck between
+            status = "FPV のレンズが無い"; virtualCam = nil; dvrAlpha = 0; mode = .ar; return
+        }
         switch mode {
         case .toFPV:
             if t < fadeTime {                   // 1. the camera image dissolves into the splats, on ARKit's camera
@@ -428,8 +449,6 @@ final class ARController {
                 dvrAlpha = min(1, u)
                 if u >= 1 { mode = .fpv }
             }
-        case .fpv:
-            dvrAlpha = 1
         case .fromFPV:
             if t < fadeTime {                   // 1. the DVR dissolves into the splats, on the drone
                 virtualCam = droneCamera() ?? virtualCam; lensAt(1, l)
@@ -440,7 +459,7 @@ final class ARController {
                 let e = ease(Float((t - fadeTime) / flyTime))
                 virtualCam = blend(fromCam, arCamera() ?? fromCam, e); lensAt(1 - e, l)
             } else {                            // 3. landed: the splats dissolve into the camera image
-                virtualCam = arCamera() ?? virtualCam; lensAt(0, l)
+                virtualCam = arCamera() ?? virtualCam; lensAt(0, l); dvrAlpha = 0   // also when a stall skipped step 2
                 splats.view.alpha = CGFloat(max(0, 1 - (t - fadeTime - flyTime) / fadeTime))
                 if t >= 2 * fadeTime + flyTime { virtualCam = nil; mode = .ar }
             }
@@ -555,9 +574,21 @@ private struct Flight: Decodable {
     let fps: Double?
     let path: [[Double]]
     let room: Room?
+    /// the DVR's fisheye; a malformed one is dropped (lensBroken), not the whole flight
     let lens: Lens?
-    /// the DVR's fisheye (OpenCV), in pixels of its 4:3 picture
+    let lensBroken: Bool
+    /// the DVR's fisheye (OpenCV), in pixels of its 4:3 picture; fy is not used (fx ≈ fy)
     struct Lens: Decodable { let fx: Double; let cx: Double; let cy: Double; let k: [Double] }
+    private enum Keys: String, CodingKey { case fps, path, room, lens }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        fps = try c.decodeIfPresent(Double.self, forKey: .fps)
+        path = try c.decode([[Double]].self, forKey: .path)
+        room = try c.decodeIfPresent(Room.self, forKey: .room)
+        let l = try? c.decodeIfPresent(Lens.self, forKey: .lens)
+        lens = l ?? nil
+        lensBroken = l == nil && (try? c.decodeNil(forKey: .lens)) == false
+    }
     /// the viewer's index.json "room" (scene frame, y up): x0 / z0 / y0 / circle frame the top view, y1 - margin cuts the ceiling
     struct Room: Decodable { let x0: Double; let z0: Double; let y0: Double; let y1: Double; let circle: [Double]?; let margin: Double? }
 }
