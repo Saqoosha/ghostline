@@ -166,6 +166,7 @@ final class ARController {
                 guard f.path.count > 1, f.path.allSatisfy({ $0.count >= 4 }) else { throw Problem("/flight: 姿勢が足りない") }
                 rawPath = f.path
                 path.setPath(f.path, device: view.device!, ws: smoothing)
+                ceiling = nil; room = nil               // a flight without a room must not keep the last one's
                 if let r = f.room {
                     ceiling = Float(r.y1 - (r.margin ?? 0.25))
                     room = (Float(r.x0), Float(r.z0), Float(r.y0), r.circle?.map { Float($0) })

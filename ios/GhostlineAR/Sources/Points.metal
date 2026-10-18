@@ -61,7 +61,7 @@ vertex PVOut occVertex(uint vid [[vertex_id]], const device Occ* o [[buffer(0)]]
     v.z -= u.bias;                                          // the camera looks down -z
     float4 c = u.p * v;
     out.position = c;
-    out.size = clamp(o[vid].r * u.p[1][1] * u.viewport.y / c.w, 1.0, 256.0);   // diameter in px
+    out.size = clamp(o[vid].r * u.p[1][1] * u.viewport.y / c.w, 1.0, 256.0);   // diameter in px: 2r x (P11 x H / 2) / w
     out.color = 0;
     return out;
 }

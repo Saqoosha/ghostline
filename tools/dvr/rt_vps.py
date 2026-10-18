@@ -24,6 +24,7 @@ env: PORT (8790), RTOPK (8), RMIN (40), REFINE (2), RNEAR (0.1 m: the office map
      index.json), XFEAT_DIR (~/xfeat). No authentication: serve it on the tailnet / LAN only."""
 import os
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1"); os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", str(4096 * 3072))   # a small JPEG claiming a huge size is refused before it is decoded
 import json, sys, time, threading, traceback, itertools, http.server, urllib.parse, numpy as np, torch, cv2, poselib
 sys.path.insert(0, os.path.expanduser(os.environ.get("XFEAT_DIR", "~/xfeat"))); from modules.xfeat import XFeat
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
