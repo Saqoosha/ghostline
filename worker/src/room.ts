@@ -63,8 +63,9 @@ export class LiveRoom extends DurableObject<RoomEnv> {
 
   async push(event: string, all: Msg[]) {
     const now = Date.now()
+    // a start of a heat that ended before this batch goes nowhere; one ending within it is kept, in order, for the list
+    const msgs = dropEnded(all, new Set(await this.endedIds()))
     await this.markEnded(all.filter(x => x.k === 'e').map(x => (x as { id: string }).id))
-    const msgs = dropEnded(all, await this.endedIds())                  // a start of an ended heat goes nowhere
     // a heat start's t is the heat's start; when it was sent ("at") is what ages it. An end takes its heat's starts out of
     // the backlog: the end (aged by its t, the last row) would leave it first, and a new viewer would see the heat as live
     const gone = new Set(msgs.filter(x => x.k === 'e').map(x => (x as { id: string }).id))
