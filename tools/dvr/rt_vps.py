@@ -173,31 +173,37 @@ class H(http.server.BaseHTTPRequestHandler):
         try:
             u = urllib.parse.urlparse(self.path); a = dict(urllib.parse.parse_qsl(u.query))
             make = dict(points=(points, 300000), occluders=(occluders, 300000), splats=(splats, 600000)).get(u.path.strip("/"))
-            if make: return self.reply(200, cached(caches[u.path.strip("/")], a.get("n", make[1]), make[0]), "application/octet-stream")
+            if make:
+                try: n = int(a.get("n", make[1]))
+                except ValueError as e: return self.fail(400, e)
+                return self.reply(200, cached(caches[u.path.strip("/")], n, make[0]), "application/octet-stream")
             if u.path == "/flight" and FLIGHT:      # the recorded flight, slimmed to [t, x, y, z] per frame
-                p = json.load(open(os.path.join(FLIGHT, "poses60.json")))
+                with open(os.path.join(FLIGHT, "poses60.json")) as f: p = json.load(f)
                 ix, room = os.path.join(FLIGHT, "index.json"), None   # the viewer's: its "room" frames the top view and cuts the ceiling
                 if os.path.exists(ix):
-                    try: room = json.load(open(ix)).get("room")
+                    try:
+                        with open(ix) as f: room = json.load(f).get("room")
                     except ValueError as e: print(f"{ix}: {e}, no room", flush=True)
                 return self.reply(200, json.dumps(dict(fps=p.get("fps"), path=[[q["t"], *q["pos"]] for q in p["poses"] if q], room=room)).encode(), "application/json")
             if u.path == "/dvr" and FLIGHT:
                 with open(os.path.join(FLIGHT, "dvr.mp4"), "rb") as f: return self.reply(200, f.read(), "video/mp4")
             self.reply(404, b"", "text/plain")
-        except ValueError as e: self.fail(400, e)
-        except Exception as e: self.fail(500, e)
+        except Exception as e: self.fail(500, e)    # a bad n is answered above; anything else here is the server's
     def do_POST(self):
-        try:
-            u = urllib.parse.urlparse(self.path)
-            if u.path != "/locate": return self.reply(404, b"", "text/plain")
+        u = urllib.parse.urlparse(self.path)
+        if u.path != "/locate": return self.reply(404, b"", "text/plain")
+        try:                                        # the request itself: 400
             # extra fields (ar: the client's own pose) are only logged
             a = {k: [float(x) for x in v.split(",")] if "," in v else float(v) for k, v in urllib.parse.parse_qsl(u.query)}
+            fx, fy, cx, cy = a["fx"], a["fy"], a["cx"], a["cy"]
             n = int(self.headers.get("Content-Length") or -1)
-            if not 0 < n <= MAXBODY: return self.fail(413, ValueError(f"body of {n} bytes (1..{MAXBODY})"))
-            jpeg = self.rfile.read(n)
-            r = locate(jpeg, a["fx"], a["fy"], a["cx"], a["cy"], a.get("prior"))
         except (ValueError, KeyError) as e: return self.fail(400, e)
-        except Exception as e: return self.fail(500, e)
+        if not 0 < n <= MAXBODY: return self.fail(413, ValueError(f"body of {n} bytes (1..{MAXBODY})"))
+        try:
+            jpeg = self.rfile.read(n)
+            r = locate(jpeg, fx, fy, cx, cy, a.get("prior"))
+        except BadRequest as e: return self.fail(400, e)
+        except Exception as e: return self.fail(500, e)   # the server's own failure: traceback in the journal
         self.reply(200, json.dumps(r).encode(), "application/json")
         print(json.dumps(r), flush=True)
         if LOG:                                     # after the reply: a full disk loses the log, not the answer

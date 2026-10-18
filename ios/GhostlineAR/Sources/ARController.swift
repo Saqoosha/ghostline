@@ -139,15 +139,23 @@ final class ARController {
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
         guard code == 200 else { throw Problem("\(url.path): HTTP \(code)") }
-        guard !data.isEmpty, data.count % recordSize == 0 else { throw Problem("\(url.path): \(data.count) バイト（\(recordSize) の倍数でない）") }
+        guard !data.isEmpty else { throw Problem("\(url.path): 空（サーバーに中身が無い）") }
+        guard data.count % recordSize == 0 else { throw Problem("\(url.path): \(data.count) バイト（\(recordSize) の倍数でない）") }
         return data
     }
 
+    /// a reload (読む, a new address) supersedes the loads still running: their results are dropped, not applied late
+    @ObservationIgnored private var pointsGen = 0
+    @ObservationIgnored private var flightGen = 0
+    @ObservationIgnored private var dvrFile: URL?
+
     func loadPoints() {
         status = "点群を読んでいる…"
+        pointsGen += 1; let gen = pointsGen
         Task {
             do {
                 let data = try await fetch("/points?n=300000", recordSize: 16)
+                guard gen == pointsGen else { return }
                 points.setPoints(data, device: view.device!)
                 nPoints = data.count / 16
                 problems["点群"] = nil
@@ -160,32 +168,45 @@ final class ARController {
     /// The recorded flight, the occluders, the DVR (into a file for the player: the server sends the whole mp4, no ranges) and
     /// the splats, each on its own: one failing does not keep the others away.
     func loadFlight() {
+        flightGen += 1; let gen = flightGen
+        ceiling = nil; room = nil                   // a new server's flight, without a room or failing, must not keep the last one's
         Task {
+            let current = { gen == self.flightGen }
             do {
                 let f = try JSONDecoder().decode(Flight.self, from: try await fetch("/flight"))
                 guard f.path.count > 1, f.path.allSatisfy({ $0.count >= 4 }) else { throw Problem("/flight: 姿勢が足りない") }
+                guard current() else { return }
                 rawPath = f.path
                 path.setPath(f.path, device: view.device!, ws: smoothing)
-                ceiling = nil; room = nil               // a flight without a room must not keep the last one's
                 if let r = f.room {
                     ceiling = Float(r.y1 - (r.margin ?? 0.25))
                     room = (Float(r.x0), Float(r.z0), Float(r.y0), r.circle?.map { Float($0) })
                 }
                 problems["飛行"] = nil
             } catch { problems["飛行"] = error.localizedDescription }
+            guard current() else { return }
             do {
-                path.setOccluders(try await fetch("/occluders?n=300000", recordSize: 16), device: view.device!)
+                let data = try await fetch("/occluders?n=300000", recordSize: 16)
+                guard current() else { return }
+                path.setOccluders(data, device: view.device!)
                 problems["隠す円"] = nil
             } catch { problems["隠す円"] = error.localizedDescription }
+            guard current() else { return }
             do {
                 let data = try await fetch("/dvr")
+                guard current() else { return }
                 let file = FileManager.default.temporaryDirectory.appendingPathComponent("dvr-\(UUID().uuidString).mp4")   // the player may still read the last one
                 try data.write(to: file)
                 player.replaceCurrentItem(with: AVPlayerItem(url: file))
+                if let old = dvrFile { try? FileManager.default.removeItem(at: old) }   // no longer the player's
+                dvrFile = file
                 problems["DVR"] = nil
             } catch { problems["DVR"] = error.localizedDescription }
+            guard current() else { return }
             do {                                    // after the room: what is above its ceiling goes in a chunk of its own
-                try await splats.load(try await fetch("/splats?n=600000", recordSize: 32), ceiling: ceiling)
+                let data = try await fetch("/splats?n=600000", recordSize: 32)
+                guard current() else { return }
+                try await splats.load(data, ceiling: ceiling)
                 problems["splat"] = nil
             } catch { problems["splat"] = error.localizedDescription }
         }

@@ -43,8 +43,9 @@ final class SplatOverlay: NSObject, MTKViewDelegate {
     private var ceilingShown = true
 
     func load(_ data: Data, ceiling: Float?) async throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("scan.splat")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("scan-\(UUID().uuidString).splat")   // its own file per load
         try data.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
         ceilingChunk = nil                          // a reload: the last renderer's chunk ID means nothing to the new one
         let points = try await AutodetectSceneReader(url).readAll()
         let r = try SplatRenderer(device: device, colorFormat: view.colorPixelFormat, depthFormat: view.depthStencilPixelFormat,
