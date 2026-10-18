@@ -6,6 +6,9 @@
   // Pages and data both live in R2 under dvr/<name>/ (the prefix they had on vdgs.saqoo.sh, in the
   // same bucket), so publishing a viewer is an upload and never a redeploy of this Worker.
   "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "vdgs" }],
+  // the live relay: one object per race day (src/room.ts); the venue's sender writes with the secret RELAY_KEY
+  "durable_objects": { "bindings": [{ "name": "ROOM", "class_name": "LiveRoom" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LiveRoom"] }],
   "routes": [{ "pattern": "ghostline.saqoo.sh", "custom_domain": true }],
   "observability": { "enabled": true }
 }

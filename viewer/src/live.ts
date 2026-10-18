@@ -13,7 +13,7 @@ export type Dot = { pos: number[]; quat: number[]; state: 'interp' | 'extrap' | 
 
 // taper: weights fall to zero at the window's edge (biweight) instead of ending at a step - an answer entering or
 // leaving a box window moves the fit at once, which shows as small kinks along a trail
-function fit(ans: Answer[], j: number, W: number, taper = false): number[] | null {   // weighted quadratic through the answers within W frames of j, at j
+export function fit(ans: Answer[], j: number, W: number, taper = false): number[] | null {   // weighted quadratic through the answers within W frames of j, at j
   let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0; const b0 = [0, 0, 0], b1 = [0, 0, 0], b2 = [0, 0, 0]; let n = 0
   for (const a of ans) {
     const x = a.i - j; if (Math.abs(x) > W) continue

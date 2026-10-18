@@ -3,11 +3,24 @@
  *
  * /<name>/<path> is the object dvr/<name>/<path>: the built page (index.html, race.html, assets/, flights.json) and
  * its data (data/...: scenes, videos, poses) side by side, uploaded by tools/publish-dvr-viewer.sh. / lists the viewers.
+ * A race day's audience pages (tools/publish-event.sh) live the same way; /<event>/api/* is its live relay (room.ts).
  */
+import { authorized, parseEventPath } from './api'
+export { LiveRoom } from './room'
+
 export interface Env {
   BUCKET: R2Bucket
+  ROOM: DurableObjectNamespace
+  RELAY_KEY: string
 }
 const PREFIX = 'dvr/'
+
+// /<event>/api/live: a viewer's WebSocket; /<event>/api/push and PUT /<event>/api/heats/<id>: the venue's sender, with the key
+function relay(request: Request, env: Env, event: string, rest: string): Promise<Response> | Response {
+  if (rest !== 'live' && !authorized(request, env.RELAY_KEY)) return new Response('unauthorized', { status: 401 })
+  const headers = new Headers(request.headers); headers.set('x-event', event); headers.set('x-rest', rest)
+  return env.ROOM.get(env.ROOM.idFromName(event)).fetch(new Request(request, { headers }))
+}
 
 function cacheFor(key: string): string {
   // pages and json are replaced under the same name on every publish; Vite's assets/ carry a content hash
@@ -18,7 +31,7 @@ function cacheFor(key: string): string {
 
 async function listing(env: Env): Promise<Response> {
   const l = await env.BUCKET.list({ prefix: PREFIX, delimiter: '/' })
-  const names = l.delimitedPrefixes.map(p => p.slice(PREFIX.length, -1))
+  const names = l.delimitedPrefixes.map(p => p.slice(PREFIX.length, -1)).filter(n => !n.startsWith('staging-'))   // test days stay unlisted
   const esc = (s: string) => s.replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`)
   const items = names.map(n => `<li><a href="/${encodeURIComponent(n)}/">${esc(n)}</a></li>`).join('')
   return new Response(`<!doctype html><meta charset="utf-8"><title>ghostline</title><h1>ghostline</h1><ul>${items}</ul>`,
@@ -27,6 +40,8 @@ async function listing(env: Env): Promise<Response> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const api = parseEventPath(new URL(request.url).pathname)
+    if (api) return relay(request, env, api.event, api.rest)
     if (request.method !== 'GET' && request.method !== 'HEAD')
       return new Response('method not allowed', { status: 405, headers: { Allow: 'GET, HEAD' } })
     const url = new URL(request.url)
@@ -58,6 +73,8 @@ export default {
       headers.set('content-range', `bytes ${start}-${start + length - 1}/${object.size}`)
       return new Response(request.method === 'HEAD' ? null : object.body, { status: 206, headers })
     }
-    return new Response(request.method === 'HEAD' ? null : object.body, { headers })
+    // stored gzipped (a heat's live.json): sent as it is, or the runtime gzips it a second time
+    const encodeBody = object.httpMetadata?.contentEncoding ? 'manual' : 'automatic'
+    return new Response(request.method === 'HEAD' ? null : object.body, { headers, encodeBody })
   },
 }

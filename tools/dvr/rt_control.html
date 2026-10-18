@@ -39,6 +39,7 @@
   /* the recordings: a link, with a red dot and the count while any source is being recorded */
   #view3d { flex: none; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); text-decoration: none; } #view3d:hover { color: var(--ink); }
   #rec { flex: none; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); text-decoration: none; white-space: nowrap; }
+  #relay { flex: none; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--spirit); white-space: nowrap; } #relay.off { color: var(--dim); }
   #rec:hover { color: var(--ink); } #rec.on { color: var(--alarm); } #rec.on::before { content: "● "; animation: breathe 2.4s ease-in-out infinite; }
   #err { color: var(--alarm); font: 400 12px var(--mono); min-height: 18px; }
   .grow { display: flex; align-items: center; gap: 14px; font: 400 11px var(--mono); letter-spacing: .06em; color: var(--dim); min-height: 22px; }
@@ -156,6 +157,7 @@
     <div id="src"><b id="ndi">–</b><span id="ndi-sub"></span></div>
     <a id="view3d" href="/view/" target="_blank" title="シーンを 3D で見る（tracker の答えも描く）">3D</a>
     <a id="rec" href="/rec" title="NDI の録画の一覧">録画</a>
+    <span id="relay" hidden title="観客向けページへの送信（rt_relay.py）"></span>
     <button id="go"><span id="go-l">開始</span></button>
   </div>
   <div id="err"></div>
@@ -284,6 +286,8 @@ function render(s) {
   $("grow-s").className = g.error && can && g.phase !== "growing" ? "bad" : ""; if (g.error && can && g.phase !== "growing") $("grow-s").textContent += ` · ${g.error}`;
   $("grow-go").disabled = $("grow-reset").disabled = !can || g.phase === "growing";
   $("rec").classList.toggle("on", s.rec > 0); $("rec").textContent = s.rec > 0 ? `録画中 ${s.rec}` : "録画";
+  // the audience relay, when it is on: sending, or how long since it last got a post through
+  $("relay").hidden = !s.relay; if (s.relay) { $("relay").classList.toggle("off", !s.relay.ok); $("relay").textContent = (s.relay.ok ? "送信中" : s.relay.age == null ? "未送信" : `未送信 ${Math.round(s.relay.age)} 秒`) + (s.relay.pending ? ` · ヒート ${s.relay.pending} 本が未送信` : ""); $("relay").title = `観客向けページへの送信 → ${s.relay.event}${s.relay.err ? "\n" + s.relay.err : ""}` }
   $("ndi").textContent = (!stopped && s.ndi) || ""; $("ndi-sub").textContent = (!stopped && s.input) || "";
   const byCell = Object.fromEntries(Object.entries(s.cells).map(([n, c]) => [c.cell, { n, ...c }]));
   for (const [cell] of CELLS) {
