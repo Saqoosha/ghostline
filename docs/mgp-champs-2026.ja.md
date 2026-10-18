@@ -66,10 +66,67 @@ uv run --with numpy python tools/mgp/make_mgp_race.py build --round 44 --poses b
   なので `to_metric.py`（地面の面 ＋ 2D 相似）→ `ply_to_web.py`（x 軸 −90°、y 上・z = −VelociDrone y）→
   `npx -y @playcanvas/splat-transform@3.4.2 -w in.ply out.sog`。1,199 枚・30k 反復・200 万 splats で 12 分（GPU 独占時）。
 
+## 夕方と夜の決勝（B・A・E Main の Final）
+
+昼の地図と 3DGS には、夕方以降のフレームがほとんど乗らない（夜は SIFT も、3DGS を描いて MASt3R で照合しても 0 点）。夕方から夜までの
+録画を 1 つの地図に組み、昼の決勝のフレームを基準点にして昼の地図の座標に載せる。道具は `tools/mgp/night_*.py`、作業場は rt4090 の
+`/mnt/data/mgpwork/night/`。
+
+```
+# Studio：4 分割の録画を切り出し（extract.py LAYOUT=4up）、原寸のコピーを作る
+env/bin/python fullres_frames.py raw/<mp4> <extract.py の out> <out> <fps>
+# rt4090（~/mastenv、hloc）：照合（GPU）→ 地図（CPU）
+python night_sfm_hloc.py sk/sfm sk/images sk/masks <feed>[:<n 枚に 1 枚>] ...
+MAPPER=incremental REUSE_DB=1 DB=database_srf.db BA_RATIO=1.4 PRUNE_BA=1 SNAPSHOT=600 [INPUT=<途中保存>] python night_sfm_hloc.py ...
+python night_model_check.py <model>; python night_model_plot.py <model> <out.jpg> <feed> ...    # 外れ値の検査、真上の図
+QCAM_FROM=dayloc/rounds/fd_loc NRET=20 python night_localize.py sk/sfm <model> sk/images sk/masks sk/loc_fd fd_s0:3 ...   # 基準点
+WIN=0.7 NRET=5 python night_localize.py sk/sfm <model> sk/images sk/masks sk/loc2 fb_s0 ...                             # 決勝の全フレーム
+FRAME=../top_frame.json FIT=../fit01.png.json COURSE='dayposes/*/*.json' ANCHOR_PREFIX=fd_ LOCAL=1 \
+  FOLD=-138,-104,-60,-22 FOLD_K=15 FOLD_MIN=4 python night_anchor.py <results> <inliers> sk/anchor5 <day loc dirs> -- fb_s0 ...
+python night_gs_dataset.py <model> sk/anchor5/transform.json sk/images sk/masks720 ~/mgp/gsnight2 e2100 na11 fa fe      # → spirula
+python night_warp.py splat sk/anchor5/field.npz <splat.ply> <out.ply>      # → to_metric.py → ply_to_web.py → .sog
+# Mac
+ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash tools/mgp/round_mac.sh 905
+```
+
+- **特徴**：夜の映像は色つきの小さな四角（圧縮のブロック）だらけで、SIFT だと A Main レース 11 の 2,471 枚中 445 枚しか地図に入らない。
+  ALIKED + LightGlue を原寸（720×540、4 分割のマスを縮めない）・4,096 点で使う。0.5 秒離れた組の一致点の中央値は SuperPoint 13、
+  ALIKED（480×360）30、ALIKED（原寸）48。CLAHE やノイズ消し（中央値・膨張収縮）は ALIKED を悪くする。
+- **つなぎ**：10/17 の 18:58〜22:54 の 9 本（B・A 決勝を含む）と 10/16 の E 決勝を 1 つの地図に入れる。となりの録画どうしは明るさが近く、
+  30 点以上一致する組が 1,000〜7,000 ある。昼 12:30 の D 決勝のフレームも、この地図に 96% 登録できた。
+- **カメラのモデル**：OPENCV_FISHEYE の歪み 4 つをマスごとに自由にすると、夜は遠くの照明ばかりで決まらない。束調整が線形ソルバの失敗を
+  繰り返し、1 回に 55 分はまった。SIMPLE_RADIAL_FISHEYE（焦点と歪み 1 つ、f 320・k 0 から）にする。
+- **GLOMAP は使わない**：誤差 1.15 px で向きも合うのに、どのマスのカメラも 1 点のまわりに星形に潰れた（2 回）。1 枚ずつ足す方式
+  （incremental）に、全体の束調整の間引き（BA_RATIO 1.4、`ba_global_ignore_redundant_points3D`）を付ける。途中保存から続けると
+  （`input_path`）、地図は `models/0/` でなく出力先の直下に書かれる。
+- **検査**：続く 3 コマのまん中が前後の中点から外れたら外れ値（`night_model_check.py`）。「移動量が中央値の 3 倍」で数えると、発進前に
+  止まっているコマで中央値が 0 近くになり、正しい地図を 12〜17% と誤って出す。正しい地図は 0〜3%、潰れた GLOMAP は 18〜20%。
+- **基準点**：夕方のフレームの昼の SIFT の位置は、一致点の中央値 28 でほとんど外れている（焦点が −14 億 px に発散したマスもある）。
+  基準点は昼 12:30 の D 決勝（一致点 53〜65）だけにする。
+- **ゆがみ**：1 つの相似変換だと、発進の場所の近くは 0.3 m で合うのに、遠い区間ほどずれる（3.6 m から数十 m）。D 決勝の基準点ごとに
+  近くの 30 点で相似を RANSAC で求め、点ごとに近い 4 つを混ぜる（`night_warp.py`）。基準点をその近傍から予測した誤差は中央値 0.17 m、
+  75% で 0.43 m。3DGS も同じ場で splat ごと動かす。
+- **折りたたみ（未解決）**：コースの左の中ほど（左の「？」形の鉤と右の弧、page world で x −138〜−104、z −60〜−22）を、夜の地図が
+  1 か所に重ねた。同じ絵柄のゲートの取り違えらしい。D 決勝を登録しても 2 本の弧が 1 本の帯になる。`FOLD` は近くの基準点を本当の位置で
+  2 群に分け、候補の位置からつながりが最短の並びを動的計画法で選ぶが、斜めの往復が残る。夜の 3DGS もこの区間は 2 か所が重なる。
+  直すなら地図の段で折りたたみをほどく（昼の地図の二重の列と同じ作業）。
+- **結果**：決勝のラップが公式と一致した（B 決勝は 4 人とも 0.02 秒以内、E 決勝は 0.05 秒以内、A 決勝は MCKFPV 0.08 秒・KILLIANFPV
+  0.2 秒以内）。
+- **名前**：B 決勝の SHARK_FPV（1 周 20.911）は THE-MILKMAN の 1 周目と同じ時刻で、`name_slots.py` が決めない。A 決勝の MINJAE_ は
+  ラップが無い。どちらも 4 分割の帯の名前で決め、`build/mgp/poses/q90X/<PILOT>.json` を足して `make_mgp_race.py` を回し直した。
+  A 決勝の YUKI のマスは録画に映像が無い。
+- **夜の 3DGS**：夜の 4 本（21:00、22:09、A・E 決勝）の 2,741 枚を spirula `in-the-wild --distraction-robustness strong
+  --floater-suppression strong` で 32 分。照明のにじみと浮いた霧が残る。
+- rt4090 の `/mnt/data`（ntfs3）は、シンボリックリンクを 41 本目から作れなくなった（ENOENT）。リンクを張る学習用のフォルダは `~/`（ext4）に置く。
+- hloc：`localize_sfm.main` は解けないフレームを、最初に引いた画像の姿勢に置いてしまう（`night_localize.py` は中の関数を直に呼ぶ）。
+  `import_features` などは開いた `pycolmap.Database` を受け取る。MegaLoc は `torch.hub` の信頼の確認で止まるので、一度
+  `trust_repo=True` で読み込んでおく。
+
 ## ページ（`viewer/mgp.html`、`src/mgp.ts`、共通部は `src/racekit.ts`）
 
 - データ：`<data>/rounds.json`（Round の一覧）、`<data>/<round>/race.json`＋ `dvr_<pilot>.mp4`＋ `audio.m4a`、スキャンと空は
-  `<data>/scene/<scene>.sog`・`<data>/sky.jpg` を全 Round で共有。開発用は `viewer/public/mgp-dev/`（q01・q44 は本物、他は FDF の流用）。
+  `<data>/scene/<scene>.sog`・`<data>/sky.jpg` を全 Round で共有。Round が `race.json` の `scene`・`sky` で別のスキャンと空を名指すと、
+  そこだけ替わる（夜の決勝：`MGP-Champs-2026-night`・`sky-night.jpg`）。開発用は `viewer/public/mgp-dev/`。
 - 決めたこと：右端に DVR の列（常に 1 列、全高、同じ大きさ、追っている pilot は枠で一番上）、キャンバスはその左を全高、見出し・順位表・
   操作のバー（左下）は浮かせる。Orbit・Top は空き領域（キャンバス − 順位表 − バー）に収める（主点をずらす投影）。
   Orbit の距離は寄り 2.5 s・引き 1 s の時定数、2 s 先読み、3% の不感帯。Top は公式図と同じ向き（右 = world −z、上 = world −x）、

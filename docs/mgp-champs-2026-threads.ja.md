@@ -1,11 +1,18 @@
-# MGP Champs 2026：並行している作業（2026-10-17 時点）
+# MGP Champs 2026：並行している作業（2026-10-19 時点）
 
 同時に走っている作業と、次の一手の控え。終わったものは消す。仕組みと罠の正本は [mgp-champs-2026.ja.md](mgp-champs-2026.ja.md)。
 
+## 0. いまの状態（10/19 朝）
+
+- 確認用ページ https://ghostline.saqoo.sh/mgp-champs-2026-check/ ：予選 44、D・C 決勝、夕方の B 決勝（昼のスキャン）、夜の A・E 決勝
+  （夜のスキャンと暗い空）。決勝のラップは公式と 0.02〜0.2 秒で一致。左の中ほどの鉤の区間は、夜の地図の折りたたみで線が乱れる（未解決）
+- 予選：直した地図（二重の列をほどいたもの）での位置合わせ直しと、列の穴埋め（rt4090 の MASt3R）が 140 Round とも済んだ。Mac で全 Round を
+  作り直し中（`build/mgp/rebuild_all.log`）。本番のページへの差し替えは Saqoosha の OK 待ち
+- Studio のキューと Mac の `round_loop.sh` は止めたまま
+
 ## 1. 予選の全 Round の処理と公開
 
-- Studio：`round_queue_studio.sh` が `~/mgp/rounds/queue.txt` を上から処理（ログ `queue.out`、Round ごとに `q<N>.loc.log`）。
-  今日の分（138〜178）は済み、1 日目（1〜120 のうち録画のある分）を処理中。1 Round 5〜15 分
+- Studio：`round_queue_studio.sh` が `~/mgp/rounds/queue.txt` を上から処理（ログ `queue.out`、Round ごとに `q<N>.loc.log`）。1 Round 5〜15 分
 - Mac：`round_loop.sh`（`build/mgp/round_loop.log`）が仕上げと公開。**この Mac がスリープすると止まる**
   （待ちの sleep が進まない）。`caffeinate -i -w <loop の PID>` で防ぐ。フタを閉じると効かない
 - 公開先 https://ghostline.saqoo.sh/mgp-champs-2026/
@@ -84,8 +91,10 @@
 - 配信は途中で切り直されて番号が変わる（D Main だけで 3 本）。だからチャンネルの配信一覧を毎回読む。
   Studio の yt-dlp は 2026.7.4 だと YouTube に 403 で断られた（2026.8.19 に上げて解決）
 - 4 分割の切り出しは `LAYOUT=4up extract.py`（720×540 の映像を 480×360 に縮めて、予選と同じ処理に流す）
-- **E Main と A Main は夜**（照明の下）。昼の地図に乗るかを E Main の Race 8（`~/mgp/brackets/e08`）で試し中。
-  乗らなければ E Main の夜の映像を地図につなぎ足す。急がない（Saqoosha：どうせリアルタイムにはならない）
+- **E Main と A Main は夜**（照明の下）、B Main の決勝は夕方。昼の地図には乗らないので、夕方〜夜の録画をつないだ別の地図で位置を出し、
+  昼の決勝（D）のフレームを基準点に昼の座標へ載せた（手順と罠は正本の「夕方と夜の決勝」）。B・A・E の決勝は確認用ページにある
+- 次の一手：夜の地図の折りたたみ（左の中ほどの鉤）を地図の段でほどく。夜の 3DGS の霧の掃除。Round 173〜178（夕方の光で失敗）も
+  同じ夕方の地図で救えるはず
 - やること：録画↔レースの対応、名前付け、ページの束ね方、音
 
 ## 4. 済み（この日）

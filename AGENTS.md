@@ -53,6 +53,9 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
   薄い「ゴースト」が本物だった。片側の点を消して合わせ直しても画像は元の組に戻るだけで見分けられない。幕より上（ゲートの上段）の
   点の観測で画像を分けて直す（`tools/mgp/mapfix_unfold.py`、経緯は `docs/mgp-champs-2026-threads.ja.md` の 2）
 - **別の時刻の映像は地図に乗りにくい**（同レース 98% → 3 時間半後 52〜62%）。レンズではなく影。時間帯の違うレースを地図に足す
+- **夜の映像の SfM は、誤差が小さくても位置が潰れていることがある。** GLOMAP は 1.15 px・向きも合うのに、カメラが 1 点のまわりに
+  星形に散った。魚眼の歪みを 4 つ自由にすると束調整も止まる。incremental と SIMPLE_RADIAL_FISHEYE で組み、地図ができるたびに
+  外れ値の検査（`night_model_check.py`）と真上の図（`night_model_plot.py`）で確かめる。手順は `docs/mgp-champs-2026.ja.md` の「夕方と夜の決勝」
 - **8up 録画の帯の名前は映像のマスとずれることがある。** マス→pilot はラップの並びで決める（`name_slots.py`）
 - **race ページの splat がぼやける**：PlayCanvas の CPU ソートは走行中の依頼を捨てる。カメラが止まったら `resortWhenIdle` がソートを頼み直す
   （PlayCanvas の内部フィールドを読んでいるので、上げたら確かめる）
