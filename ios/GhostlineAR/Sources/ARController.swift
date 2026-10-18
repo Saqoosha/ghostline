@@ -5,7 +5,8 @@ import Observation
 import AVFoundation
 
 /// One ARKit frame goes to the VPS (tools/dvr/rt_vps.py), which answers where that camera is on the scan. With the ARKit pose
-/// of the same frame that gives ARKit-from-scene, and the scan's points are drawn through it over the camera image.
+/// of the same frame that gives ARKit-from-scene; the scan's points, the flight and its DVR are drawn through it over the
+/// camera image, and the view can fly to the scan seen from above (the splats).
 @MainActor @Observable
 final class ARController {
     var status = "点群を読んでから「合わせる」"
@@ -54,7 +55,7 @@ final class ARController {
     @ObservationIgnored private let ci = CIContext()
     @ObservationIgnored private var arFromScene: simd_float4x4?
     @ObservationIgnored private var nPoints = 0
-    /// Sent image size relative to the captured one: the server scales to the map's 640 wide anyway.
+    /// Sent image size relative to the captured one: the server scales to the map's width anyway.
     private let sendScale: CGFloat = 0.5
     /// ARKit's camera has y up and z back; the server's (OpenCV) y down and z forward.
     private let flip = simd_float4x4(diagonal: SIMD4(1, -1, -1, 1))
@@ -63,7 +64,7 @@ final class ARController {
         view.scene = SCNScene()
         view.automaticallyUpdatesLighting = false
         view.rendersCameraGrain = false
-        view.antialiasingMode = .none          // PointRenderer's pipeline is single-sample
+        view.antialiasingMode = .none          // the point and path pipelines are single-sample
         view.preferredFramesPerSecond = 30     // 60 throttled the phone within minutes (with the splats in the top view)
         // depth cleared to far = 1 as the projection SceneKit hands the renderer delegates expects; with the default reversed
         // depth the buffer starts at 0 and every depth-tested line of the flight failed
@@ -86,12 +87,16 @@ final class ARController {
         view.addSubview(tag)
         ticker = Ticker { [unowned self] in
             fly()
+            // the DVR's clock moves the drone (drawn) and its tag: one clock for both. Before the DVR has loaded it is not a number
+            let t = player.currentTime().seconds
+            guard t.isFinite else { tag.isHidden = true; return }
+            path.cursor = t
             // the drone projected to the screen, the tag just above it
-            guard arFromScene != nil, let p = path.position(at: player.currentTime().seconds) else { tag.isHidden = true; return }
+            guard arFromScene != nil, let p = path.position(at: t) else { tag.isHidden = true; return }
             if mode == .ar {
                 let w = anchor.presentation.simdWorldTransform * SIMD4(p, 1)
                 let s = view.projectPoint(SCNVector3(w.x, w.y, w.z))
-                tag.isHidden = s.z <= 0 || s.z >= 1    // behind the camera
+                tag.isHidden = s.z <= 0 || s.z >= 1    // behind the camera or past the far plane
                 tag.center = CGPoint(x: CGFloat(s.x), y: CGFloat(s.y) - 22)
             } else if let c = virtualCam, let P = projection() {
                 let clip = P * c.inverse * SIMD4(p, 1)
@@ -100,7 +105,6 @@ final class ARController {
                 tag.center = CGPoint(x: CGFloat(clip.x / clip.w + 1) / 2 * b.width, y: CGFloat(1 - clip.y / clip.w) / 2 * b.height - 22)
             }
         }
-        player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 60), queue: .main) { [path] t in path.cursor = t.seconds }
         splats.view.frame = view.bounds
         splats.view.alpha = opacity
         splats.view.isHidden = true
@@ -112,61 +116,77 @@ final class ARController {
         }
         let config = ARWorldTrackingConfiguration()
         config.worldAlignment = .gravity
-        // the map's keyframes are 4:3; the server checks the aspect
-        let fourThree = ARWorldTrackingConfiguration.supportedVideoFormats.filter { Int($0.imageResolution.width) * 3 == Int($0.imageResolution.height) * 4 }
-        if let f = fourThree.first(where: { $0.framesPerSecond == 30 }) ?? fourThree.first {   // 30 fps, as the views draw
-            config.videoFormat = f
-        }
+        // the map's keyframes are 4:3 (the server checks the aspect); 30 fps as the views draw; the smallest from 1280 wide up -
+        // a phone that lists 3840 x 2880 first would otherwise send 4K frames the server shrinks to the map's width anyway
+        let fourThree = ARWorldTrackingConfiguration.supportedVideoFormats
+            .filter { Int($0.imageResolution.width) * 3 == Int($0.imageResolution.height) * 4 }
+            .sorted { ($0.framesPerSecond != 30 ? 1 : 0, $0.imageResolution.width) < ($1.framesPerSecond != 30 ? 1 : 0, $1.imageResolution.width) }
+        if let f = fourThree.first(where: { $0.imageResolution.width >= 1280 }) ?? fourThree.first { config.videoFormat = f }
+        else { problems["カメラ"] = "4:3 の映像形式が無い: 位置合わせができない" }
         view.session.run(config)
         return view
     }
 
-    func loadPoints(server: String) {
-        guard let url = URL(string: server + "/points?n=300000") else { return }
+    /// what failed to load, by what it was; shown apart from `status`, which every answer rewrites
+    var problems: [String: String] = [:]
+    /// the server address the settings hold now (ContentView's @AppStorage)
+    private var server: String { UserDefaults.standard.string(forKey: "server") ?? "http://rt4090:8790" }
+
+    /// GET from the server: a non-200 reply or an empty body is an error, not data
+    private func fetch(_ path: String, recordSize: Int = 1) async throws -> Data {
+        guard let url = URL(string: server + path) else { throw Problem("URL にならない: \(server + path)") }
+        var req = URLRequest(url: url); req.timeoutInterval = 15
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        guard code == 200 else { throw Problem("\(url.path): HTTP \(code)") }
+        guard !data.isEmpty, data.count % recordSize == 0 else { throw Problem("\(url.path): \(data.count) バイト（\(recordSize) の倍数でない）") }
+        return data
+    }
+
+    func loadPoints() {
         status = "点群を読んでいる…"
         Task {
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                let n = data.count / 16
+                let data = try await fetch("/points?n=300000", recordSize: 16)
                 points.setPoints(data, device: view.device!)
-                nPoints = n
-                status = "点 \(n) 個。「合わせる」（画面をタップで splat と切り替え）"
+                nPoints = data.count / 16
+                problems["点群"] = nil
+                status = "点 \(nPoints) 個。「合わせる」（画面をタップで splat と切り替え）"
                 updateVisibility()
-            } catch {
-                status = "読めない: \(error.localizedDescription)"
-            }
+            } catch { problems["点群"] = error.localizedDescription }
         }
     }
 
-    /// The recorded flight: its path, and its DVR into a file for the player (the server sends the whole mp4, no ranges).
-    func loadFlight(server: String) {
-        guard let fu = URL(string: server + "/flight"), let du = URL(string: server + "/dvr") else { return }
+    /// The recorded flight, the occluders, the DVR (into a file for the player: the server sends the whole mp4, no ranges) and
+    /// the splats, each on its own: one failing does not keep the others away.
+    func loadFlight() {
         Task {
             do {
-                let (fdata, _) = try await URLSession.shared.data(from: fu)
-                let f = try JSONDecoder().decode(Flight.self, from: fdata)
+                let f = try JSONDecoder().decode(Flight.self, from: try await fetch("/flight"))
+                guard f.path.count > 1, f.path.allSatisfy({ $0.count >= 4 }) else { throw Problem("/flight: 姿勢が足りない") }
                 rawPath = f.path
                 path.setPath(f.path, device: view.device!, ws: smoothing)
-                if let ou = URL(string: server + "/occluders?n=300000") {
-                    let (odata, _) = try await URLSession.shared.data(from: ou)
-                    path.setOccluders(odata, device: view.device!)
-                }
-                let (ddata, _) = try await URLSession.shared.data(from: du)
-                let file = FileManager.default.temporaryDirectory.appendingPathComponent("dvr.mp4")
-                try ddata.write(to: file)
-                player.replaceCurrentItem(with: AVPlayerItem(url: file))
-                // the splats, after the room: what is above its ceiling (pulled in by its margin) goes in a chunk of its own
                 if let r = f.room {
                     ceiling = Float(r.y1 - (r.margin ?? 0.25))
                     room = (Float(r.x0), Float(r.z0), Float(r.y0), r.circle?.map { Float($0) })
                 }
-                if let surl = URL(string: server + "/splats?n=600000") {
-                    let (sdata, _) = try await URLSession.shared.data(from: surl)
-                    try await splats.load(sdata, ceiling: ceiling)
-                }
-            } catch {
-                status = "飛行を読めない: \(error.localizedDescription)"
-            }
+                problems["飛行"] = nil
+            } catch { problems["飛行"] = error.localizedDescription }
+            do {
+                path.setOccluders(try await fetch("/occluders?n=300000", recordSize: 16), device: view.device!)
+                problems["隠す円"] = nil
+            } catch { problems["隠す円"] = error.localizedDescription }
+            do {
+                let data = try await fetch("/dvr")
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent("dvr-\(UUID().uuidString).mp4")   // the player may still read the last one
+                try data.write(to: file)
+                player.replaceCurrentItem(with: AVPlayerItem(url: file))
+                problems["DVR"] = nil
+            } catch { problems["DVR"] = error.localizedDescription }
+            do {                                    // after the room: what is above its ceiling goes in a chunk of its own
+                try await splats.load(try await fetch("/splats?n=600000", recordSize: 32), ceiling: ceiling)
+                problems["splat"] = nil
+            } catch { problems["splat"] = error.localizedDescription }
         }
     }
 
@@ -206,7 +226,8 @@ final class ARController {
         switch mode {
         case .ar:
             guard canFly, let c = arCamera() else { return }
-            virtualCam = c; flying = false
+            guard let top = topCamera(from: c) else { status = "真上の絵を決められない（部屋も飛行の範囲も無い）"; return }
+            virtualCam = c; topCam = top; fromCam = c; flying = false
             splats.view.alpha = 0
             flyStart = CACurrentMediaTime(); mode = .toTop
         case .top:
@@ -216,8 +237,8 @@ final class ARController {
         }
     }
 
-    /// Straight down. With the room known: the whole floor, its right-angle corner (x0, z0) bottom left - the x0 wall up the
-    /// left edge, the z0 wall along the bottom, the facade's arc across the top right (the room's long side, z, across the
+    /// Straight down. With the room known: the whole floor, its right-angle corner (x0, z0) bottom left - the z0 wall up the
+    /// left edge, the x0 wall along the bottom, the facade's arc across the top right (the room's long side, z, across the
     /// landscape screen). Without: the flight, the way the camera was looking up on the screen.
     private func topCamera(from c: simd_float4x4) -> simd_float4x4? {
         guard let P = projection() else { return nil }
@@ -229,7 +250,8 @@ final class ARController {
             if let c = r.circle {                   // the arc's reach along each wall
                 let (cx, cz, rad) = (c[0], c[1], c[2])
                 let dz = max(r.z0 - cz, 0), dx = max(r.x0 - cx, 0)
-                xmax = cx + (rad * rad - dz * dz).squareRoot(); zmax = cz + (rad * rad - dx * dx).squareRoot()
+                xmax = max(r.x0 + 1, cx + max(0, rad * rad - dz * dz).squareRoot())   // an arc that misses a wall: no NaN
+                zmax = max(r.z0 + 1, cz + max(0, rad * rad - dx * dx).squareRoot())
             }
             b = (SIMD3(r.x0, r.y0, r.z0), SIMD3(xmax, r.y0, zmax))   // the floor
             y = SIMD3(1, 0, 0)                      // up the screen: +x; right: +z
@@ -266,7 +288,10 @@ final class ARController {
                 virtualCam = arCamera() ?? virtualCam
                 splats.view.alpha = CGFloat(t / fadeTime)
             } else {                            // 2. then it rises, from wherever ARKit's camera was when the dissolve ended
-                if !flying, let c = arCamera() ?? virtualCam, let top = topCamera(from: c) { fromCam = c; topCam = top; flying = true }
+                if !flying {                    // from where the dissolve ended (the top as planned if it cannot be framed again)
+                    if let c = arCamera() ?? virtualCam { fromCam = c; if let top = topCamera(from: c) { topCam = top } }
+                    flying = true
+                }
                 let s = min(1, Float((t - fadeTime) / flyTime))
                 splats.view.alpha = 1
                 virtualCam = blend(fromCam, topCam, ease(s))
@@ -299,16 +324,18 @@ final class ARController {
 
     /// Back to back: the next frame goes as soon as the last answer is in. ARKit drifts while walking (p50 3.6 / p90 21 cm
     /// over 2 s in the office), so the overlay is only as good as the last correction is fresh.
-    func startAuto(server: String) {
-        Task {
-            while auto {
-                if !busy && mode != .top { await locate(server: server) }   // the top view does not use the camera image
+    @ObservationIgnored private var autoTask: Task<Void, Never>?
+    func startAuto() {
+        autoTask?.cancel()                      // one loop, however fast 続けて is flipped
+        autoTask = Task {
+            while auto && !Task.isCancelled {
+                if !busy && mode != .top { await locate() }   // the top view does not use the camera image
                 try? await Task.sleep(for: .milliseconds(30))   // locate returns at once while ARKit has no frame yet
             }
         }
     }
 
-    func locate(server: String) async {
+    func locate() async {
         path.viewport = SIMD2(Float(view.bounds.width * view.contentScaleFactor), Float(view.bounds.height * view.contentScaleFactor))
         guard !busy, let frame = view.session.currentFrame else { return }
         // what this frame was taken from, in ARKit's world, and the lens: both belong to capturedImage as it is (landscape)
@@ -326,18 +353,20 @@ final class ARController {
         }
         guard let jpeg = ci.jpegRepresentation(of: image, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
                                                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.85]),
-              let url = URL(string: server + query) else { return }
+              let url = URL(string: server + query) else { status = "送る絵か URL を作れない（\(server)）"; return }
         busy = true
         defer { busy = false }
         let t0 = Date()
         do {
-            var req = URLRequest(url: url); req.httpMethod = "POST"; req.httpBody = jpeg
+            var req = URLRequest(url: url); req.httpMethod = "POST"; req.httpBody = jpeg; req.timeoutInterval = 5
             req.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-            let (data, _) = try await URLSession.shared.data(for: req)
-            let r = try JSONDecoder().decode(Answer.self, from: data)
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+            let r = try? JSONDecoder().decode(Answer.self, from: data)
+            guard code == 200, let r else { status = "サーバーのエラー: HTTP \(code) \(r?.error ?? "")"; return }
             let rtt = Int(Date().timeIntervalSince(t0) * 1000)
             guard r.ok, let p = r.pos, let q = r.quat else {
-                status = "見つからない（インライア \(r.inliers ?? 0)）\(r.error ?? "")"; return
+                status = "見つからない（インライア \(r.inliers ?? 0)）"; return
             }
             // scene-from-camera in OpenCV axes
             var sceneFromCam = simd_float4x4(simd_quatf(ix: Float(q[0]), iy: Float(q[1]), iz: Float(q[2]), r: Float(q[3])))
@@ -384,11 +413,16 @@ final class PaddedLabel: UILabel {
     override func sizeThatFits(_ size: CGSize) -> CGSize { intrinsicContentSize }
 }
 
+private struct Problem: LocalizedError {
+    let errorDescription: String?
+    init(_ s: String) { errorDescription = s }
+}
+
 private struct Flight: Decodable {
     let fps: Double?
     let path: [[Double]]
     let room: Room?
-    /// the viewer's index.json "room" (scene frame, y up); only its height is used here
+    /// the viewer's index.json "room" (scene frame, y up): x0 / z0 / y0 / circle frame the top view, y1 - margin cuts the ceiling
     struct Room: Decodable { let x0: Double; let z0: Double; let y0: Double; let y1: Double; let circle: [Double]?; let margin: Double? }
 }
 

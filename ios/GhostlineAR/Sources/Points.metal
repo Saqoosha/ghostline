@@ -1,16 +1,16 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// The scan's points, drawn inside the ARSCNView's own pass (PointRenderer): blended over the camera image with their own alpha.
-struct Pt { packed_float3 pos; uchar4 color; };            // 16 bytes, as rt_vps.py /points sends them
-struct U { float4x4 mvp; float alpha; float size; float linearize; };
+// The scan's points, drawn inside the ARSCNView's own pass (PointRenderer): white, blended over the camera image with one alpha.
+struct Pt { packed_float3 pos; uchar4 color; };            // 16 bytes, as rt_vps.py /points sends them (the colour is not drawn)
+struct U { float4x4 mvp; float alpha; float size; };
 struct VOut { float4 position [[position]]; float size [[point_size]]; float4 color; };
 
 vertex VOut pointsVertex(uint vid [[vertex_id]], const device Pt* pts [[buffer(0)]], constant U& u [[buffer(1)]]) {
     VOut o;
     o.position = u.mvp * float4(float3(pts[vid].pos), 1);
     o.size = u.size;
-    o.color = float4(u.alpha, u.alpha, u.alpha, u.alpha);   // white, premultiplied: stands out against the camera image (the scan's own colours blended in)
+    o.color = float4(u.alpha, u.alpha, u.alpha, u.alpha);   // white, premultiplied: stands out against the camera image
     return o;
 }
 

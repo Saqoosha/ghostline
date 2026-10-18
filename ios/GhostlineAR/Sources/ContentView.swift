@@ -3,7 +3,8 @@ import ARKit
 import AVKit
 
 /// Landscape: the room with the scan and the flight over it, the flight's DVR top right (its own controls play and scrub it,
-/// and the drone on the path follows its clock), the alignment controls bottom left.
+/// and the drone on the path follows its clock), the alignment controls bottom left behind the top-left button, and what
+/// failed to load always on show.
 struct ContentView: View {
     @State private var ar = ARController()
     @AppStorage("server") private var server = "http://rt4090:8790"
@@ -31,12 +32,20 @@ struct ContentView: View {
                         }
                     }
                     Spacer()
-                    VideoPlayer(player: ar.player)          // the DVR's 4:3 picture (the server crops the recorder's black sides)
+                    VideoPlayer(player: ar.player)          // dvr.mp4 is cut to 4:3 beforehand (docs/ar-iphone.ja.md)
                         .aspectRatio(4 / 3, contentMode: .fit)
                         .frame(width: 220)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 Spacer()
+                if !ar.problems.isEmpty {
+                    Text(ar.problems.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: "\n"))
+                        .font(.system(.caption2, design: .monospaced))
+                        .padding(6)
+                        .background(.red.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 if controls { HStack(alignment: .bottom) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(ar.status)
@@ -45,9 +54,9 @@ struct ContentView: View {
                             .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
                             .foregroundStyle(.white)
                         HStack(spacing: 10) {
-                            Button("読む") { ar.loadPoints(server: server); ar.loadFlight(server: server) }
+                            Button("読む") { ar.loadPoints(); ar.loadFlight() }
                                 .buttonStyle(.bordered)
-                            Button("合わせる") { Task { await ar.locate(server: server) } }
+                            Button("合わせる") { Task { await ar.locate() } }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(ar.auto)
                             Toggle("続けて", isOn: $ar.auto).fixedSize()
@@ -70,15 +79,15 @@ struct ContentView: View {
             }
             .padding()
         }
-        .onChange(of: ar.auto) { _, on in if on { ar.startAuto(server: server) } }
+        .onChange(of: ar.auto) { _, on in if on { ar.startAuto() } }
         .task {
-            ar.loadPoints(server: server)
-            ar.loadFlight(server: server)
-            if ar.auto { ar.startAuto(server: server) }   // on by default; onChange only fires on a change
+            ar.loadPoints()
+            ar.loadFlight()
+            if ar.auto { ar.startAuto() }           // on by default; onChange only fires on a change
         }
         .alert("サーバー", isPresented: $editing) {
             TextField("http://host:8790", text: $server).textInputAutocapitalization(.never).autocorrectionDisabled()
-            Button("OK") {}
+            Button("OK") { ar.loadPoints(); ar.loadFlight() }   // the loop reads the new address itself
         }
     }
 }

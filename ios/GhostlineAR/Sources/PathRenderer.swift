@@ -29,7 +29,7 @@ final class PathRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendable
     private let trail = 3.0
     private let bias: Float = 0.15
 
-    /// what the depth test found, for the status line
+    /// the projection's depth direction (the depth tests follow it), for the status line
     var info: String { lock.withLock { _info } }
     private var _info = ""
     /// false: the flight is drawn over everything
@@ -46,8 +46,8 @@ final class PathRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendable
     private var _viewport = SIMD2<Float>(0, 0)
     private var smooth: [SIMD3<Float>] = []
 
-    /// path: [t, x, y, z] per frame, in time order. Smoothed as the PC pages do (viewer/src/live.ts fit): each frame a
-    /// quadratic through the frames within `ws` seconds either side, weights tapered to zero at the edge (biweight).
+    /// path: [t, x, y, z] per frame, in time order, evenly spaced. Smoothed as the PC pages do (viewer/src/live.ts fit, without
+    /// its inlier weights): each frame a quadratic through the frames within `ws` seconds either side, biweight-tapered.
     func setPath(_ path: [[Double]], device: MTLDevice, ws: Double = 0.4) {
         let n = path.count, dt = n > 1 ? (path[n - 1][0] - path[0][0]) / Double(n - 1) : 0.04
         let W = max(1, Int((ws / dt).rounded()))
@@ -72,6 +72,7 @@ final class PathRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendable
 
     /// x, y, z, radius (float32) per disc
     func setOccluders(_ data: Data, device: MTLDevice) {
+        guard !data.isEmpty else { return }
         let b = data.withUnsafeBytes { device.makeBuffer(bytes: $0.baseAddress!, length: data.count, options: .storageModeShared) }
         lock.withLock { occluders = b; nOcc = data.count / 16 }
     }
@@ -79,7 +80,10 @@ final class PathRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendable
     /// the drone at t (scene coordinates), between the two smoothed frames around it
     func position(at t: Double) -> SIMD3<Float>? {
         let (times, sm) = lock.withLock { (self.times, smooth) }
-        guard times.count > 1 else { return nil }
+        return interpolate(t, times, sm)
+    }
+    private func interpolate(_ t: Double, _ times: [Double], _ sm: [SIMD3<Float>]) -> SIMD3<Float>? {
+        guard times.count > 1, t.isFinite else { return nil }
         let now = index(t, times), k = min(now + 1, times.count - 1)
         let f = k == now ? 0 : Float((t - times[now]) / (times[k] - times[now]))
         return sm[now] + (sm[k] - sm[now]) * min(max(f, 0), 1)
@@ -127,7 +131,7 @@ final class PathRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendable
         if occ == nil {
             guard let lib = device.makeDefaultLibrary() else { return }
             occ = pipeline(device, lib, fm, "occVertex", "occFragment", color: false)
-            // SceneKit may draw with reversed depth (near = 1): read it off its projection
+            // the compare follows the projection SceneKit hands over; the buffer's own clear (usesReverseZ) is set to match in ARController
             let zn = P * SIMD4(0, 0, -1, 1), zf = P * SIMD4(0, 0, -10, 1)
             let rev = zn.z / zn.w > zf.z / zf.w
             let s = MTLDepthStencilDescriptor(); s.depthCompareFunction = rev ? .greaterEqual : .lessEqual
@@ -135,12 +139,11 @@ final class PathRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendable
             s.isDepthWriteEnabled = true; write = device.makeDepthStencilState(descriptor: s)
             lock.withLock { _info = String(format: "depth %@ (ndc 1 m %.3f, 10 m %.3f)", rev ? "reversed" : "normal", zn.z / zn.w, zf.z / zf.w) }
         }
-        guard let occ else { return }
         let viewport = lock.withLock { _viewport }   // renderer.currentViewport is not used: set from the view's own size
         guard viewport.x > 0, viewport.y > 0 else { return }
         // SceneKit leaves back-face culling on in its encoder: the path's triangle strip faced away and was culled whole
         encoder.setCullMode(.none)
-        if renderer.depthPixelFormat != .invalid, oc, let ob, no > 0 {   // the room into depth
+        if renderer.depthPixelFormat != .invalid, oc, let occ, let ob, no > 0 {   // the room into depth (without it, the flight still draws)
             var u = OccU(mv: simd_float4x4(mv.scnMatrix4Value), p: P, viewport: viewport, bias: bias)
             encoder.setRenderPipelineState(occ)
             encoder.setDepthStencilState(write)
@@ -175,9 +178,7 @@ final class PathRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendable
         encoder.setVertexBuffer(b, offset: 0, index: 0)
         encoder.setVertexBytes(&u, length: MemoryLayout<LineU>.stride, index: 1)
         if now > from { encoder.drawPrimitives(type: .triangleStrip, vertexStart: 2 * from, vertexCount: 2 * (now - from + 1)) }
-        // the drone between the two frames around the DVR's clock, not snapped to a frame
-        let k = min(now + 1, times.count - 1), f = k == now ? 0 : Float((t - times[now]) / (times[k] - times[now]))
-        var here = sm[now] + (sm[k] - sm[now]) * min(max(f, 0), 1)
+        guard var here = interpolate(t, times, sm) else { return }   // the drone between frames, as its tag
         var d = LineU(mvp: mvp, color: SIMD4(1, 0.25, 0.2, 1), viewport: viewport, width: 24, n: 1)
         encoder.setRenderPipelineState(p.dot)
         encoder.setVertexBytes(&here, length: MemoryLayout<SIMD3<Float>>.size, index: 0)   // 12 bytes: packed_float3

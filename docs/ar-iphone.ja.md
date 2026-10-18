@@ -9,12 +9,13 @@ iPhone（ARKit）のカメラの絵に、同じ部屋の 3DGS スキャンと Wh
 ## 動かし方
 
 ```bash
-# rt4090：常駐（ssh が切れても止まらないように systemd-run。PATH に mastenv が無いと gsplat の組み立てで ninja が見つからず落ちる）
+# rt4090：常駐（ssh が切れても止まらないように systemd-run。PATH に mastenv が無いと gsplat の組み立てで ninja が見つからず落ちる）。
+# 起動に約 40 秒、VPS-READY が出たら使える。認証が無いので tailnet / LAN の中だけで使う
 sudo systemd-run --uid=saqoosha --unit=ghostline-vps --working-directory=/home/saqoosha/rt \
   -E HOME=/home/saqoosha -E PATH=/home/saqoosha/mastenv/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin \
   -E LOG=/home/saqoosha/rt/vps_log -E FLIGHT=/home/saqoosha/rt/ar/office-whoop-1 \
   /home/saqoosha/mastenv/bin/python -u rt_vps.py /mnt/c/Users/saqoosha/VDGS/dvr/rt/office/map_office2.npz /mnt/data/office-floor-video/office-7f-yup.ply
-sudo systemctl stop ghostline-vps                       # 止める（起動に約 40 秒、VPS-READY が出たら使える）
+sudo systemctl stop ghostline-vps                       # 止める
 
 # Mac：組んで入れる（Release で。Debug だと splat の並べ替えが遅い。初回は xcodebuild -downloadComponent MetalToolchain が要った）
 cd ios/GhostlineAR && xcodegen generate
@@ -23,7 +24,7 @@ xcrun devicectl device install app --device <UDID> build/Build/Products/Release-
 ```
 
 地図と ply は rt4090 の Linux から Windows のディスクを読む（`/mnt/c`＝C:、`/mnt/data`＝D:）。iPhone からは Tailscale の `http://rt4090:8790`
-（アプリの左下の文字をタップで変えられる）。`FLIGHT` のフォルダには `poses60.json`（姿勢）・`dvr.mp4`・`index.json`（ビューアのもの。`room` を使う）を置く。
+（左上の操作のボタンで出る欄の、いちばん下の文字をタップで変えられる。ATS は `NSAllowsLocalNetworking` なので、1 語の名前か `.local` か IP で書く）。`FLIGHT` のフォルダには `poses60.json`（姿勢）・`dvr.mp4`・`index.json`（ビューアのもの。`room` を使う）を置く。
 
 DVR は再生用に作り直す：録画の左右の黒（1280×720 の左 160 px から幅 960）を切って 4:3 に、離陸の直前から（オフィスは 19.3 s まで机の上なので 18.5 s から）。
 姿勢も同じ秒数だけ引く。
@@ -34,14 +35,16 @@ ffmpeg -ss 18.5 -i src720.mp4 -vf crop=960:720:160:0,scale=480:360,setsar=1 -c:v
 
 ## 位置合わせ（VPS）
 
-アプリは ARKit の 1 フレーム（`capturedImage` を半分の 960×720 に、その内部パラメータ、同じフレームの ARKit 姿勢）を送り、
-サーバーがシーンの中のカメラ姿勢（OpenCV の軸）を返す。`ARKit←シーン = ARKit のカメラ姿勢 × diag(1,-1,-1) × (シーンのカメラ姿勢)⁻¹`。
-同じフレームの姿勢を使うので、通信の遅れは重なりに効かない。
+アプリは ARKit の 1 フレーム（`capturedImage` を半分の 960×720 に、その内部パラメータ）を送り、サーバーがシーンの中のカメラ姿勢（OpenCV の軸）を返す。
+アプリは同じフレームの ARKit 姿勢を手元に持っていて、`ARKit←シーン = ARKit のカメラ姿勢 × diag(1,-1,-1) × (シーンのカメラ姿勢)⁻¹`。
+同じフレームの姿勢を使うので、通信の遅れは重なりに効かない（ARKit 姿勢は `ar=` でサーバーにも送るが、ログに残すだけ）。
 
 - 1 回目は tracker の探し直しと同じ：DINOv2 で近いキーフレーム 8 枚 → LighterGlue → PnP（PoseLib）→ 見つけた姿勢で **iPhone の内部パラメータのまま** 3DGS を描いて照合、を 2 回。
   地図のキーフレームはドローンの 100° で描いてあり、iPhone は約 65° なので、描き直す 2 段目が効く
-- 2 回目からはアプリが予測（いまの変換で見たカメラの位置）を送り、サーバーは探し直しを飛ばして描いて照合するだけ（`track`）
-- アプリは答えが返ったら次を送る（約 2.7 Hz）。新しい変換へは 0.3 秒かけて寄せる。真上の絵のあいだは送らない
+- 2 回目からはアプリが予測（いまの変換で見たカメラの位置）を送り、サーバーは探し直しを飛ばして描いて照合するだけ（`track`）。
+  答えが予測から 0.5 m か 10° 以上離れたら採らず、探し直す（床や机の並びのような繰り返しに一致して、間違った変換で固まらないように）
+- アプリは答えが返ったら次を送る（約 2.7 Hz、5 秒で諦める）。新しい変換へは 0.3 秒かけて寄せる。真上で止まっているあいだは送らない（移り変わりの間は送る）
+- 変な入力は 400、サーバーの例外は 500（トレースバックは journal）。アプリは読み込みの失敗を画面の下に赤で出し続ける
 
 **基準値**：DVR の 3502 フレーム（真値 `poses60.json`）で 6 mm（初回 507 ms、インライア 439）、予測を 15 cm ずらしても 9 mm に戻る。
 iPhone で歩いて 108 秒：291 回すべて `track`、サーバー p50 159 ms、インライア p50 855、1 回の直し p50 1.3 cm・p90 3.0 cm・最大 9.5 cm。

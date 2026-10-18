@@ -7,13 +7,12 @@ import simd
 /// SceneKit's .point primitives ignore (node opacity and material transparency left them fully opaque on the iPhone).
 /// Called on SceneKit's render thread.
 final class PointRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendable {
-    private struct Uniforms { var mvp: simd_float4x4; var alpha: Float; var size: Float; var linearize: Float }
+    private struct Uniforms { var mvp: simd_float4x4; var alpha: Float; var size: Float }
     private let lock = NSLock()
     private var buffer: MTLBuffer?
     private var count = 0
     private var pipeline: MTLRenderPipelineState?
     private var depth: MTLDepthStencilState?
-    private var linearize: Float = 0
     private var _alpha: Float = 0.8
     var alpha: Float {
         get { lock.withLock { _alpha } }
@@ -23,6 +22,7 @@ final class PointRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendabl
     var size: Float = 2
 
     func setPoints(_ data: Data, device: MTLDevice) {
+        guard !data.isEmpty else { return }
         let b = data.withUnsafeBytes { device.makeBuffer(bytes: $0.baseAddress!, length: data.count, options: .storageModeShared) }
         lock.withLock { buffer = b; count = data.count / 16 }
     }
@@ -48,10 +48,9 @@ final class PointRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendabl
             pipeline = try? device.makeRenderPipelineState(descriptor: d)
             let s = MTLDepthStencilDescriptor(); s.depthCompareFunction = .always; s.isDepthWriteEnabled = false
             depth = device.makeDepthStencilState(descriptor: s)
-            linearize = [.bgra8Unorm_srgb, .rgba8Unorm_srgb].contains(renderer.colorPixelFormat) ? 1 : 0
         }
         guard let pipeline else { return }
-        var u = Uniforms(mvp: simd_float4x4(m.scnMatrix4Value), alpha: a, size: size, linearize: linearize)
+        var u = Uniforms(mvp: simd_float4x4(m.scnMatrix4Value), alpha: a, size: size)
         encoder.setRenderPipelineState(pipeline)
         encoder.setDepthStencilState(depth)
         encoder.setVertexBuffer(b, offset: 0, index: 0)
