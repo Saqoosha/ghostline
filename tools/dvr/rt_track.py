@@ -30,7 +30,8 @@ env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s w
      GLUE / XFEAT (unset; TensorRT engines from rt_trt.py to match / find features with instead of PyTorch),
      PNP (poselib; magsac = OpenCV's USAC_MAGSAC, below),
      RENDER (0; 1 = while tracking, match a render of SCENE (.ply) at the prediction instead of keyframes, rt_render.py), RNEAR (1.0 m near plane),
-     RFALL (1: also match keyframes right after a failed try); RCLIP / ROPA / RBATCH / REDGE: see rt_render.py"""
+     RFALL (1: also match keyframes right after a failed try); RCLIP / ROPA / RBATCH / REDGE: see rt_render.py,
+     KFOUT / KF_MIN / KF_STEP / KF_ROT / KF_WINDOW / RKF / MAPWATCH (the day's frames grown into the map between heats, below)"""
 import os
 # One BLAS thread. numpy's matrices here are small (the BA's system is about 150 x 150), and OpenBLAS otherwise starts a
 # thread per core for them: on a 32-core machine that took the tracker from 54 to 33 Hz with BA on, the solve itself 0.2 ms.
@@ -65,6 +66,16 @@ MAPK = int(E("MAPK", 0))                            # keypoints per keyframe use
 # it was last seen. 0 = everywhere (as at the start)
 REACH = E("REACH", 0)
 NEAR, NEAR_K, NEAR_ANG = int(E("NEAR", 0)), int(E("NEAR_K", 4)), E("NEAR_ANG", 100)
+# The day's light (docs/fdf-2026-10-17-field-test.ja.md): a morning scan matched in the late afternoon loses points. KFOUT=<dir>
+# writes the frames it tracked well (how "track", KF_MIN inliers or more; one per KF_STEP m / KF_ROT deg per cell) - the
+# matcher's own keypoints and descriptors, the pose, the global descriptor - for rt_map_grow.py, which lifts them to 3D with
+# the scan's depth and appends them to a map as real keyframes. RKF=1 (with RENDER) then also matches the nearest real
+# keyframe (within 4 m / 30 deg) while tracking, so such a frame meets a picture taken in the same light as well as the render. Only frames from the
+# heats just before help: 14-15h frames made the 16:44 heats worse, 16:30s frames made them better. KF_WINDOW (s): a place
+# gets a new frame once its last one is older than this (0 = never). MAPWATCH=<file>: the file names the map to use; when
+# what it names changes the map is loaded on a thread and swapped in between cycles (rt_control.py grows one between heats)
+KFOUT, KF_MIN, KF_STEP, KF_ROT, RKF = os.environ.get("KFOUT"), int(E("KF_MIN", 200)), E("KF_STEP", 1.0), E("KF_ROT", 20), int(E("RKF", 0))
+KF_WINDOW, MAPWATCH = E("KF_WINDOW", 0), os.environ.get("MAPWATCH")
 FLOW, FLOW_EVERY, FLOW_RESEED, FLOW_MIN = int(E("FLOW", 0)), int(E("FLOW_EVERY", 8)), int(E("FLOW_RESEED", 60)), int(E("FLOW_MIN", 30))
 GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30), E("SEND_T0", 0), os.environ.get("FRAME_CODE")
 # Two lenses (a live cell's camera field "a.json+b.json"): the HDZero Nano 90 flies with its stock lens or the upgrade one, and the
@@ -113,6 +124,12 @@ FRESH, KQ, BLEND, TRAIL_L, TRAIL_W = E("FRESH", 0.1), E("KQ", 1e4), E("BLEND", 0
 T = lambda a: torch.tensor(a, dtype=torch.float32, device=dev)
 def sync(): torch.cuda.synchronize() if dev == "cuda" else torch.mps.synchronize() if dev == "mps" else None
 maps, sources = {}, {}
+def load_map(path):
+    with np.load(path) as m:
+        mk = MAPK or m["kp"].shape[1]               # XFeat returns the strongest first, so the first MAPK are the best
+        return dict(K=m["K"], size=[int(x) for x in m["size"]], n=np.minimum(m["n"], mk), kp=T(m["kp"][:, :mk]), desc=torch.tensor(m["desc"][:, :mk], device=dev), X=m["X"][:, :mk],
+                    pos=m["pos"], fwd=Rot.from_quat(m["quat"]).as_matrix()[:, :, 2], g=T(m["g"]),
+                    real=m["real"].astype(bool) if "real" in m.files else np.zeros(len(m["pos"]), bool))
 import threading, subprocess
 # SIGNAL=1 (live): a cell whose receiver shows no picture - its flat no-signal screen or analog snow (rt_signal.py) - sends no
 # frames to the tracker, and with every cell quiet the loop only waits. On an EventVRX recording the cells had a picture 47% of
@@ -210,10 +227,7 @@ class Stream:
         if self.live:
             url, rect, camj = self.video.split("|"); self.rect = [int(v) for v in rect.split(":")]
             camjs = [c if c.endswith(".json") else c + ".json" for c in camj.split("+")]; self.video = camjs[0][:-5]   # the first one gives the frame size
-        if self.map_npz not in maps:
-            m = np.load(self.map_npz); mk = MAPK or m["kp"].shape[1]   # XFeat returns the strongest first, so the first MAPK are the best
-            maps[self.map_npz] = dict(K=m["K"], size=[int(x) for x in m["size"]], n=np.minimum(m["n"], mk), kp=T(m["kp"][:, :mk]), desc=torch.tensor(m["desc"][:, :mk], device=dev), X=m["X"][:, :mk],
-                                      pos=m["pos"], fwd=Rot.from_quat(m["quat"]).as_matrix()[:, :, 2], g=T(m["g"]))
+        if self.map_npz not in maps: maps[self.map_npz] = load_map(self.map_npz)
         self.m = maps[self.map_npz]; self.K = self.m["K"]; RW, RH = self.m["size"]
         # frames: the pinhole video, at the map's size, with the OSD and the undistortion border masked (as cpr_track.py)
         cam = self.cam = json.load(open(self.video + ".json")); W, H = cam["width"], cam["height"]; self.fps = GRID_FPS if self.live else cam.get("fps", 60)
@@ -222,7 +236,7 @@ class Stream:
         m1, m2 = cv2.fisheye.initUndistortRectifyMap(Kf, np.array(fk["k"]), np.eye(3), Kfull, (W, H), cv2.CV_16SC2)
         osd = np.full((H, W), 255, np.uint8); osd[:82] = 0; osd[632:] = 0
         self.qvalid = T(cv2.resize((cv2.erode(cv2.remap(osd, m1, m2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST)) > 0
-        self.next = 0; self.hist = []; self.recs = []; self.flow = None; self.fails = 0; self.last = None
+        self.next = 0; self.hist = []; self.recs = []; self.flow = None; self.fails = 0; self.last = None; self.kfs = []   # kfs: (pos, fwd) written (KFOUT)
         if self.live:                               # cell pixel for every pinhole pixel of the map's size: 4:3 fisheye stretched to the cell
             x0, y0, w, h = self.rect; Km = self.K; self.lenses = []   # per camera definition: (the cell's map, the valid mask, its name)
             for cj in camjs:
@@ -287,9 +301,10 @@ class Stream:
         self.again = LENS_AGAIN if best != t["was"] else min(self.again * 2, 320)
         if best != self.li: self.set_lens(best)
         print(f"{self.prefix}: lens {self.lenses[best][2]} ({shown} inliers)", flush=True)
-    def nearest(self, R, p, n=None, max_ang=45, per_deg=15):   # keyframes near the predicted pose, looking about the same way
+    def nearest(self, R, p, n=None, max_ang=45, per_deg=15, real=False):   # keyframes near the predicted pose, looking about the same way
         d = np.linalg.norm(self.m["pos"] - p, axis=1); ang = np.degrees(np.arccos(np.clip(self.m["fwd"] @ R.as_matrix()[:, 2], -1, 1)))
         score = d / 1.5 + ang / per_deg; score[(d > 12) | (ang > max_ang)] = np.inf
+        if real: score[~self.m["real"] | (d > 4) | (ang > 30)] = np.inf   # RKF: only a real keyframe close enough to overlap
         return [int(k) for k in np.argsort(score)[:n or NKF] if np.isfinite(score[k])]
 streams = [Stream(s) for s in sys.argv[1:]]; RW, RH = streams[0].m["size"]
 assert all(s.m["size"] == [RW, RH] for s in streams), "all maps must share the render size"
@@ -452,7 +467,7 @@ def middle(c):                                      # plan from the answers so f
             pred = predict(s.hist, i)
             # with RENDER the render at the prediction replaces the keyframes, except right after a failed try, when the keyframes are
             # matched too: a bad prediction renders a view that barely overlaps the frame, and the keyframes' wider pick still finds it
-            ks = [] if scene and not (s.fails and RFALL) else s.nearest(*pred, NEAR_K, NEAR_ANG, 30) if NEAR and s.fails else s.nearest(*pred)
+            ks = (s.nearest(*pred, 1, real=True) if RKF else []) if scene and not (s.fails and RFALL) else s.nearest(*pred, NEAR_K, NEAR_ANG, 30) if NEAR and s.fails else s.nearest(*pred)
             plan.append(("track", pred, ks, s.hist[-1][0]))
         else: plan.append(("reloc", None, None, None)); lost.append(b)
     tr = [b for b, p in enumerate(plan) if p[0] == "track"] if scene else []
@@ -507,6 +522,7 @@ def solve(c, b):                                    # CPU: PnP for one stream ->
         if r and (best is None or r[2] > best[0][2]): best = (r, uv, X)
     return (best[0], "reloc", time.perf_counter(), carry(s, i, best[1], best[2], best[0], 0)) if best and best[0][2] >= RMIN else (None, None, time.perf_counter(), "drop")
 def land(c, out, t0, clock0):                       # apply the answers to the streams and record them
+    global KFOUT
     for b, ((s, i), (r, how, tf, fs)) in enumerate(zip(c["batch"], out)):
         done = (tf - s.t_base) if s.live else clock0 + (tf - t0)   # live: on the cell's own time line
         s.flow = None if fs == "drop" else fs if fs is not None else s.flow
@@ -522,12 +538,26 @@ def land(c, out, t0, clock0):                       # apply the answers to the s
             if len(s.win) >= 3:
                 qs, ps = smooth(s.win); win = {"win": [[w[1], *p_, *q_] for w, p_, q_ in zip(s.win, np.round(ps, 4).tolist(), np.round(qs, 5).tolist())]}
         s.recs.append(dict(i=i, done=done, plan=c["plan"][b][0], **lat, **win, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how, **({"H": [float(f"{v:.6g}") for v in r[4][np.triu_indices(6)]]} if INFO and r[4] is not None else {})) if r else {"how": "none"})))
+        if KFOUT and r is not None and how == "track" and r[2] >= KF_MIN and c["q"][b] is not None:
+            try: keep_kf(s, i, r, c["q"][b], c["x"][c["row"][b]])
+            except Exception as e: KFOUT = None; print(f"KFOUT off: {type(e).__name__}: {e}", flush=True)   # a side output must not end the run
         if s.live and len(s.lenses) > 1: s.recs[-1]["lens"] = s.li; s.lens_step(int(r[2]) if r is not None else 0)
         if subs:
             m = json.dumps(dict(stream=os.path.basename(s.prefix), fps=s.fps, **s.recs[-1]))
             for q in list(subs):
                 if not q.full(): q.put_nowait(m)
     s_ = {k: c[k] * 1000 for k in ("feat", "match", "rend", "glue") if k in c}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
+def keep_kf(s, i, r, q, img):                       # KFOUT: one tracked frame as a candidate real keyframe (rt_map_grow.py lifts it)
+    f, now = r[0].as_matrix()[:, 2], time.time()
+    if KF_WINDOW: s.kfs = [k for k in s.kfs if now - k[2] < KF_WINDOW]
+    if any(np.linalg.norm(r[1] - p) < KF_STEP and f @ g > np.cos(np.radians(KF_ROT)) for p, g, _ in s.kfs): return
+    s.kfs.append((r[1], f, now)); kp, d = (q[0][q[2]], q[1][q[2]]) if len(q) == 3 else q
+    with torch.no_grad(): g = torch.nn.functional.normalize(dino((torch.nn.functional.interpolate(img[None], (168, 224), mode="area") - MEAN) / STD), dim=1)[0]
+    os.makedirs(KFOUT, exist_ok=True)
+    out = f"{KFOUT}/{os.path.basename(s.prefix)}-{now * 1000:.0f}-{i:07d}.npz"
+    with open(out + ".part", "wb") as fh: np.savez(fh, kp=kp.float().cpu().numpy(), desc=d.half().cpu().numpy(), quat=r[0].as_quat(), pos=r[1],
+             g=g.float().cpu().numpy(), K=s.K, inl=int(r[2]), lens=getattr(s, "li", 0))
+    os.replace(out + ".part", out)                  # whole: rt_map_grow.py may read the folder mid-heat
 REAL = any(s.live for s in streams)
 # PACE=1 (recorded video): wait on the wall clock for the next frame instead of jumping to it, so the GPU idles between
 # frames as it does on a live feed. Without it a recording runs back to back - right for timings, wrong for power.
@@ -552,10 +582,28 @@ if REAL:                                            # the warm-up's blank frame 
     print("listening", flush=True)
 else: print("tracking", flush=True)
 cycles.clear(); clock, t_all, pending, steps = 0.0, time.time(), None, []
+swap, swap_lock = [], threading.Lock()             # MAPWATCH: (path, map) loaded on the watcher's thread, put in by the loop
+def mapwatch():
+    cur = streams[0].map_npz
+    while True:
+        time.sleep(2)
+        try: want = open(MAPWATCH).read().strip()
+        except OSError: continue
+        if not want or want == cur: continue
+        try:
+            m = load_map(want); cur = want
+            if m["size"] != [RW, RH] or not np.allclose(m["K"], streams[0].K): print(f"map {want}: not the running map's camera, kept the old one", flush=True); continue
+            with swap_lock: swap.append((want, m))
+        except Exception as e: print(f"map {want}: {type(e).__name__}: {e}", flush=True); cur = want   # tried once; a new name tries again
+if MAPWATCH: threading.Thread(target=mapwatch, daemon=True).start()
 def loop():
   global clock, pending
   while True:
       t0, clock0 = time.perf_counter(), clock
+      if swap:                                        # between cycles: the matches in flight already hold their points, not map indices
+          with swap_lock: path, m = swap[-1]; swap.clear()   # only the newest: an older one left behind would swap back
+          for s in streams: s.m, s.map_npz = m, path
+          print(f"map {path}: {len(m['pos'])} keyframes, {int(m['real'].sum())} real", flush=True)
       futs = [pool.submit(solve, pending, b) for b in range(len(pending["batch"]))] if pending else None
       batch, live = pick(clock)
       if not batch and not futs:

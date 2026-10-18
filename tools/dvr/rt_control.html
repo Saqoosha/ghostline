@@ -42,6 +42,10 @@
   #relay { flex: none; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--spirit); white-space: nowrap; } #relay.off { color: var(--dim); }
   #rec:hover { color: var(--ink); } #rec.on { color: var(--alarm); } #rec.on::before { content: "● "; animation: breathe 2.4s ease-in-out infinite; }
   #err { color: var(--alarm); font: 400 12px var(--mono); min-height: 18px; }
+  .grow { display: flex; align-items: center; gap: 14px; font: 400 11px var(--mono); letter-spacing: .06em; color: var(--dim); min-height: 22px; }
+  .grow button { background: none; border: 1px solid var(--faint); border-radius: 3px; padding: 2px 8px; font: inherit; color: var(--ink); cursor: pointer; }
+  .grow button:hover { background: rgba(12, 15, 20, .05); } .grow button:disabled { opacity: .3; cursor: default; }
+  .grow .bad { color: var(--alarm); }
 
   .num { display: inline-block; font-weight: 100; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
 
@@ -157,6 +161,8 @@
     <button id="go"><span id="go-l">開始</span></button>
   </div>
   <div id="err"></div>
+  <div class="grow" title="ヒートが終わる（既定：全マスの映像が 30 秒消える）と、直前 30 分（既定）に追えたフレームを地図に足す。tracker は止まらない。描いて照合（RENDER）のときだけ">
+    <span>地図 <b id="grow-s">–</b></span><button id="grow-go">今すぐ育てる</button><button id="grow-reset">スキャンだけに戻す</button></div>
 
   <div class="top"><svg id="top" preserveAspectRatio="xMidYMid meet"><image id="aerial" preserveAspectRatio="none"/><path id="course"/><path id="track"/><path id="gate"/><g id="trails"></g></svg>
     <div id="tags"></div><div class="scale" id="scale"><i></i>10 m</div><div class="north">↑ 北 · 軌跡は直近 12 秒</div>
@@ -275,6 +281,10 @@ function render(s) {
   num("gt", s.gpu.temp != null ? String(s.gpu.temp) : "–");
   $("gp").textContent = "GPU の温度" + (s.gpu.pstate ? ` · ${s.gpu.pstate === "P8" ? "待機" : "動作中"}` : "");   // P8 is the idle state, P0-P2 working
   num("cyc", s.lat != null ? s.lat.toFixed(0) : "–");
+  const g = s.grow || {}, can = s.phase === "running" && !!(s.config && s.config.render);
+  $("grow-s").textContent = !can ? "–" : g.phase === "growing" ? "育てている…" : g.last ? `実フレーム ${g.last.n} 枚を足した（${Math.round(g.last.age / 60)} 分前、${g.last.reason}）${g.last.swapped ? "" : " · tracker の差し替え待ち"}` : "スキャンだけ";
+  $("grow-s").className = g.error && can && g.phase !== "growing" ? "bad" : ""; if (g.error && can && g.phase !== "growing") $("grow-s").textContent += ` · ${g.error}`;
+  $("grow-go").disabled = $("grow-reset").disabled = !can || g.phase === "growing";
   $("rec").classList.toggle("on", s.rec > 0); $("rec").textContent = s.rec > 0 ? `録画中 ${s.rec}` : "録画";
   // the audience relay, when it is on: sending, or how long since it last got a post through
   $("relay").hidden = !s.relay; if (s.relay) { $("relay").classList.toggle("off", !s.relay.ok); $("relay").textContent = (s.relay.ok ? "送信中" : s.relay.age == null ? "未送信" : `未送信 ${Math.round(s.relay.age)} 秒`) + (s.relay.pending ? ` · ヒート ${s.relay.pending} 本が未送信` : ""); $("relay").title = `観客向けページへの送信 → ${s.relay.event}${s.relay.err ? "\n" + s.relay.err : ""}` }
@@ -312,6 +322,8 @@ const start = () => post("/api/start", {
   source: $("source").value, map: $("map").value, cam: $("cam").value, scene: $("scene").value, track: $("trackfile").value,
   render: $("render").checked, ba: $("ba").checked, extra: $("extra").value,
   cells: CELLS.map(([cell]) => ({ cell, on: $("on-" + cell).checked, name: $("name-" + cell).value.trim() })) });
+$("grow-go").onclick = () => post("/api/grow");
+$("grow-reset").onclick = () => { if (confirm("地図をスキャンだけに戻す？")) post("/api/grow/reset"); };
 $("go").onclick = () => { if (phase === "stopped") start(); else if (confirm("tracker を止める？")) post("/api/stop"); };
 
 async function poll() {
