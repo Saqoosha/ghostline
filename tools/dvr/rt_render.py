@@ -34,7 +34,9 @@ class Scene:
             kw = dict(sh_degree=1, render_mode="RGB+ED", near_plane=self.near, radius_clip=RCLIP)
             if RBATCH and B > 1:                    # one call for all cameras on the union of their culls: half the time, slightly less accurate
                 i = keep_mask(self.means, vmt, Kt, self.W, self.H, self.near).any(0).nonzero()[:, 0] if frustum.CULL > 0 else torch.arange(len(self.means), device=vmt.device)
-                o, a, _ = rasterization(self.means[i], self.quats[i], self.scales[i], self.opac[i], self.colors[i], vmt, Kt, self.W, self.H, **kw)
+                op = self.opac[i]
+                if not len(i): i = torch.zeros(1, dtype=torch.long, device=vmt.device); op = self.opac[i] * 0   # none in view: as frustum.rasterize_culled
+                o, a, _ = rasterization(self.means[i], self.quats[i], self.scales[i], op, self.colors[i], vmt, Kt, self.W, self.H, **kw)
             else: o, a, _ = rasterize_culled(self.means, self.quats, self.scales, self.opac, self.colors, vmt, Kt, self.W, self.H, **kw)
             kp, desc, sc = self.detect(o[..., :3].clamp(0, 1).permute(0, 3, 1, 2))
             ix = kp.round().long(); ix[..., 0].clamp_(0, self.W - 1); ix[..., 1].clamp_(0, self.H - 1); bi = torch.arange(B, device=kp.device)[:, None]
