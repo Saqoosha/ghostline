@@ -140,6 +140,7 @@ from rt_signal import has_signal
 class GridSource:                                   # one decoded live video; its frames fan out to the cells that use it
     def __init__(self, url):
         self.url, self.cells, self.ended, self.n = url, [], False, 0
+        self.first = None                            # (arrival, frame number) of its first frame: the time line of all its cells
         self.W, self.H = [int(v) for v in GRID.split("x")]
     def start(self):
         if self.url.startswith("ndi://"):           # an NDI source on the LAN (the EventVRX output at the venue), by (part of) its name
@@ -259,6 +260,7 @@ class Stream:
         self.N = len(self.frames)
         print(f"{self.prefix}: {self.N} frames at {self.fps} fps, {len(self.m['pos'])} keyframes", flush=True)
     def push(self, n, full, t, tw):                  # reader thread: a new frame of the source
+        if self.src.first is None: self.src.first = (t, n)
         if SIGNAL:                                  # no picture in the cell: no frame, so a quiet cell costs only this test
             on = has_signal(full[self.rect[1]:self.rect[1] + self.rect[3], self.rect[0]:self.rect[0] + self.rect[2]])
             self.flip = self.flip + 1 if on != self.signal else 0   # logged once it has held 0.5 s; a weak signal flickers
@@ -270,7 +272,10 @@ class Stream:
             if not on: return
         mx, my = self.cellmap
         self.frames[n] = cv2.cvtColor(cv2.remap(full, mx, my, cv2.INTER_LINEAR), cv2.COLOR_BGR2RGB)
-        if not self.arrive: self.t_base = t - n / self.fps   # when frame 0 would have arrived, even if it was lost
+        # when frame 0 would have arrived, even if it was lost - from the source's first frame, not this cell's first picture:
+        # the capture runs a little off its nominal fps, and cells whose pictures began minutes apart got time lines seconds
+        # apart (FDF 2026-10-17: R4 and R5 1.265 s, F1 and R2 38.6 s, for the same frames)
+        if not self.arrive: t0, n0 = self.src.first; self.t_base = t0 - n0 / self.fps
         self.arrive[n], self.arrive_wall[n] = t, tw; self.N = n + 1
         for k in [k for k in self.frames if k < n - 30]: del self.frames[k]   # codes skip on drops; 30 outlasts a slow cycle
     def set_lens(self, j): self.li = j; self.cellmap, self.qvalid = self.lenses[j][:2]
