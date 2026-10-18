@@ -16,8 +16,11 @@ uv run -q --with numpy python tools/mgp/name_slots.py "$N" "build/mgp/poses/${Q}
 # is wrong for some rounds (a re-run labelled with the previous race's number) and missing for files fetched later
 VF=$(ssh -n "$LOC_HOST" "grep '^$N ' $LOC_DIR/queue.txt | head -1 | cut -d' ' -f2")
 [[ "$VF" =~ ^[0-9_-]+\.mp4$ ]] && VFA=(--video-file "$VF") || VFA=()
+# CLIPS=0: race.json only, the clips already cut stay (the clip window comes from the start gate, so new poses
+# elsewhere on the course do not move it)
+CA=(--clips); [ "${CLIPS:-1}" = 0 ] && CA=()
 uv run -q --with numpy python tools/mgp/make_mgp_race.py build --round "$N" --poses "build/mgp/poses/$Q" --out "build/mgp/$Q" "${VFA[@]}" \
-  --fps 60 --margin 1.5 --min-gap 3 --ocr-dir /nonexistent --gates build/mgp/gates/gates_1404.json --crop-top 40 --clips 2>&1 | grep -E "^round|diff"
+  --fps 60 --margin 1.5 --min-gap 3 --ocr-dir /nonexistent --gates build/mgp/gates/gates_1404.json --crop-top 40 "${CA[@]}" 2>&1 | grep -E "^round|diff"
 ln -sfn "../../../build/mgp/$Q" "viewer/public/mgp-dev/$Q"
 uv run -q python - "$N" "$Q" <<'PY'
 import json, sys

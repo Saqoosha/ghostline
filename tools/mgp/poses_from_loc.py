@@ -36,6 +36,31 @@ def rot_wxyz(q):
                      [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
 
 
+# The TEAM BLACKSHEEP gate in the final row is two identical frames stacked (the same print on both bars): a frame
+# passing under it (course pass 4: after the pass under NEROS, before the low gate) is often localized one storey up
+# (Round 44, MCKFPV, 50.97-51.10 s: 2.9-3.8 m high while going through the lower opening; 51.23 s, past it, 1.65 m).
+# Such frames come down by STOREY (the height between the two prints). Page world frame: x, up, -VD z.
+TBS_ZONE = (-126.5, -121.0, -10.0, -4.0)            # x0, x1, z0, z1 around the TBS gate
+NEROS_LOW = (-116.5, -110.0, -10.0, -2.0, 1.6)      # x0, x1, z0, z1, highest: under NEROS (as unfolded, mapfix_unfold.py)
+LOW_GATE = (-126.5, -9.0, -5.0)                     # x below, z0, z1: at the low gate, the end of the stretch
+STOREY, STOREY_TOP, STOREY_WINDOW = 2.3, 2.0, 4.0   # m, m (above the upper opening's base), s
+
+
+def storey_fix(t, C):
+    under_neros = np.nonzero((C[:, 0] > NEROS_LOW[0]) & (C[:, 0] < NEROS_LOW[1]) & (C[:, 2] > NEROS_LOW[2])
+                             & (C[:, 2] < NEROS_LOW[3]) & (C[:, 1] < NEROS_LOW[4]))[0]
+    at_low_gate = (C[:, 0] < LOW_GATE[0]) & (C[:, 2] > LOW_GATE[1]) & (C[:, 2] < LOW_GATE[2])
+    tbs_top = (C[:, 0] > TBS_ZONE[0]) & (C[:, 0] < TBS_ZONE[1]) & (C[:, 2] > TBS_ZONE[2]) & (C[:, 2] < TBS_ZONE[3]) & (C[:, 1] > STOREY_TOP)
+    moved = np.zeros(len(C), bool)
+    for i in under_neros:
+        j = i + 1
+        while j < len(C) and t[j] - t[i] <= STOREY_WINDOW * 1000 and not at_low_gate[j]:
+            if tbs_top[j] and not moved[j]:
+                C[j, 1] -= STOREY; moved[j] = True
+            j += 1
+    return int(moved.sum())
+
+
 SMOOTH = "--smooth" in sys.argv
 LAM, DELTA, REJECT = float(os.environ.get("LAM", 2e-4)), 0.3, 2.0
 
@@ -68,6 +93,9 @@ for spec in args[3:]:
     t = np.array([f["t_ms"] for f in L], float) + dt
     C = (np.array([f["center"] for f in L]) - a0) @ M.T * s
     C[:, [0, 2]] += [tvd[0], -tvd[1]]
+    down = storey_fix(t, C)
+    if down:
+        print(f"  {name}: {down} frames under the TBS gate brought down one storey")
     keep = np.ones(len(C), bool)
     i = 1
     while i < len(C):
