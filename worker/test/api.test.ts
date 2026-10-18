@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { applyToIndex, authorized, parseEventPath, validEntry, type HeatIndex } from '../src/api'
+import { applyToIndex, authorized, dropEnded, parseEventPath, validEntry, type HeatIndex, type Msg } from '../src/api'
 
 test('parseEventPath', () => {
   expect(parseEventPath('/jdl-2026-10-25/api/push')).toEqual({ event: 'jdl-2026-10-25', rest: 'push' })
@@ -43,4 +43,8 @@ test('validEntry', () => {
   expect(validEntry({ ...ok, end: null }, '100000')).toBe(false)
   expect(validEntry({ ...ok, pilots: undefined }, '100000')).toBe(false)
   expect(validEntry(ok, '100001')).toBe(false)
+})
+test('dropEnded removes the starts of heats already ended, and nothing else', () => {
+  const msgs: Msg[] = [{ k: 'h', t: 1, at: 9, id: 'A', heat: null, cls: null, cells: {}, order: [] }, { k: 'e', t: 5, id: 'A' }, { k: 'a', s: 'R2', t: 9, p: [0, 0, 0], q: [0, 0, 0, 1], n: 1 }, { k: 'h', t: 2, id: 'B', heat: null, cls: null, cells: {}, order: [] }]
+  expect(dropEnded(msgs, new Set(['A'])).map(m => m.k + ('id' in m ? m.id : ''))).toEqual(['eA', 'a', 'hB'])
 })

@@ -4,7 +4,7 @@
 // (in storage: it outlives the object sleeping), and writes the day's heat list (dvr/<event>/heats.json) when a heat
 // starts, is renamed or ends, and when its record is uploaded - a few writes per heat.
 import { DurableObject } from 'cloudflare:workers'
-import { applyToIndex, HEAT_ID, validEntry, type HeatIndex, type HMsg, type Msg } from './api'
+import { applyToIndex, dropEnded, HEAT_ID, validEntry, type HeatIndex, type HMsg, type Msg } from './api'
 
 export interface RoomEnv { BUCKET: R2Bucket }
 const KEEP = 80_000                                      // 60 s of delay, the page's 0.7 s lag, one 10 s repeat of the heat start, and margin
@@ -12,7 +12,7 @@ const KEEP = 80_000                                      // 60 s of delay, the p
 export class LiveRoom extends DurableObject<RoomEnv> {
   recent: Msg[] = []
   lastH: HMsg | null | undefined                            // undefined: not read from storage yet
-  ended = new Set<string>()
+  ended: Set<string> | undefined                              // the heats that ended, in storage too: a late start after the object slept stays out
 
   async fetch(req: Request): Promise<Response> {
     const event = req.headers.get('x-event') ?? '', rest = req.headers.get('x-rest') ?? ''
@@ -41,6 +41,7 @@ export class LiveRoom extends DurableObject<RoomEnv> {
       await this.index(event, ix => ({ ...ix, live: ix.live?.id === entry.id ? null : ix.live, heats: [entry, ...ix.heats.filter(h => h.id !== entry.id)].sort((a, b) => b.start - a.start) }))
       // still live here: the end's push was dropped. It ends now, for new viewers and for those watching
       if ((await this.heat())?.id === entry.id) await this.push(event, [{ k: 'e', t: entry.end, id: entry.id }])
+      else await this.markEnded([entry.id])
       return new Response(null, { status: 204 })
     }
     return new Response('not found', { status: 404 })
@@ -51,8 +52,19 @@ export class LiveRoom extends DurableObject<RoomEnv> {
     return this.lastH
   }
 
-  async push(event: string, msgs: Msg[]) {
+  async endedIds(): Promise<Set<string>> {
+    if (!this.ended) this.ended = new Set((await this.ctx.storage.get<string[]>('ended')) ?? [])
+    return this.ended
+  }
+  async markEnded(ids: string[]) {
+    const ended = await this.endedIds(), n = ended.size; for (const id of ids) ended.add(id)
+    if (ended.size !== n) await this.ctx.storage.put('ended', [...ended].slice(-200))
+  }
+
+  async push(event: string, all: Msg[]) {
     const now = Date.now()
+    await this.markEnded(all.filter(x => x.k === 'e').map(x => (x as { id: string }).id))
+    const msgs = dropEnded(all, await this.endedIds())                  // a start of an ended heat goes nowhere
     // a heat start's t is the heat's start; when it was sent ("at") is what ages it. An end takes its heat's starts out of
     // the backlog: the end (aged by its t, the last row) would leave it first, and a new viewer would see the heat as live
     const gone = new Set(msgs.filter(x => x.k === 'e').map(x => (x as { id: string }).id))
@@ -62,8 +74,6 @@ export class LiveRoom extends DurableObject<RoomEnv> {
     for (const x of msgs) {
       if (x.k !== 'h' && x.k !== 'e') continue
       const was = await this.heat()
-      if (x.k === 'h' && this.ended.has(x.id)) continue                // a late start of a heat already ended
-      if (x.k === 'e') this.ended.add(x.id)
       // the 10 s repeat of an unchanged start: nothing to store or write
       if (x.k === 'h' && was?.id === x.id && was.heat === x.heat && was.cls === x.cls && JSON.stringify(was.cells) === JSON.stringify(x.cells)) continue
       await this.index(event, ix => applyToIndex(ix, x))                // first: a failed write leaves lastH as it was, so the next repeat tries again

@@ -43,3 +43,6 @@ export function applyToIndex(ix: HeatIndex, m: Msg): HeatIndex {
 export function validEntry(e: any, id: string): e is HeatEntry & { end: number } {
   return e?.id === id && typeof e.start === 'number' && typeof e.end === 'number' && Array.isArray(e.pilots)
 }
+
+// the starts of heats already ended: a late repeat must not reach viewers or become the room's live heat
+export function dropEnded(msgs: Msg[], ended: Set<string>): Msg[] { return msgs.filter(m => !(m.k === 'h' && ended.has(m.id))) }

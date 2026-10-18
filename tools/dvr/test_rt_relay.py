@@ -230,6 +230,15 @@ class RelayTest(unittest.TestCase):
         self.r.retry_pending(T0)
         self.assertFalse(os.path.exists(os.path.join(day, "133156.json.pending"))); self.assertTrue(os.path.exists(os.path.join(day, "133156.json.lost")))
 
+    def test_upload_waits_for_its_record_on_disk(self):
+        self.row(T0, 1); self.r.flush(T0 + 1); self.r.tick(T0 + 40)
+        save = self.r.save
+        def broken(rec): raise OSError("disk full")
+        self.r.save = broken; self.r.work(T0 + 40)
+        self.assertFalse([s for s in self.sent if s[0].startswith("heats/")]); self.assertEqual(len(self.r.uploads), 1)
+        self.r.save = save; self.r.work(T0 + 41)
+        self.assertEqual(len([s for s in self.sent if s[0].startswith("heats/")]), 1); self.assertEqual(self.r.uploads, [])
+
     def test_order_from_venue_config(self):
         r = Relay("http://x/", "http://y", "e", "k", out_dir=self.dir, post=lambda *a: None, order=lambda: ["A", "B", "C", "D"])
         r.on_row(dict(stream="A", i=1, lat=0, how="none"), T0)

@@ -167,7 +167,10 @@ class Relay:
         with self.lock: ups, self.uploads = self.uploads, []
         for rec in ups:                              # each on its own: one failing must not lose the others
             try: self.save(rec)
-            except OSError as e: self.bg_err = f"save {rec['id']}: {why(e)}"
+            except OSError as e:                     # not up before it is on disk (the night rebuild reads it): tried again next time
+                self.bg_err = f"save {rec['id']}: {why(e)}"
+                with self.lock: self.uploads.append(rec)
+                continue
             self.upload(rec)
         if now - self.last_retry >= RETRY_EVERY: self.retry_pending(now)
 
