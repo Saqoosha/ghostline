@@ -113,7 +113,7 @@ for (cell, p), (s, run, nl) in sorted(S.items(), key=lambda kv: kv[1][0]):
     print(f"{cell} -> {p}  (score {s:.2f})  path laps {np.round(cells[cell]['laps'], 2).tolist()}  official {official[p]}")
 for cell in cells:
     if cell not in used_c:
-        print(f"{cell} -> ?  path laps {np.round(cells[cell]['laps'], 2).tolist()}  best {min((round(s[0], 2), p) for (c_, p), s in S.items() if c_ == cell)}")
+        print(f"{cell} -> ?  path laps {np.round(cells[cell]['laps'], 2).tolist()}  best {min(((round(s[0], 2), p) for (c_, p), s in S.items() if c_ == cell), default=None)}")
 for p in official:
     if p not in used_p:
         print(f"   unnamed pilot {p} {official[p]}")
