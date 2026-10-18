@@ -18,8 +18,17 @@ final class ARController {
     /// The camera image with the flight over it (ar), or the scan from above drawn with the 3DGS (top). Between them the
     /// view flies: it starts from ARKit's own camera (same pose, same lens - the splats sit on the camera image, so the
     /// image dissolves into them), eases up to the top, and back down onto wherever ARKit's camera is by then.
-    enum Mode { case ar, toTop, top, toAR }
+    /// fpv: the DVR full screen (height-fitted, black either side). The way there flies the same way, onto the drone's camera at
+    /// the DVR's clock, the splats bent into the DVR's fisheye on the way so they land on its picture; then the DVR dissolves in.
+    enum Mode { case ar, toTop, top, toAR, toFPV, fpv, fromFPV }
     private(set) var mode = Mode.ar { didSet { updateVisibility() } }
+    var isFPV: Bool { mode == .toFPV || mode == .fpv || mode == .fromFPV }
+    /// the full-screen DVR's opacity
+    var dvrAlpha: Double = 0
+    /// the DVR's lens (lens.json "source_fisheye", pixels of its 4:3 picture)
+    @ObservationIgnored private var lens: (fx: Float, cx: Float, cy: Float, k: SIMD4<Float>)?
+    /// the flying camera's projection when it is not ARKit's (the FPV transition's wide pinhole)
+    @ObservationIgnored private var virtualProj: simd_float4x4?
     @ObservationIgnored private var flyStart = 0.0
     @ObservationIgnored private var fromCam = matrix_identity_float4x4   // camera -> scene, x right / y up / z back
     @ObservationIgnored private var topCam = matrix_identity_float4x4
@@ -92,7 +101,7 @@ final class ARController {
             guard t.isFinite else { tag.isHidden = true; return }
             path.cursor = t
             // the drone projected to the screen, the tag just above it
-            guard arFromScene != nil, let p = path.position(at: t) else { tag.isHidden = true; return }
+            guard arFromScene != nil, !isFPV, let p = path.position(at: t) else { tag.isHidden = true; return }
             if mode == .ar {
                 let w = anchor.presentation.simdWorldTransform * SIMD4(p, 1)
                 let s = view.projectPoint(SCNVector3(w.x, w.y, w.z))
@@ -111,7 +120,7 @@ final class ARController {
         splats.view.isPaused = true
         view.addSubview(splats.view)
         splats.camera = { [unowned self] in
-            guard let c = mode == .ar ? arCamera() : virtualCam, let P = projection() else { return nil }
+            guard let c = mode == .ar ? arCamera() : virtualCam, let P = virtualProj ?? projection() else { return nil }
             return (c.inverse, P)
         }
         let config = ARWorldTrackingConfiguration()
@@ -169,7 +178,7 @@ final class ARController {
     /// the splats, each on its own: one failing does not keep the others away.
     func loadFlight() {
         flightGen += 1; let gen = flightGen
-        ceiling = nil; room = nil                   // a new server's flight, without a room or failing, must not keep the last one's
+        ceiling = nil; room = nil; lens = nil       // a new server's flight, without a room or failing, must not keep the last one's
         Task {
             let current = { gen == self.flightGen }
             do {
@@ -181,6 +190,9 @@ final class ARController {
                 if let r = f.room {
                     ceiling = Float(r.y1 - (r.margin ?? 0.25))
                     room = (Float(r.x0), Float(r.z0), Float(r.y0), r.circle?.map { Float($0) })
+                }
+                if let l = f.lens, l.k.count == 4 {
+                    lens = (Float(l.fx), Float(l.cx), Float(l.cy), SIMD4(l.k.map { Float($0) }))
                 }
                 problems["飛行"] = nil
             } catch { problems["飛行"] = error.localizedDescription }
@@ -221,7 +233,8 @@ final class ARController {
         let ar = mode == .ar
         anchor.isHidden = arFromScene == nil || !ar  // away from the camera image the splat view draws the flight itself
         cloud.isHidden = nPoints == 0 || showSplats
-        let splatsOn = !ar || showSplats
+        let splatsOn = ar ? showSplats : mode != .fpv   // in FPV the DVR alone is on screen
+        if mode == .ar || mode == .top || mode == .toTop || mode == .toAR { splats.warp = nil; virtualProj = nil }
         splats.view.isHidden = !splatsOn
         splats.view.isPaused = !splatsOn        // hidden, an MTKView still draws (and sorts 600k splats) every frame
         splats.flight = ar ? nil : path
@@ -304,6 +317,7 @@ final class ARController {
         guard mode != .ar else { virtualCam = nil; return }
         let t = CACurrentMediaTime() - flyStart
         let ease = { (s: Float) -> Float in s < 0.5 ? 4 * s * s * s : 1 - pow(-2 * s + 2, 3) / 2 }   // in-out, cubic
+        if isFPV { flyFPV(t, ease); return }
         switch mode {
         case .toTop:
             if t < fadeTime {                   // 1. the camera image dissolves into the splats, the view held on ARKit's camera
@@ -333,7 +347,104 @@ final class ARController {
                 splats.view.alpha = CGFloat(max(0, 1 - (t - flyTime) / fadeTime))
                 if t >= flyTime + fadeTime { virtualCam = nil; mode = .ar }
             }
-        case .ar: break
+        case .ar, .toFPV, .fpv, .fromFPV: break     // FPV: flyFPV
+        }
+    }
+
+    // MARK: - FPV
+
+    func toggleFPV() {
+        switch mode {
+        case .ar:
+            guard canFly, lens != nil, let c = arCamera(), droneCamera() != nil else { status = "FPV にできない（位置合わせ・splat・DVR のレンズ・ドローンの向きのどれかが無い）"; return }
+            virtualCam = c; flying = false
+            splats.view.alpha = 0
+            flyStart = CACurrentMediaTime(); mode = .toFPV
+        case .fpv:
+            flying = false
+            splats.view.alpha = 1
+            flyStart = CACurrentMediaTime(); mode = .fromFPV
+        default: break                          // already flying
+        }
+    }
+
+    /// the drone's camera at the DVR's clock (camera -> scene, x right / y up / z back, as ARKit's)
+    private func droneCamera() -> simd_float4x4? {
+        let t = player.currentTime().seconds
+        guard t.isFinite, let d = path.pose(at: t) else { return nil }
+        var m = simd_float4x4(d.rot) * flip
+        m.columns.3 = SIMD4(d.pos, 1)
+        return m
+    }
+
+    /// pixels of the drawable, and the focal lengths of ARKit's camera and of the DVR fitted to the screen's height
+    private func lenses() -> (size: SIMD2<Float>, phone: Float, dvr: Float, halfW: Float, overscan: Float, k: SIMD4<Float>)? {
+        guard let lens, let P = projection() else { return nil }
+        let s = Float(view.contentScaleFactor), W = Float(view.bounds.width) * s, H = Float(view.bounds.height) * s
+        let scale = H / (2 * lens.cy), dvr = lens.fx * scale
+        // how much wider than the screen the pinhole render must reach for the bent picture's edges (its corners stay black)
+        func theta(_ td: Float) -> Float {
+            var th = min(td, 1.5)
+            for _ in 0..<6 {
+                let t2 = th * th, k = lens.k
+                let f = th * (1 + t2 * (k.x + t2 * (k.y + t2 * (k.z + t2 * k.w)))) - td
+                let g = 1 + t2 * (3 * k.x + t2 * (5 * k.y + t2 * (7 * k.z + t2 * 9 * k.w)))
+                th = min(max(th - f / g, 0), 1.5)
+            }
+            return th
+        }
+        let overscan = max(tan(theta(lens.cx / lens.fx)) * dvr / (W / 2), tan(theta(lens.cy / lens.fx)) * dvr / (H / 2), 1)
+        return (SIMD2(W, H), P.columns.1.y * H / 2, dvr, lens.cx * scale, overscan, lens.k)
+    }
+
+    /// a pinhole of focal f px over the drawable, the screen's centre on the axis (Metal depth 0...1, as ARKit's)
+    private func perspective(_ f: Float, _ size: SIMD2<Float>, near: Float = 0.05, far: Float = 100) -> simd_float4x4 {
+        let a = far / (near - far), b = near * far / (near - far)
+        return simd_float4x4(SIMD4(2 * f / size.x, 0, 0, 0), SIMD4(0, 2 * f / size.y, 0, 0), SIMD4(0, 0, a, -1), SIMD4(0, 0, b, 0))
+    }
+
+    /// the lens at s (0 the phone's pinhole, 1 the DVR's fisheye): the render's projection and the bend that goes with it
+    private func lensAt(_ s: Float, _ l: (size: SIMD2<Float>, phone: Float, dvr: Float, halfW: Float, overscan: Float, k: SIMD4<Float>)) {
+        let fOut = l.phone + (l.dvr - l.phone) * s, fTex = fOut / (1 + (l.overscan - 1) * s)
+        virtualProj = perspective(fTex, l.size)
+        splats.warp = SplatOverlay.Warp(fOut: fOut, fTex: fTex, s: s, bars: s, halfW: s > 0 ? l.halfW : .greatestFiniteMagnitude, k: l.k)
+    }
+
+    private func flyFPV(_ t: Double, _ ease: (Float) -> Float) {
+        guard let l = lenses() else { return }
+        switch mode {
+        case .toFPV:
+            if t < fadeTime {                   // 1. the camera image dissolves into the splats, on ARKit's camera
+                virtualCam = arCamera() ?? virtualCam; lensAt(0, l)
+                splats.view.alpha = CGFloat(t / fadeTime)
+            } else if t < fadeTime + flyTime {  // 2. onto the drone, the lens bending into the DVR's on the way
+                if !flying { fromCam = arCamera() ?? virtualCam ?? fromCam; flying = true }
+                let e = ease(Float((t - fadeTime) / flyTime))
+                virtualCam = blend(fromCam, droneCamera() ?? fromCam, e); lensAt(e, l)
+                splats.view.alpha = 1
+            } else {                            // 3. on the drone: the splats dissolve into the DVR
+                virtualCam = droneCamera() ?? virtualCam; lensAt(1, l)
+                let u = (t - fadeTime - flyTime) / fadeTime
+                dvrAlpha = min(1, u)
+                if u >= 1 { mode = .fpv }
+            }
+        case .fpv:
+            dvrAlpha = 1
+        case .fromFPV:
+            if t < fadeTime {                   // 1. the DVR dissolves into the splats, on the drone
+                virtualCam = droneCamera() ?? virtualCam; lensAt(1, l)
+                dvrAlpha = max(0, 1 - t / fadeTime)
+            } else if t < fadeTime + flyTime {  // 2. back to ARKit's camera as it is now, the lens straightening
+                if !flying { fromCam = droneCamera() ?? virtualCam ?? fromCam; flying = true }
+                dvrAlpha = 0
+                let e = ease(Float((t - fadeTime) / flyTime))
+                virtualCam = blend(fromCam, arCamera() ?? fromCam, e); lensAt(1 - e, l)
+            } else {                            // 3. landed: the splats dissolve into the camera image
+                virtualCam = arCamera() ?? virtualCam; lensAt(0, l)
+                splats.view.alpha = CGFloat(max(0, 1 - (t - fadeTime - flyTime) / fadeTime))
+                if t >= 2 * fadeTime + flyTime { virtualCam = nil; mode = .ar }
+            }
+        default: break
         }
     }
 
@@ -351,7 +462,7 @@ final class ARController {
         autoTask?.cancel()                      // one loop, however fast 続けて is flipped
         autoTask = Task {
             while auto && !Task.isCancelled {
-                if !busy && mode != .top { await locate() }   // the top view does not use the camera image
+                if !busy && mode != .top && mode != .fpv { await locate() }   // the top view and FPV do not use the camera image
                 try? await Task.sleep(for: .milliseconds(30))   // locate returns at once while ARKit has no frame yet
             }
         }
@@ -444,6 +555,9 @@ private struct Flight: Decodable {
     let fps: Double?
     let path: [[Double]]
     let room: Room?
+    let lens: Lens?
+    /// the DVR's fisheye (OpenCV), in pixels of its 4:3 picture
+    struct Lens: Decodable { let fx: Double; let cx: Double; let cy: Double; let k: [Double] }
     /// the viewer's index.json "room" (scene frame, y up): x0 / z0 / y0 / circle frame the top view, y1 - margin cuts the ceiling
     struct Room: Decodable { let x0: Double; let z0: Double; let y0: Double; let y1: Double; let circle: [Double]?; let margin: Double? }
 }

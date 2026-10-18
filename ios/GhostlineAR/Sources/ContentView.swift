@@ -15,6 +15,9 @@ struct ContentView: View {
         ZStack {
             ARViewContainer(ar: ar).ignoresSafeArea()
                 .onTapGesture { if ar.mode == .ar { ar.showSplats.toggle() } }
+            if ar.dvrAlpha > 0 {                    // FPV: the same player, full screen, height-fitted, black either side
+                PlayerLayerView(player: ar.player).ignoresSafeArea().opacity(ar.dvrAlpha).allowsHitTesting(false)
+            }
             VStack {
                 HStack(alignment: .top) {
                     VStack(spacing: 12) {
@@ -24,11 +27,21 @@ struct ContentView: View {
                                 .frame(width: 30, height: 30)
                                 .padding(8).background(.black.opacity(0.4), in: Circle())
                         }
-                        Button { ar.toggleTop() } label: {   // the camera image <-> the scan from above
-                            Image(systemName: ar.mode == .ar || ar.mode == .toAR ? "map" : "camera.viewfinder")
-                                .font(.title2).foregroundStyle(.white)
-                                .frame(width: 30, height: 30)
-                                .padding(8).background(.black.opacity(0.4), in: Circle())
+                        if !ar.isFPV {
+                            Button { ar.toggleTop() } label: {   // the camera image <-> the scan from above
+                                Image(systemName: ar.mode == .ar || ar.mode == .toAR ? "map" : "camera.viewfinder")
+                                    .font(.title2).foregroundStyle(.white)
+                                    .frame(width: 30, height: 30)
+                                    .padding(8).background(.black.opacity(0.4), in: Circle())
+                            }
+                        }
+                        if ar.mode == .ar || ar.isFPV {
+                            Button { ar.toggleFPV() } label: {   // the camera image <-> the drone's own view (the DVR)
+                                Image(systemName: ar.mode == .ar || ar.mode == .fromFPV ? "airplane" : "camera.viewfinder")
+                                    .font(.title2).foregroundStyle(.white)
+                                    .frame(width: 30, height: 30)
+                                    .padding(8).background(.black.opacity(0.4), in: Circle())
+                            }
                         }
                     }
                     Spacer()
@@ -36,6 +49,7 @@ struct ContentView: View {
                         .aspectRatio(4 / 3, contentMode: .fit)
                         .frame(width: 220)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .opacity(1 - ar.dvrAlpha)           // full screen in FPV
                 }
                 Spacer()
                 if !ar.problems.isEmpty {
@@ -90,6 +104,21 @@ struct ContentView: View {
             Button("OK") { ar.loadPoints(); ar.loadFlight() }   // the loop reads the new address itself
         }
     }
+}
+
+/// An AVPlayerLayer on black: the picture fitted to the height of a landscape screen leaves black either side.
+struct PlayerLayerView: UIViewRepresentable {
+    let player: AVPlayer
+    final class V: UIView {
+        override class var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    }
+    func makeUIView(context: Context) -> V {
+        let v = V(); v.backgroundColor = .black
+        v.playerLayer.videoGravity = .resizeAspect; v.playerLayer.player = player
+        return v
+    }
+    func updateUIView(_ v: V, context: Context) {}
 }
 
 struct ARViewContainer: UIViewRepresentable {
