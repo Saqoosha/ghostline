@@ -70,3 +70,41 @@ fragment float4 occFragment(PVOut in [[stage_in]], float2 pc [[point_coord]]) {
     if (length(pc - 0.5) > 0.5) discard_fragment();
     return 0;
 }
+
+// The FPV transition (SplatOverlay with a Warp): the splats and the flight are drawn first through a wide pinhole into a texture
+// (focal fTex px), then every screen pixel takes its colour from it through the DVR's lens - OpenCV's fisheye model,
+// theta_d = theta (1 + k1 theta^2 + k2 theta^4 + k3 theta^6 + k4 theta^8) - with the screen's focal fOut. s blends the lens in:
+// 0 is the plain pinhole (the view still matches ARKit's camera), 1 the DVR's own picture. Beyond the DVR's 4:3 picture
+// (more than halfW px either side of the centre) the screen fades to black as `bars` grows.
+struct WU { float2 size; float fOut; float fTex; float s; float bars; float halfW; float thMax; float4 k; };   // thMax: the lens's monotonic end
+struct WOut { float4 position [[position]]; };
+
+vertex WOut warpVertex(uint vid [[vertex_id]]) {           // one triangle over the screen
+    float2 p = float2((vid << 1) & 2, vid & 2);
+    WOut o; o.position = float4(p * 2 - 1, 0, 1); return o;
+}
+
+fragment float4 warpFragment(WOut in [[stage_in]], texture2d<float> tex [[texture(0)]], constant WU& u [[buffer(0)]]) {
+    constexpr sampler smp(filter::linear, address::clamp_to_zero);
+    float2 c = u.size * 0.5;
+    float2 d = (in.position.xy - c) / u.fOut;
+    float td = length(d), r = td;
+    bool lost = false;
+    if (td > 1e-5 && u.s > 0) {
+        float th = min(td, u.thMax);                        // invert the lens by Newton's method from theta = theta_d
+        for (int i = 0; i < 6; i++) {
+            float t2 = th * th;
+            float f = th * (1 + t2 * (u.k.x + t2 * (u.k.y + t2 * (u.k.z + t2 * u.k.w)))) - td;
+            float g = 1 + t2 * (3 * u.k.x + t2 * (5 * u.k.y + t2 * (7 * u.k.z + t2 * 9 * u.k.w)));
+            th = clamp(th - f / max(g, 1e-3), 0.0, u.thMax);
+        }
+        float t2 = th * th;                                 // past the lens's reach: no ray, black (not the centre's colour)
+        lost = abs(th * (1 + t2 * (u.k.x + t2 * (u.k.y + t2 * (u.k.z + t2 * u.k.w)))) - td) > 1e-3;
+        r = mix(td, tan(th), u.s);
+    }
+    float2 p = td > 1e-5 ? d * (r / td) : d;
+    float2 uv = (c + p * u.fTex) / u.size;
+    float4 col = lost ? float4(0) : tex.sample(smp, uv);
+    float4 over = float4(col.rgb, col.a + (1 - col.a) * u.bars);   // premultiplied, over black as `bars` grows
+    return abs(in.position.x - c.x) > u.halfW ? mix(over, float4(0, 0, 0, 1), u.bars) : over;   // the sides go black altogether
+}

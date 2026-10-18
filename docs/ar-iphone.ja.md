@@ -24,7 +24,7 @@ xcrun devicectl device install app --device <UDID> build/Build/Products/Release-
 ```
 
 地図と ply は rt4090 の Linux から Windows のディスクを読む（`/mnt/c`＝C:、`/mnt/data`＝D:）。iPhone からは Tailscale の `http://rt4090:8790`
-（左上の操作のボタンで出る欄の、いちばん下の文字をタップで変えられる。ATS は `NSAllowsLocalNetworking` なので、1 語の名前か `.local` か IP で書く）。`FLIGHT` のフォルダには `poses60.json`（姿勢）・`dvr.mp4`・`index.json`（ビューアのもの。`room` を使う）を置く。
+（左上の操作のボタンで出る欄の、いちばん下の文字をタップで変えられる。ATS は `NSAllowsLocalNetworking` なので、1 語の名前か `.local` か IP で書く）。`FLIGHT` のフォルダには `poses60.json`（姿勢）・`dvr.mp4`・`index.json`（ビューアのもの。`room` を使う）・`lens.json`（その飛行の `dvr_pinhole.mp4.json`。`source_fisheye` を FPV に使う）を置く。
 
 DVR は再生用に作り直す：録画の左右の黒（1280×720 の左 160 px から幅 960）を切って 4:3 に、離陸の直前から（オフィスは 19.3 s まで机の上なので 18.5 s から）。
 姿勢も同じ秒数だけ引く。
@@ -60,6 +60,13 @@ iPhone で歩いて 108 秒：291 回すべて `track`、サーバー p50 159 ms
 - **軌跡は PC のページと同じ形**：各フレームに前後 ±0.8 s（PC の既定は 0.4、操作で変えられる）の重み付き 2 次式（biweight）、直近 3 s を幅 14 px の帯で、古い端に向けて細く（3 割）薄く。機体は DVR の時刻でフレーム間を補間
 - **真上の絵は MetalSplatter**：カメラの絵 → 3DGS を 0.3 s で溶かす（そのあいだ仮想カメラは ARKit のカメラに張り付く）→ 2.0 s で上がる（位置 ease-in-out、向き slerp）。戻りは降りて ARKit のいまのカメラに着地してから溶かす。溶かすのと飛ぶのを同時にしない
 - **真上の向きは部屋で決める**：`room` の直角の角（x0, z0）を左下、+x を画面の上、+z を右（オフィスは長い z 方向が横になる）。床全体を 1.15 倍で収める
+- **FPV（ドローンの目）**：カメラの絵 → 3DGS（0.3 s）→ DVR の時刻のドローンのカメラへ 2.0 s（動く行き先を追う）→ 3DGS → DVR（0.3 s）。着いたら splat は止めて、
+  魚眼のままの DVR（`dvr.mp4`）を全画面（高さに合わせ、左右は黒）。戻りは逆順（DVR → 3DGS 0.3 s → ARKit のいまのカメラへ 2.0 s → カメラの絵 0.3 s）。
+  着く瞬間に 3DGS を DVR の絵に重ねるため、映像を歪みのない版にせず、**3DGS のほうを DVR の魚眼に曲げる**：
+  splat と軌跡を広めのピンホールで画面外に描き（DVR の 4:3 の縁が入るだけ。広さは計算で決まり、横長の iPhone で約 1.3 倍）、OpenCV の fisheye（`k1〜k4`）を
+  Newton 法で逆にたどって画面へ写す。飛ぶあいだに歪み 0→1・焦点距離 iPhone→DVR（DVR の高さを画面の高さに合わせた値）・左右の黒 0→1 を同時に変える。
+  魚眼の四隅と、アップグレードのレンズで多項式が折り返す先（θ ≈ 1.34 より外、Newton 法が答えを持たない）は黒。
+  ドローンの向きは `poses60.json` の四元数を ±0.15 s で平均、位置は軌跡と同じ当てはめ（±0.8 s）。全画面の DVR は右上と同じ AVPlayer を `AVPlayerLayer` にも映す（時刻が完全にそろう）
 - **天井**：`room.y1 − margin`（4.3 m）より上の splat を別の chunk にして、仮想カメラがその高さより上のあいだ隠す（PC ビューアの `top` と同じ考え）
 - **熱**：60 fps で数分で発熱して絞られた。描画・表示の更新・ARKit の映像を 30 fps に。真上に着いて 0.5 s 後の splat の絵を 1 枚とっておき、あとはそれに軌跡だけを描く
 

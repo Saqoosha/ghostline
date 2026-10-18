@@ -4,7 +4,7 @@ import AVKit
 
 /// Landscape: the room with the scan and the flight over it, the flight's DVR top right (its own controls play and scrub it,
 /// and the drone on the path follows its clock), the alignment controls bottom left behind the top-left button, and what
-/// failed to load always on show.
+/// failed to load always on show. The left buttons fly to the top view or into the drone's view (the DVR full screen).
 struct ContentView: View {
     @State private var ar = ARController()
     @AppStorage("server") private var server = "http://rt4090:8790"
@@ -15,20 +15,18 @@ struct ContentView: View {
         ZStack {
             ARViewContainer(ar: ar).ignoresSafeArea()
                 .onTapGesture { if ar.mode == .ar { ar.showSplats.toggle() } }
+            if ar.dvrAlpha > 0 {                    // FPV: the same player, full screen, height-fitted, black either side
+                PlayerLayerView(player: ar.player).ignoresSafeArea().opacity(ar.dvrAlpha).allowsHitTesting(false)
+            }
             VStack {
                 HStack(alignment: .top) {
                     VStack(spacing: 12) {
-                        Button { controls.toggle() } label: {
-                            Image(systemName: controls ? "xmark.circle.fill" : "slider.horizontal.3")
-                                .font(.title2).foregroundStyle(.white)
-                                .frame(width: 30, height: 30)
-                                .padding(8).background(.black.opacity(0.4), in: Circle())
+                        RoundButton(icon: controls ? "xmark.circle.fill" : "slider.horizontal.3") { controls.toggle() }
+                        if !ar.isFPV {                      // the camera image <-> the scan from above
+                            RoundButton(icon: ar.mode == .ar || ar.mode == .toAR ? "map" : "camera.viewfinder") { ar.toggleTop() }
                         }
-                        Button { ar.toggleTop() } label: {   // the camera image <-> the scan from above
-                            Image(systemName: ar.mode == .ar || ar.mode == .toAR ? "map" : "camera.viewfinder")
-                                .font(.title2).foregroundStyle(.white)
-                                .frame(width: 30, height: 30)
-                                .padding(8).background(.black.opacity(0.4), in: Circle())
+                        if ar.mode == .ar || ar.isFPV {     // the camera image <-> the drone's own view (the DVR)
+                            RoundButton(icon: ar.mode == .ar || ar.mode == .fromFPV ? "airplane" : "camera.viewfinder") { ar.toggleFPV() }
                         }
                     }
                     Spacer()
@@ -36,6 +34,8 @@ struct ContentView: View {
                         .aspectRatio(4 / 3, contentMode: .fit)
                         .frame(width: 220)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .opacity(1 - ar.dvrAlpha)           // hidden while the same player shows full screen (FPV)
+                        .allowsHitTesting(ar.dvrAlpha == 0) // and its invisible controls take no taps
                 }
                 Spacer()
                 if !ar.problems.isEmpty {
@@ -90,6 +90,33 @@ struct ContentView: View {
             Button("OK") { ar.loadPoints(); ar.loadFlight() }   // the loop reads the new address itself
         }
     }
+}
+
+struct RoundButton: View {
+    let icon: String
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.title2).foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .padding(8).background(.black.opacity(0.4), in: Circle())
+        }
+    }
+}
+
+/// An AVPlayerLayer on black: the picture fitted to the height of a landscape screen leaves black either side.
+struct PlayerLayerView: UIViewRepresentable {
+    let player: AVPlayer
+    final class V: UIView {
+        override class var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    }
+    func makeUIView(context: Context) -> V {
+        let v = V(); v.backgroundColor = .black
+        v.playerLayer.videoGravity = .resizeAspect; v.playerLayer.player = player
+        return v
+    }
+    func updateUIView(_ v: V, context: Context) {}
 }
 
 struct ARViewContainer: UIViewRepresentable {

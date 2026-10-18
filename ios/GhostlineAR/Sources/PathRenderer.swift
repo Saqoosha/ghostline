@@ -46,7 +46,7 @@ final class PathRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendable
     private var _viewport = SIMD2<Float>(0, 0)
     private var smooth: [SIMD3<Float>] = []
 
-    /// path: [t, x, y, z] per frame, in time order, evenly spaced. Smoothed as the PC pages do (viewer/src/live.ts fit, without
+    /// path: [t, x, y, z(, qx, qy, qz, qw)] per frame, in time order, evenly spaced (with the rotations, pose(at:) works). Smoothed as the PC pages do (viewer/src/live.ts fit, without
     /// its inlier weights): each frame a quadratic through the frames within `ws` seconds either side, biweight-tapered.
     func setPath(_ path: [[Double]], device: MTLDevice, ws: Double = 0.4) {
         let n = path.count, dt = n > 1 ? (path[n - 1][0] - path[0][0]) / Double(n - 1) : 0.04
@@ -65,9 +65,34 @@ final class PathRenderer: NSObject, SCNNodeRendererDelegate, @unchecked Sendable
                 : (b0 * (s[2] * s[4] - s[3] * s[3]) - s[1] * (b1 * s[4] - s[3] * b2) + s[2] * (b1 * s[3] - s[2] * b2)) / det
             out.append(SIMD3<Float>(c0))
         }
+        // the camera's turn, when the rows carry it (qx qy qz qw): a biweight average over ±0.15 s, each sign-aligned to the frame's own
+        var rots: [simd_quatf] = []
+        if path.allSatisfy({ $0.count >= 8 }) {
+            let q = path.map { simd_normalize(simd_quatf(ix: Float($0[4]), iy: Float($0[5]), iz: Float($0[6]), r: Float($0[7]))) }
+            let Wq = max(1, Int((0.15 / dt).rounded()))
+            rots = (0..<n).map { j in
+                var s = simd_quatf(vector: .zero)
+                for i in max(0, j - Wq)...min(n - 1, j + Wq) {
+                    let u = Float(i - j) / Float(Wq + 1), w = (1 - u * u) * (1 - u * u)
+                    s.vector += w * (simd_dot(q[i].vector, q[j].vector) < 0 ? -q[i].vector : q[i].vector)
+                }
+                return simd_normalize(s)
+            }
+        }
         let xyz = out.flatMap { [$0.x, $0.y, $0.z] }
         let b = device.makeBuffer(bytes: xyz, length: xyz.count * 4, options: .storageModeShared)
-        lock.withLock { buffer = b; times = path.map { $0[0] }; smooth = out }
+        lock.withLock { buffer = b; times = path.map { $0[0] }; smooth = out; turns = rots }
+    }
+    private var turns: [simd_quatf] = []
+
+    /// the drone's camera at t: world-from-camera rotation in COLMAP axes (x right, y down, z forward) and the trail's smoothed
+    /// position; nil without rotations, with under 2 frames or at a t that is not a number
+    func pose(at t: Double) -> (rot: simd_quatf, pos: SIMD3<Float>)? {
+        let (times, sm, tr) = lock.withLock { (self.times, smooth, turns) }
+        guard tr.count == times.count, let p = interpolate(t, times, sm) else { return nil }
+        let now = index(t, times), k = min(now + 1, times.count - 1)
+        let f = k == now ? 0 : Float((t - times[now]) / (times[k] - times[now]))
+        return (simd_slerp(tr[now], tr[k], min(max(f, 0), 1)), p)
     }
 
     /// x, y, z, radius (float32) per disc
