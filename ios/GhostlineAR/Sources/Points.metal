@@ -91,19 +91,20 @@ fragment float4 warpFragment(WOut in [[stage_in]], texture2d<float> tex [[textur
     float td = length(d), r = td;
     bool lost = false;
     if (td > 1e-5 && u.s > 0) {
-        float th = min(td, u.thMax), f = 0;                 // invert the lens by Newton's method from theta = theta_d
+        float th = min(td, u.thMax);                        // invert the lens by Newton's method from theta = theta_d
         for (int i = 0; i < 6; i++) {
             float t2 = th * th;
-            f = th * (1 + t2 * (u.k.x + t2 * (u.k.y + t2 * (u.k.z + t2 * u.k.w)))) - td;
+            float f = th * (1 + t2 * (u.k.x + t2 * (u.k.y + t2 * (u.k.z + t2 * u.k.w)))) - td;
             float g = 1 + t2 * (3 * u.k.x + t2 * (5 * u.k.y + t2 * (7 * u.k.z + t2 * 9 * u.k.w)));
             th = clamp(th - f / max(g, 1e-3), 0.0, u.thMax);
         }
-        lost = abs(f) > 1e-3;                               // past the lens's reach: no ray, black (not the centre's colour)
+        float t2 = th * th;                                 // past the lens's reach: no ray, black (not the centre's colour)
+        lost = abs(th * (1 + t2 * (u.k.x + t2 * (u.k.y + t2 * (u.k.z + t2 * u.k.w)))) - td) > 1e-3;
         r = mix(td, tan(th), u.s);
     }
     float2 p = td > 1e-5 ? d * (r / td) : d;
     float2 uv = (c + p * u.fTex) / u.size;
     float4 col = lost ? float4(0) : tex.sample(smp, uv);
-    float black = abs(in.position.x - c.x) > u.halfW ? u.bars : (1 - col.a) * u.bars;   // the sides, and where the render has nothing
-    return mix(col, float4(0, 0, 0, 1), black);
+    float4 over = float4(col.rgb, col.a + (1 - col.a) * u.bars);   // premultiplied, over black as `bars` grows
+    return abs(in.position.x - c.x) > u.halfW ? mix(over, float4(0, 0, 0, 1), u.bars) : over;   // the sides go black altogether
 }

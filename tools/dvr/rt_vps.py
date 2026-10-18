@@ -17,7 +17,7 @@ usage (rt4090, mastenv, ~/xfeat): rt_vps.py map.npz scene.ply
   GET  /splats?n=600000          the n splats with the most opacity x size, as a .splat file (antimatter15's: position, scale,
                                  rgba with opacity, rotation w x y z as uint8) for the phone to draw
   GET  /flight, /dvr             with FLIGHT: a recorded flight to replay over the room - its poses ([t, x, y, z, qx, qy, qz, qw]
-                                 per frame, world from camera, COLMAP axes; the rotation only where the pose has one) and its DVR
+                                 per frame, world from camera, COLMAP axes; rotations only if every pose has one) and its DVR
                                  video (the whole mp4, already cut to the 4:3 picture; the phone plays it from a file). /flight
                                  also carries the viewer's index.json "room" (top view framing, ceiling cut) and, as "lens",
                                  lens.json's "source_fisheye" (the DVR's lens, for the FPV view)
@@ -187,7 +187,8 @@ class H(http.server.BaseHTTPRequestHandler):
                     try:
                         with open(path) as f: return json.load(f).get(key)
                     except (ValueError, OSError, AttributeError) as e: print(f"{path}: {e}, no {key}", flush=True); return None
-                return self.reply(200, json.dumps(dict(fps=p.get("fps"), path=[[q["t"], *q["pos"], *q.get("quat", [])] for q in p["poses"] if q],
+                ps = [q for q in p["poses"] if q]; turn = all(len(q.get("quat") or []) == 4 for q in ps)   # rotations for every frame or none
+                return self.reply(200, json.dumps(dict(fps=p.get("fps"), path=[[q["t"], *q["pos"], *(q["quat"] if turn else [])] for q in ps],
                                                        room=optional("index.json", "room"), lens=optional("lens.json", "source_fisheye"))).encode(), "application/json")
             if u.path == "/dvr" and FLIGHT:
                 with open(os.path.join(FLIGHT, "dvr.mp4"), "rb") as f: return self.reply(200, f.read(), "video/mp4")

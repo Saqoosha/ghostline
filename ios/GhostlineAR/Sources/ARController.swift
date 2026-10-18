@@ -179,6 +179,7 @@ final class ARController {
     func loadFlight() {
         flightGen += 1; let gen = flightGen
         ceiling = nil; room = nil; lens = nil       // a new server's flight, without a room or failing, must not keep the last one's
+        problems["レンズ"] = nil
         Task {
             let current = { gen == self.flightGen }
             do {
@@ -194,8 +195,8 @@ final class ARController {
                 if let l = f.lens, l.k.count == 4, [l.fx, l.cx, l.cy].allSatisfy({ $0.isFinite && $0 > 0 }), l.k.allSatisfy(\.isFinite) {
                     lens = (Float(l.fx), Float(l.cx), Float(l.cy), SIMD4(l.k.map { Float($0) }))
                     problems["レンズ"] = nil
-                } else {
-                    problems["レンズ"] = f.lensBroken ? "lens.json の source_fisheye が読めない（FPV は使えない）" : nil
+                } else if f.lensBroken || f.lens != nil {
+                    problems["レンズ"] = "lens.json の source_fisheye が読めないか値がおかしい（FPV は使えない）"
                 }
                 problems["飛行"] = nil
             } catch { problems["飛行"] = error.localizedDescription }
@@ -361,9 +362,10 @@ final class ARController {
         switch mode {
         case .ar:
             let why = arFromScene == nil ? "まだ位置が合っていない" : splats.splatCount == 0 ? "splat がまだ" : lens == nil ? "DVR のレンズが無い（サーバーの lens.json）"
-                : !player.currentTime().seconds.isFinite ? "DVR がまだ" : droneCamera() == nil ? "飛行にドローンの向きが無い" : nil
+                : player.currentItem?.status != .readyToPlay ? "DVR がまだ" : droneCamera() == nil ? "飛行にドローンの向きが無い" : nil
             if let why { status = "FPV にできない：\(why)"; return }
-            guard let c = arCamera(), let l = lenses() else { status = "FPV にできない：ARKit のフレームがまだ"; return }
+            guard let c = arCamera() else { status = "FPV にできない：ARKit のフレームがまだ"; return }
+            guard let l = lenses() else { status = "FPV にできない：DVR のレンズの値から画角を出せない"; return }
             fpvLens = l                             // kept for the whole round trip: a reload clears `lens`
             virtualCam = c; flying = false
             splats.view.alpha = 0
@@ -401,7 +403,7 @@ final class ARController {
             var th = min(td, thMax)
             for _ in 0..<6 {
                 let t2 = th * th
-                th = min(max(th - (th * (1 + t2 * (k.x + t2 * (k.y + t2 * (k.z + t2 * k.w)))) - td) / g(th), 0), thMax)
+                th = min(max(th - (th * (1 + t2 * (k.x + t2 * (k.y + t2 * (k.z + t2 * k.w)))) - td) / max(g(th), 1e-3), 0), thMax)
             }
             return th
         }
@@ -455,11 +457,11 @@ final class ARController {
                 dvrAlpha = max(0, 1 - t / fadeTime)
             } else if t < fadeTime + flyTime {  // 2. back to ARKit's camera as it is now, the lens straightening
                 if !flying { fromCam = droneCamera() ?? virtualCam ?? fromCam; flying = true }
-                dvrAlpha = 0
+                if dvrAlpha != 0 { dvrAlpha = 0 }   // observed: written only when it changes
                 let e = ease(Float((t - fadeTime) / flyTime))
                 virtualCam = blend(fromCam, arCamera() ?? fromCam, e); lensAt(1 - e, l)
             } else {                            // 3. landed: the splats dissolve into the camera image
-                virtualCam = arCamera() ?? virtualCam; lensAt(0, l); dvrAlpha = 0   // also when a stall skipped step 2
+                virtualCam = arCamera() ?? virtualCam; lensAt(0, l); if dvrAlpha != 0 { dvrAlpha = 0 }   // also when a stall skipped step 2
                 splats.view.alpha = CGFloat(max(0, 1 - (t - fadeTime - flyTime) / fadeTime))
                 if t >= 2 * fadeTime + flyTime { virtualCam = nil; mode = .ar }
             }
