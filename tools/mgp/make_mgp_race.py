@@ -33,7 +33,8 @@ HOLE_LEAD = 2.0      # assumed horn -> first start-gate pass (FDF holeshots were
 RESTART_GAP = 120.0  # no qualifier lap is this long: a gap like it between passes means two heats in one recording
 PRE = 4.0           # clip pre-roll before the horn (page opens ~2 s + audio lead before the start)
 POST = 6.0
-CELL_W, CELL_H, FEED_X, FEED_W = 640, 360, 80, 480
+LAYOUT = os.environ.get("LAYOUT", "8up")           # 4up: the Mains' 2x2 recordings, as extract.py LAYOUT=4up
+GRID, CELL_W, CELL_H, FEED_X, FEED_W = (2, 960, 540, 120, 720) if LAYOUT == "4up" else (3, 640, 360, 80, 480)
 
 
 # ---------------------------------------------------------------- poses
@@ -104,7 +105,9 @@ def fmt_time(t):
 
 
 def official_for(rnd):
-    R = next(r for r in json.load(open(f"{ROOT}/data/mgp/livefpv_laps.json")) if r["round"] == rnd)
+    """the qualifier rounds (livefpv_laps.json), then the Mains' finals (livefpv_finals.json: rounds 901-905, with a label)"""
+    races = json.load(open(f"{ROOT}/data/mgp/livefpv_laps.json")) + json.load(open(f"{ROOT}/data/mgp/livefpv_finals.json"))
+    R = next(r for r in races if r["round"] == rnd)
     return R, {p["pilot"]: [t for n, t in p["laps"] if n > 0] for p in R["pilots"]}
 
 
@@ -212,9 +215,11 @@ def build(a):
     clip_t1 = min(dur, arrive + POST); nfr = int((clip_t1 - clip_t0) * fps) + 1
     start = round(start_v - clip_t0, 3)
 
-    race = dict(title=f"MultiGP Championship 2026 · Qualifier Round {rnd}", round=rnd, fps=fps, start=start, scene=a.scene,
+    race = dict(title=f"MultiGP Championship 2026 · {R.get('label') or f'Qualifier Round {rnd}'}", round=rnd, fps=fps, start=start, scene=a.scene,
                 laps=L, gate=gate, checkpoints=cps, track_name=tname, pilots=[], source=dict(
                     recording=vfile, clip_t0=round(clip_t0, 3), clip_t1=round(clip_t1, 3), start_basis=("given" if a.start_video is not None else f"min holeshot - {HOLE_LEAD} s (assumption)")))
+    if a.sky:
+        race["sky"] = a.sky                                  # the round's own sky (a night scan's), else the page's sky.jpg
     cmp_ = {}
     ranked = sorted(names, key=lambda n: (-len(off[n]), (cross_v[n][len(off[n])] if n in cross_v and len(cross_v[n]) > len(off[n]) else (holes.get(n, 0) + sum(off[n])))))
     pos_of = {n: i + 1 for i, n in enumerate(ranked)}
@@ -259,7 +264,7 @@ def make_clips(a, race, vfile, t0, t1, crop_top):
     ps = race["pilots"]; rd = f"/tmp/mgp_q{race['round']:02d}"
     maps = ""; fc = f"[0:v]split={len(ps)}" + "".join(f"[v{i}]" for i in range(len(ps))) + ";"
     for i, p in enumerate(ps):
-        r, c = divmod(p["slot"], 3)
+        r, c = divmod(p["slot"], GRID)
         fc += f"[v{i}]crop={FEED_W}:{CELL_H - crop_top}:{c * CELL_W + FEED_X}:{r * CELL_H + crop_top}[o{i}];"
         maps += f" -map '[o{i}]' -c:v libx264 -preset veryfast -crf 24 -pix_fmt yuv420p -an -movflags +faststart {rd}/{p['video']}"
     cmd = (f"mkdir -p {rd} && nice -n 10 ffmpeg -y -loglevel error -ss {t0:.3f} -t {t1 - t0:.3f} -i ~/mgp/raw/{vfile} "
@@ -272,6 +277,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(); sp = ap.add_subparsers(dest="cmd", required=True)
     b = sp.add_parser("build"); b.add_argument("--round", type=int, required=True); b.add_argument("--poses", required=True); b.add_argument("--out", required=True)
     b.add_argument("--track", default=TRACK_TXT); b.add_argument("--fps", type=int, default=30); b.add_argument("--scene", default="MGP-Champs-2026")
+    b.add_argument("--sky", help="sky image in the data folder for this round (default: the page's sky.jpg)")
     b.add_argument("--slots", help="PILOT=slot,... (overrides pose file slots and OCR)"); b.add_argument("--video-file"); b.add_argument("--ocr-dir", default=os.path.expanduser("~/mgp/ocr"))
     b.add_argument("--start-video", type=float, help="horn in recording time (s); default min holeshot - 2 s")
     b.add_argument("--margin", type=float, default=3.0, help="lateral slack (m) around the gate for a pass; 3 fps SfM paths need more than 1.5")

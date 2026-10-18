@@ -49,6 +49,8 @@ for RD in $FOLDERS; do
   [ -e "$SRC/audio.m4a" ] && cp -L "$SRC/audio.m4a" "$DST/audio.m4a"
   SCN="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["scene"])' "$SRC/race.json")"
   [ -e "$DATA/scene/$SCN.sog" ] && cp -L "$DATA/scene/$SCN.sog" "$UP/scene/"
+  SKY="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("sky", ""))' "$SRC/race.json")"
+  [[ "$SKY" =~ ^[A-Za-z0-9._-]+$ ]] && [ -e "$DATA/$SKY" ] && cp -L "$DATA/$SKY" "$UP/$SKY"
 done
 # EXTRA_SCENES="<name> ...": scans no round names yet, uploaded too so the page's ?scene=<name> can show them for comparison
 for SCN in ${EXTRA_SCENES:-}; do

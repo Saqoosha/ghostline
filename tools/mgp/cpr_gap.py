@@ -27,7 +27,11 @@ os.makedirs(out_dir, exist_ok=True)
 MIN_INL, MAXGAP, MINGAP = int(os.environ.get("MIN_INL", 60)), int(os.environ.get("MAXGAP", 45)), int(os.environ.get("MINGAP", 3))
 # an answer farther from the prediction than GATE_M + GATE_MPS x (time since the last answer) is another place (on a
 # half-trained scene, 400-1000 inliers 5-40 m off); 4 m let a 43 m/s step through on Round 44
-GATE_M, GATE_MPS, GATE_DEG, GATE_DPS = [float(os.environ.get(k, d)) for k, d in (("GATE_M", 1.0), ("GATE_MPS", 20), ("GATE_DEG", 15), ("GATE_DPS", 300))]
+# (on the trained scene a gap's first frame often matched 500-1000 points 2.4-3.7 m from a prediction drawn from noisy
+# frames: an answer that strong gets STRONG_M more); the angle allows a quad's flip (900 deg/s); SKIP frames that fail
+# in a row are passed over, the prediction carried on, before the direction gives up
+GATE_M, GATE_MPS, GATE_DEG, GATE_DPS = [float(os.environ.get(k, d)) for k, d in (("GATE_M", 1.0), ("GATE_MPS", 20), ("GATE_DEG", 15), ("GATE_DPS", 900))]
+STRONG, STRONG_M, SKIP = int(os.environ.get("STRONG", 400)), float(os.environ.get("STRONG_M", 4.0)), int(os.environ.get("SKIP", 2))
 ROUNDS, DEBUG, JUMP_MPS = int(os.environ.get("PROBE_ROUNDS", 2)), os.environ.get("DEBUG") == "1", float(os.environ.get("JUMP_MPS", 45))
 F, Tf = json.load(open(frame_json)), json.load(open(fit_json))
 E, a0 = np.array([F["ex"], F["ey"], F["up"]]), np.array(F["origin"]); R2 = np.array(Tf["R"]) @ np.diag([1, Tf["mirror"]])
@@ -83,7 +87,8 @@ def solve_iter(q, valid, R, c):
     return best
 # ---- the row (track frame), as poses_from_loc.py's storey rule
 CBOX = (-131, -104, -8, 22)
-def in_box(m): return CBOX[0] < m[0] < CBOX[1] and CBOX[2] < m[1] < CBOX[3]
+ALL = os.environ.get("ALL") == "1"                    # every gap on the course (a dusk final tracked from cpr_reloc.py's anchors)
+def in_box(m): return ALL or (CBOX[0] < m[0] < CBOX[1] and CBOX[2] < m[1] < CBOX[3])
 def suspect(ts, M, ok):
     """indices of solved frames that cannot be right: under the TBS gate at the upper opening's height in the stretch
     from under NEROS to the low gate, or a jump faster than JUMP_MPS from both neighbours"""
@@ -103,6 +108,7 @@ def pose_of(f):                                       # loc json frame -> (Rot w
     w, x, y, z = f["qvec"]; return Rot.from_quat([x, y, z, w]).inv(), np.array(f["center"])
 def track(order, seed, frames, valid, solved):
     hist = list(seed)                                 # (t_ms, Rot, centre) of the last solved frames, in this direction
+    misses = 0
     for i in order:
         if i in solved: break                         # met the other direction
         t = frames[i]["t_ms"]
@@ -117,10 +123,15 @@ def track(order, seed, frames, valid, solved):
         q, m = load(frames[i]["t_ms"])
         r = solve_iter(q, m, *pred)
         dt = abs(t - hist[-1][0]) / 1000
-        if r is None or r[2] < MIN_INL or np.linalg.norm(r[1] - pred[1]) * U > GATE_M + GATE_MPS * dt or \
-                np.degrees((r[0].inv() * pred[0]).magnitude()) > GATE_DEG + GATE_DPS * dt:
-            if DEBUG: print(f"    {t / 1000:.3f}: stop ({'none' if r is None else str(r[2]) + ' inl, ' + str(round(np.linalg.norm(r[1] - pred[1]) * U, 2)) + ' m'})", flush=True)
-            break
+        if r is not None:
+            dm = np.linalg.norm(r[1] - pred[1]) * U; dd = np.degrees((r[0].inv() * pred[0]).magnitude())
+        strong = r is not None and r[2] >= STRONG     # a strong answer may also turn twice as fast (Round 44: 682 points, 75 deg)
+        if r is None or r[2] < MIN_INL or dm > GATE_M + GATE_MPS * dt + (STRONG_M if strong else 0) or dd > GATE_DEG + GATE_DPS * dt * (2 if strong else 1):
+            misses += 1
+            if DEBUG: print(f"    {t / 1000:.3f}: miss {misses} ({'none' if r is None else f'{r[2]} inl, {dm:.2f} m, {dd:.0f} deg'})", flush=True)
+            if misses > SKIP: break
+            continue
+        misses = 0
         solved[i] = r; hist = (hist + [(t, r[0], r[1])])[-4:]
         if DEBUG: print(f"    {t / 1000:.3f}: {r[2]} inliers, {metric(r[1])[0].round(2)}", flush=True)
 for fn in sorted(os.listdir(loc_dir)):
@@ -128,6 +139,8 @@ for fn in sorted(os.listdir(loc_dir)):
     if not fn.endswith(".json") or (cells and cell not in cells):
         continue
     J = json.load(open(f"{loc_dir}/{fn}")); frames = J["frames"]
+    if not os.path.isdir(f"{frames_dir}/images/{cell}"):   # never near the row: no frames were sent, nothing to fill
+        json.dump(J, open(f"{out_dir}/{fn}", "w")); print(f"{cell}: no frames here, as it was", flush=True); continue
     cam = J["camera"]; fx, fy, cx, cy, *k = cam["params"]
     Kf = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
     m1, m2 = cv2.fisheye.initUndistortRectifyMap(Kf, np.array(k[:4]), np.eye(3), Kp, (RW, RH), cv2.CV_16SC2)

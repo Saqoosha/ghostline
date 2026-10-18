@@ -11,7 +11,7 @@ type Pilot = { name: string; color: string; video?: string; end: number; crashed
 // a gate: centre at the bottom middle of its opening, width_dir across it, half_width and height of the opening (null for
 // a checkpoint that is not a gate: a flag, an invisible marker)
 type Gate = { centre: number[]; width_dir?: number[]; normal?: number[]; half_width?: number | null; height?: number | null; start?: boolean; finish?: boolean; source?: string; confidence?: number }
-type Race = { title: string; fps: number; start: number; scene: string; laps: number; gate?: Gate; checkpoints?: Gate[]; pilots: Pilot[]; track?: number[][]; track_name?: string; round?: number }
+type Race = { title: string; fps: number; start: number; scene: string; sky?: string; laps: number; gate?: Gate; checkpoints?: Gate[]; pilots: Pilot[]; track?: number[][]; track_name?: string; round?: number }
 type RoundEntry = { round: number; label?: string; completed?: string; data: string; pilots?: string[]; fastest?: { pilot: string; lap: number } }
 type Rounds = { title: string; rounds: RoundEntry[] }
 
@@ -30,11 +30,19 @@ app.setCanvasFillMode(pc.FILLMODE_NONE); app.setCanvasResolution(pc.RESOLUTION_A
 const cam = new pc.Entity('cam'); cam.addComponent('camera', { clearColor: new pc.Color(0.92, 0.93, 0.95), fov: 50, nearClip: 0.2, farClip: 2000 })
 app.root.addChild(cam)
 
-// sky and scan, once for all rounds (a round naming another scan swaps it)
+// sky and scan, shared by the rounds (a round naming another scan or sky swaps it: race.sky, the night scan's, else sky.jpg)
 // the sky is the scan's surroundings: without the scan it is left out (half of it is the ground under the course)
-let sky: pc.Texture | null = null
+let sky: pc.Texture | null = null, skyFile = ''
+const skies = new Map<string, pc.Texture>()
 const showSky = () => { app.scene.skybox = sky && !sceneMissing ? sky : null }
-const skyImg = new Image(); skyImg.onload = () => { app.scene.skyboxMip = 0; sky = bakeSky(app.graphicsDevice, skyImg); showSky() }; skyImg.src = BASE + 'sky.jpg'
+function loadSky(file: string) {
+  if (file === skyFile) return
+  skyFile = file; sky = skies.get(file) ?? null; showSky()
+  if (sky) return
+  const img = new Image()
+  img.onload = () => { const t = bakeSky(app.graphicsDevice, img); skies.set(file, t); if (skyFile === file) { app.scene.skyboxMip = 0; sky = t; showSky() } }
+  img.src = BASE + file
+}
 let scan: pc.Entity | null = null, sceneName = '', sceneReady = false, sceneMissing = false, sceneFailed = false
 const sceneNote = () => sceneFailed ? 'scan failed — reload the page' : sceneMissing ? `no scan of this course yet: flight paths and gates only` : sceneReady ? '' : 'loading scene…'
 // the scan's loading overlay: a bar over the canvas driven by the asset's 'progress' (bytes received of the .sog)
@@ -85,7 +93,7 @@ const rounds: Rounds = await fetchJson<Rounds>(BASE + 'rounds.json').catch((e: E
 if (!rounds.rounds?.length) { say('rounds.json lists no rounds'); throw new Error('no rounds') }
 rounds.rounds.sort((a, b) => a.round - b.round)
 $('series').textContent = rounds.title
-document.title = rounds.title.replace(/\s+—.*$/, '') + ' · Qualifiers'
+document.title = rounds.title.replace(/\s+—.*$/, '')
 
 const NOTE = 'Flight lines are estimated from each pilot\'s DVR video by image analysis and are approximate, not measured positions.'
 const fmt = (s: number) => s >= 60 ? `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}` : s.toFixed(3)
@@ -136,6 +144,7 @@ async function loadRound(entry: RoundEntry) {
   disposeRound()
   // ?scene=<name>: another scan from the same data folder, to compare a retrained one before it replaces the published
   loadScene(/^[A-Za-z0-9._-]+$/.test(QS.get('scene') ?? '') ? QS.get('scene')! : race.scene)
+  loadSky(/^[A-Za-z0-9._-]+$/.test(race.sky ?? '') ? race.sky! : 'sky.jpg')
   const P = race.pilots, FPS = race.fps
   const T_END = Math.max(...P.map(p => p.end)), T0 = race.start - 2 - AUDIO_LEAD
   const root = new pc.Entity('round'); app.root.addChild(root)
