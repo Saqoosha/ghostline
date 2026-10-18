@@ -1,7 +1,7 @@
 """localize.py output (SfM map frame) -> make_mgp_race.py pose files (world metres, y up, x = VelociDrone x,
 z = -VelociDrone z). Chain: map -> ground frame (topview.py *_frame.json) -> 2D similarity onto the track (fit2d.py
 .json). Drops excursions where the map holds a piece of course twice: a jump of more than JUMP m (beyond VMAX m/s over
-the time between the frames) that comes back within BACK s; a jump that never comes back is kept.
+the time between the frames) that comes back (a JUMP m step) within BACK s; a jump that never comes back is kept.
 usage: poses_from_loc.py <frame.json> <fit.json> <out_dir> <loc.json>=<PILOT>[:slot] ... [--dt-ms=N] [--smooth]
 --dt-ms shifts every frame time (frames named by an older extract.py are 0.5/fps early: pass +500/fps)."""
 import json, os, sys
@@ -98,15 +98,16 @@ for spec in args[3:]:
         print(f"  {name}: {down} frames under the TBS gate brought down one storey")
     keep = np.ones(len(C), bool)
     i = 1
-    # a jump is JUMP m more than a quad could fly in the time between the two frames (VMAX): across a gap of missing
-    # frames a plain 15 m test took a 2 s, 35 m stretch of the start straight for an excursion and dropped 3 s with a
-    # lap in them (Round 61 MINJAE_)
-    jump = lambda a, b: np.linalg.norm(C[b] - C[a]) > JUMP + VMAX * (t[b] - t[a]) / 1000
+    # leaving: a jump of JUMP m more than a quad could fly in the time between the two frames (VMAX). Across a gap of
+    # missing frames a plain 15 m test took a 2 s, 35 m stretch of the start straight for an excursion and dropped 3 s
+    # with a lap in them (Round 61 MINJAE_). Coming back stays a plain JUMP m step: with the allowance a 16.1 m return
+    # in 66 ms was missed and 15 good frames after a 3-frame excursion went too (Round 54 NIDO_FPV)
+    leaves = lambda a, b: np.linalg.norm(C[b] - C[a]) > JUMP + VMAX * (t[b] - t[a]) / 1000
     while i < len(C):
-        if jump(i - 1, i):
+        if leaves(i - 1, i):
             back = next((j for j in range(i + 1, len(C)) if t[j] - t[i] <= BACK * 1000
                          and np.linalg.norm(C[j] - C[i - 1]) < JUMP + 30 * (t[j] - t[i - 1]) / 1000
-                         and jump(j - 1, j)), None)
+                         and np.linalg.norm(C[j] - C[j - 1]) > JUMP), None)
             if back is not None:
                 keep[i:back] = False; i = back
         i += 1
