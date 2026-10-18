@@ -1,0 +1,38 @@
+name: GhostlineAR
+options:
+  bundleIdPrefix: sh.saqoo
+  deploymentTarget:
+    iOS: "18.0"
+packages:
+  MetalSplatter:
+    url: https://github.com/scier/MetalSplatter
+    exactVersion: 1.0.1
+targets:
+  GhostlineAR:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    dependencies:
+      - package: MetalSplatter
+        product: MetalSplatter
+      - package: MetalSplatter
+        product: SplatIO
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: sh.saqoo.ghostline-ar
+        DEVELOPMENT_TEAM: VCFY2GFR89
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_NSCameraUsageDescription: The camera image is matched against the scan to find where the phone is.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Frames go to the localization server on the local network.
+        INFOPLIST_KEY_CFBundleDisplayName: Ghostline AR
+    info:
+      path: Sources/Info.plist
+      properties:
+        UIRequiredDeviceCapabilities: [arkit]
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
