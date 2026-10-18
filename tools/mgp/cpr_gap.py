@@ -154,6 +154,9 @@ for fn in sorted(os.listdir(loc_dir)):
     ts = [f["t_ms"] for f in frames]; ok = [bool(f["ok"]) for f in frames]
     M = np.array([metric(np.array(f["center"]))[0] if f["ok"] else [np.nan] * 3 for f in frames])
     storey, jump = suspect(ts, M, ok)
+    # only where the gaps get solved: elsewhere an unsolved "jump" was simply dropped, and on the straight before the
+    # start gate (44 m/s) good frames went that way and took a lap with them (Round 61 MINJAE_: 20.4 s off)
+    jump = {i for i in jump if in_box(M[i])}
     for i in storey | jump: ok[i] = False
     on_disk = set(int(f[:-4]) for f in os.listdir(f"{frames_dir}/images/{cell}") if f.endswith(".jpg") and f[:-4].isdigit())
     solved, t0, gaps = {}, time.time(), 0
