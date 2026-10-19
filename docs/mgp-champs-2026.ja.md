@@ -124,7 +124,7 @@ ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash too
   0.005`）、`--cap-max 2000000 --num-iterations 15000 --distraction-robustness strong` で色だけ学ばせる（17 分、PSNR 24.9）。
   ゲートの枠、地面の LED のライン、照明が出る。カメラは `night_gs_dataset.py` に `FIELD`（場所ごとの補正）と `FOLD`（折りたたみの
   区間のフレームを外す）を付けて昼の座標に置く。
-- rt4090 の `/mnt/data`（ntfs3）は、シンボリックリンクを 41 本目から作れなくなった（ENOENT）。リンクを張る学習用のフォルダは `~/`（ext4）に置く。
+- rt4090 の NTFS（ntfs3）の上では、シンボリックリンクが 41 本目から作れなくなった（ENOENT）。10/19 からは `/mnt/data` が ext4 なので起きない。
 - hloc：`localize_sfm.main` は解けないフレームを、最初に引いた画像の姿勢に置いてしまう（`night_localize.py` は中の関数を直に呼ぶ）。
   `import_features` などは開いた `pycolmap.Database` を受け取る。MegaLoc は `torch.hub` の信頼の確認で止まるので、一度
   `trust_repo=True` で読み込んでおく。
@@ -151,9 +151,12 @@ ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash too
 ## 機械
 
 - Studio（`ssh studio`、`~/mgp`）：ダウンロード・切り出し・OCR・SfM の CPU 仕事。raw/ に 77 本、all/ に 30 fps の切り出し（62 GB）。
-- rt4090（`/mnt/data/mgp`：chain・mapfix・gates・q44・gs_*）：地図のつなぎ足し、位置合わせ、3DGS。`/mnt/data` は fstab に無く、再起動後は
-  `sudo mount -t ntfs3 /dev/nvme1n1p2 /mnt/data`。`/` は小さい（ZTMY と共用で 98% になった）。GPU は ZTMY-Sets のセッションと
-  クロスセッションのメッセージで順番を決める。`pgrep -x spirula` が空なら使ってよい。
+- rt4090（`/mnt/data/mgp`：chain・mapfix・gates・q44・gs_*、`/mnt/data/mgpwork`：穴埋め・夜の地図）：地図のつなぎ足し、位置合わせ、3DGS。
+  2026-10-19 に Ubuntu を 2 TB の NVMe に移した。`/mnt/data` はいまルートの ext4 の普通のフォルダで、Linux の作業フォルダ（MGP・FDF・JDL・
+  オフィス・spirula など）はここにある（パスは前と同じ）。Windows と共有の NTFS「Data」ドライブは `/mnt/ntfs-data`（fstab に無いので
+  再起動後は `sudo mount -t ntfs3 -o uid=1000,gid=1000,iocharset=utf8 /dev/disk/by-label/Data /mnt/ntfs-data`。デバイスの番号は
+  ディスクの入れ替えで変わる）。NTFS に残したもの（`Users`・`ZTMYSet_archive` など）には `/mnt/data/<名前>` からリンクがある。
+  GPU は ZTMY-Sets のセッションとクロスセッションのメッセージで順番を決める。`pgrep -x spirula` が空なら使ってよい。
 - `ssh host 'until ! pgrep -f "<名前>"'` は ssh の bash -c の行に当たって終わらない。`pgrep -f "[n]ame"` と書く。`pkill -f` も同じ理由で
   自分の bash を殺す。
 

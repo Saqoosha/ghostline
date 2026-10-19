@@ -2,7 +2,7 @@
 day map's coordinates (night_anchor.py's transform), so the scan goes through to_metric.py / ply_to_web.py like the day
 one and lands on the same course; only the frames of the night feeds are kept (twilight frames would mix two skies).
 images/<feed> and masks/<feed> are symlinks (masks at the frames' size: 720x540), sparse/0 the trimmed model.
-The folder must be on a filesystem that takes symlinks: not rt4090's /mnt/data (ntfs3 stopped creating them after 41).
+The folder must be on a filesystem that takes symlinks (ext4; ntfs3 stopped creating them after 41).
 Frames the joint model put far off the course (night frames of a dark sky: 13-40 m up or under the ground) are dropped:
 env FRAME / FIT (top_frame.json, fit01.png.json: to_metric's chain) and the height range MIN_UP..MAX_UP (-1..12 m);
 with COURSE (a glob of the qualifiers' pose files) also frames over MAX_OFF (6) m sideways from their paths.
