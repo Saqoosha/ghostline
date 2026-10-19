@@ -1,5 +1,5 @@
 #!/bin/bash
-# rt_linux_setup.sh: the live tracker on native Ubuntu 24.04 (the 4090 box's 150 GiB on the 750 EVO), as WSL's ~/mastenv.
+# rt_linux_setup.sh: the live tracker on native Ubuntu 24.04 (the 4090 box's WD SN850X 2TB; first installed on the 750 EVO, moved 2026-10-19), as WSL's ~/mastenv.
 # Run as saqoosha with sudo after a plain Ubuntu Server install. Steps are re-runnable.
 # Why native: under WSL every blocking CUDA call spins a core (BLOCKING_SYNC is ignored) and each CUDA call crosses to
 # Windows as an ioctl - see docs/realtime-tracking.ja.md, "電池で回す".
