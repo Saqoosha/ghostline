@@ -137,6 +137,13 @@ ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash too
 - **結果**：決勝のラップが公式と一致した。B 決勝は 0.03 秒以内（REDSKY の 3 周目だけ 0.078）、E 決勝は 0.054 秒以内、A 決勝は
   MCKFPV 0.089 秒・KILLIANFPV 0.183 秒以内。前の姿勢をいまの `poses_from_loc.py` に通すと REDSKY の 3 周目が消えるが、直した姿勢では
   全員の全周がそろう。
+- **A Main の全レース**（Round 911〜923 ＝ Race 1〜13、ラップは `data/mgp/livefpv_a_main.json` から `livefpv_finals.json` へ）：
+  1 本ずつ `night_race.sh <id> gs/t45.ply`（rt4090）→ loc JSON を `build/mgp/loc/q9NN/` に置いて `round_mac.sh`。地図に無いマスの
+  カメラは `night_race_prep.py` がマスの位置ごとの中央値で決める（4 番目のマスだけ焦点 274〜278、ほかは 300〜318）。確かめの照合は
+  折りたたみの箱の中だけ（`night_refine.py ONLY_BOX`、手間は 2 割）。19:49〜20:15 の録画 7 本は、21:00 からやり直す前の走りで公式ラップに
+  合わない。録画↔レースは帯の名前（OCR）で決め、Race 4 は 21:15（帯に CRASH / LAND NOW）でなく 21:32。公式ラップの無い人と 1 周だけで
+  決めきれない人（Race 3 PINO、7 THE-MILKMAN、10 TJ_FPV、12 REDSKY）は顔ぶれの消去法で足す。ラップは公式とおおむね 0.1 秒以内。
+  Mac の tar で送ると `._*` の付録ファイルが混ざり、フレームの一覧の先頭が読めない画像になる（`COPYFILE_DISABLE=1` を付けるか消す）
 - **名前**：B 決勝の SHARK_FPV（1 周 20.911）は THE-MILKMAN の 1 周目と同じ時刻で、`name_slots.py` が決めない。A 決勝の MINJAE_ は
   ラップが無い。どちらも 4 分割の帯の名前で決め、`build/mgp/poses/q90X/<PILOT>.json` を足して `make_mgp_race.py` を回し直した。
   A 決勝の YUKI のマスは録画に映像が無い。
@@ -192,7 +199,10 @@ ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash too
 - つなぎ足し：r1451 以降（14:51 → 13:39 → 12:43 → 12:25 → 12:01 → 11:39 → 11:18 → 10:56）。14:04 は 1,006 枚中 292 枚しか入らない。
   入った地図で Q44 を合わせ直して登録率を見る（走行中）。
 - 7,523 枚の地図からの 3DGS（走行中、`/mnt/data/mgp/gs_1404`）。できたら `.sog` を差し替える。
-- 全 Round の位置合わせ → race.json → rounds.json。Studio の `all/` にフレームはある。
 - スタートの合図の時刻（帯のラップ表示の変化を密に OCR するか、Round ごとに手で）。`position`・`gap`・国旗の公式ソース。
-- 公開：`tools/publish-dvr-viewer.sh` は mgp の形（rounds.json、共有のスキャン、`VITE_MGP_DATA`）を知らない。
+- 本番ページ（mgp-champs-2026）を確認ページの中身（予選 125 Round の作り直し、決勝の折りたたみの直し、合成した夜のスキャン）に
+  差し替える：Saqoosha の OK 待ち。
+- 決勝の線に残る長い直線：観測の無い数秒間を `poses_from_loc.py --smooth` がまっすぐ埋めたもの（A 決勝の KILLIANFPV など、直す前からある）。
+- `tools/dvr/` の CPR 系 6 本（`cpr_track.py`・`cpr_rematch.py`・`cpr_match.py`・`gap_track.py`・`eval_align.py`・`pad_refine.py`）も
+  MASt3R の遅い `fast_reciprocal_NNs` を使う。`cpr_gap_lib.reciprocal_nns` に替えれば 1 組あたり約 2 倍速い。
 - レース 1 の 15 fps フレームを地図に足して 3DGS を厚くする（`loc_to_model.py` 未着手）。

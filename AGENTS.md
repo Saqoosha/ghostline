@@ -56,6 +56,12 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 - **夜の映像の SfM は、誤差が小さくても位置が潰れていることがある。** GLOMAP は 1.15 px・向きも合うのに、カメラが 1 点のまわりに
   星形に散った。魚眼の歪みを 4 つ自由にすると束調整も止まる。incremental と SIMPLE_RADIAL_FISHEYE で組み、地図ができるたびに
   外れ値の検査（`night_model_check.py`）と真上の図（`night_model_plot.py`）で確かめる。手順は `docs/mgp-champs-2026.ja.md` の「夕方と夜の決勝」
+- **MASt3R の `fast_reciprocal_NNs` は遅い。** 8,192 行ずつの小さな塊で GPU に何千回も命令を出し、1 組 0.16〜0.27 秒（推論は 0.08 秒）。
+  GPU を複数の処理で分けると 1.4〜2.1 秒に膨らむ。`tools/mgp/cpr_gap_lib.reciprocal_nns` は同じ組を 0.07〜0.12 秒で出す
+- **描いて照合した 1 コマずつの姿勢は、SfM の姿勢よりぶれる**（MGP の夜の決勝で中点からのずれ 0.67 m 対 0.27 m）。位置の確かめに使い、
+  答えには SfM の姿勢を残す（`tools/mgp/night_keep.py`）
+- **`tools/mgp/publish_mgp.sh` に Round を並べると、上がる `rounds.json` がその Round だけになる**（ページの一覧から他が消える）。
+  差し替えは Round を並べずに全部で流す（変わったファイルだけが送られる）
 - **8up 録画の帯の名前は映像のマスとずれることがある。** マス→pilot はラップの並びで決める（`name_slots.py`）
 - **race ページの splat がぼやける**：PlayCanvas の CPU ソートは走行中の依頼を捨てる。カメラが止まったら `resortWhenIdle` がソートを頼み直す
   （PlayCanvas の内部フィールドを読んでいるので、上げたら確かめる）
