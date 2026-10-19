@@ -93,6 +93,7 @@ JUMP_MPS=1000 ALL=1 MAXGAP=150 python ../cpr_gap.py <scan.ply> ../top_frame.json
 FIELD=sk/anchor5/field.npz FRAME=../top_frame.json FIT=../fit01.png.json COURSE='dayposes/*/*.json' FOLD=-138,-104,-60,-22 LOC=fold/gap2 STATIC=0.3 \
   python night_gs_dataset.py <model> sk/anchor5/transform.json sk/images sk/masks720 ~/mgp/gsnight4 e2100 na11 fa fe      # → spirula
 python night_warp.py splat sk/anchor5/field.npz <splat.ply> <out.ply>      # → to_metric.py → ply_to_web.py → .sog
+python splat_box_merge.py gs/t4/.../splat.ply gs/t5/.../splat.ply ../top_frame.json ../fit01.png.json gs/t45.ply  # 箱の中だけ t5
 # Mac（fold/gap2 の loc JSON を build/mgp/loc/q90X/ に置いて）
 ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash tools/mgp/round_mac.sh 905
 ```
@@ -144,7 +145,12 @@ ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash too
   位置と向きを止め（`--means-lr 0 --means-lr-final 0 --quats-lr 0`）、大きさと透明度はゆっくり（`--scales-lr 0.001 --opacities-lr
   0.005`）、`--cap-max 2000000 --num-iterations 15000 --distraction-robustness strong` で色だけ学ばせる（17 分、PSNR 24.9）。
   ゲートの枠、地面の LED のライン、照明が出る。カメラは `night_gs_dataset.py` に `FIELD`（場所ごとの補正）と `FOLD`（折りたたみの
-  区間のフレームを外す）を付けて昼の座標に置く。
+  区間のフレームを外す）を付けて昼の座標に置く（t4）。
+- **t5 と合成**：折りたたみを直した決勝のコマ（`LOC=fold/gap2`）を足し、0.5 秒たっても絵がほとんど変わらないコマ（`STATIC=0.3`：
+  ゴール後に録画に重なる順位カード、止まった機体）を外して 7,628 枚・30,000 回（1 時間 33 分）。t4 はカードを景色として覚えていた。
+  t5 は折りたたみの区間の二重のゲートと LED の線が出るが、ほかの場所は t4 のほうが良い（Saqoosha の目視）。どちらも位置を止めて
+  色だけ学ばせたので、`splat_box_merge.py` で箱（2 m 広げる）の中を t5、外を t4 にして 1 つにする。
+  比べるときは `EXTRA_SCENES` で上げた `-t4` / `-t5` を `?scene=` で開く。
 - rt4090 の NTFS（ntfs3）の上では、シンボリックリンクが 41 本目から作れなくなった（ENOENT）。10/19 からは `/mnt/data` が ext4 なので起きない。
 - hloc：`localize_sfm.main` は解けないフレームを、最初に引いた画像の姿勢に置いてしまう（`night_localize.py` は中の関数を直に呼ぶ）。
   `import_features` などは開いた `pycolmap.Database` を受け取る。MegaLoc は `torch.hub` の信頼の確認で止まるので、一度
