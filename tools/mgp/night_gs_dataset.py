@@ -8,10 +8,16 @@ env FRAME / FIT (top_frame.json, fit01.png.json: to_metric's chain) and the heig
 with COURSE (a glob of the qualifiers' pose files) also frames over MAX_OFF (6) m sideways from their paths.
 With FIELD (night_warp.py's field.npz) the cameras and points also take the local correction, and FOLD (page world
 x0,x1,z0,z1) drops the frames of a part the map folded: for training on the day scan's geometry (spirula --init-ply).
+LOC (a folder of loc jsons re-solved on the scan, night_refine.py then cpr_gap.py) replaces a feed's frames with every
+frame solved there, poses as they are (already on the day map: no field, kept in the folded part too).
+STATIC (0.3) drops frames whose view barely changes in half a second (that share of the unmasked pixels within 5
+levels): the finish cards drawn over the feeds, which the scan otherwise learns as a billboard, and parked quads.
 usage: night_gs_dataset.py <model dir> <transform.json> <images root> <masks root> <out dir> <feed prefix> ..."""
-import json, os, sys
+import glob, json, os, sys
+import cv2
 import numpy as np
 import pycolmap as p
+from scipy.spatial.transform import Rotation as Rot
 
 model, tf, iroot, mroot, out = sys.argv[1:6]; prefixes = tuple(sys.argv[6:])
 T = json.load(open(tf)); A, b = np.array(T["A"]), np.array(T["b"])
@@ -39,6 +45,28 @@ if os.environ.get("FIELD"):                              # night_warp.py's local
         Yp, _, _ = fld.apply(np.array([R.points3D[i].xyz for i in chunk]))
         for i, y in zip(chunk, Yp): R.points3D[i].xyz = y
     print(f"{len(ims)} cameras and {len(pids)} points moved by the local field")
+loc_feeds = set()
+if os.environ.get("LOC"):
+    def rigid(f):                                        # loc json frame (cam_from_world w x y z, centre) -> Rigid3d
+        w, x, y, z = f["qvec"]; Rcw = Rot.from_quat([x, y, z, w]).as_matrix()
+        return p.Rigid3d(p.Rotation3d(Rcw), -Rcw @ np.array(f["center"]))
+    by_name = {im.name: im for im in R.images.values()}
+    next_id = max(R.images.keys()) + 1
+    for feed in feeds:
+        path = f"{os.environ['LOC']}/{feed}.json"
+        if not os.path.exists(path): continue
+        loc_feeds.add(feed)
+        cam = next(im.camera_id for im in R.images.values() if im.name.startswith(feed + "/"))
+        solved = {f"{feed}/{f['t_ms']:07d}.jpg": f for f in json.load(open(path))["frames"] if f["ok"]}
+        kept = added = 0
+        for name, im in by_name.items():
+            if name.startswith(feed + "/") and im.has_pose:
+                if name in solved: R.frames[im.frame_id].rig_from_world = rigid(solved[name]); kept += 1
+                else: R.deregister_frame(im.frame_id)
+        for name, f in solved.items():
+            if name not in by_name and os.path.exists(f"{iroot}/{name}"):
+                R.add_image_with_trivial_frame(p.Image(name=name, camera_id=cam, image_id=next_id), rigid(f)); next_id += 1; added += 1
+        print(f"{feed}: {kept} model frames re-posed and {added} added from {path}")
 if os.environ.get("FRAME"):
     F, Tf = json.load(open(os.environ["FRAME"])), json.load(open(os.environ["FIT"]))
     E, a0 = np.array([F["ex"], F["ey"], F["up"]]), np.array(F["origin"])
@@ -61,9 +89,24 @@ if os.environ.get("FRAME"):
         def inbox(X):
             g = G(X)[:2] @ R2.T + Tf["t"]                    # track frame (x, VD z); page world z = -VD z
             return x0 < g[0] < x1 and z0 < -g[1] < z1
-        fold = [im for im in R.images.values() if im.has_pose and im not in drop and inbox(im.projection_center())]
+        fold = [im for im in R.images.values() if im.has_pose and im not in drop and im.name.split("/")[0] not in loc_feeds
+                and inbox(im.projection_center())]
         print(f"{len(fold)} frames in the folded part dropped")
         drop += fold
+if os.environ.get("STATIC"):
+    thr, gone, still = float(os.environ["STATIC"]), {im.image_id for im in drop}, []
+    on_disk = {f: sorted(int(os.path.basename(x)[:-4]) for x in glob.glob(f"{iroot}/{f}/*.jpg")) for f in feeds}
+    look = lambda name: cv2.GaussianBlur(cv2.imread(f"{iroot}/{name}", cv2.IMREAD_GRAYSCALE), (5, 5), 0).astype(np.int16)
+    for im in R.images.values():
+        if not im.has_pose or im.image_id in gone: continue
+        feed, fn = im.name.split("/"); t = int(fn[:-4]); ts = on_disk[feed]
+        k = np.searchsorted(ts, t + 450)                 # the frame half a second later
+        if k == len(ts) or ts[k] > t + 1500: continue
+        m = cv2.imread(f"{mroot}/{im.name}.png", cv2.IMREAD_GRAYSCALE)
+        d = np.abs(look(im.name) - look(f"{feed}/{ts[k]:07d}.jpg"))
+        if (d[m > 0] if m is not None else d).__lt__(5).mean() > thr: still.append(im)
+    print(f"{len(still)} frames whose view barely changes in half a second dropped")
+    drop += still
 for im in drop:
     if im.has_pose: R.deregister_frame(im.frame_id)
 os.makedirs(f"{out}/images", exist_ok=True); os.makedirs(f"{out}/masks", exist_ok=True)

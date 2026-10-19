@@ -17,9 +17,10 @@ from plyfile import PlyData
 from scipy.spatial.transform import Rotation as Rot
 sys.path.insert(0, os.path.expanduser("~/mast3r")); sys.path.insert(0, os.path.expanduser("~/rt"))
 from mast3r.model import AsymmetricMASt3R
-from mast3r.fast_nn import fast_reciprocal_NNs
 from dust3r.inference import inference
 from frustum import rasterize_culled
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cpr_gap_lib import reciprocal_nns
 
 dev = "cuda"
 ply, frame_json, fit_json, loc_dir, frames_dir, out_dir = sys.argv[1:7]; cells = sys.argv[7:]
@@ -66,7 +67,7 @@ def solve(q, valid, R, c):
     """render at (R, c), match the frame q to it, PnP -> (Rot world-from-camera, centre, inliers) or None"""
     rgb, dep, al, vm = render(R, c)
     with torch.no_grad(): o = inference([(view(q, 0), view(rgb, 1))], model, dev, batch_size=1, verbose=False)
-    a, b = fast_reciprocal_NNs(o["pred1"]["desc"][0], o["pred2"]["desc"][0], subsample_or_initxy1=4, device=dev, dist="dot", block_size=2**13)
+    a, b = reciprocal_nns(o["pred1"]["desc"][0], o["pred2"]["desc"][0])
     a, b = np.asarray(a), np.asarray(b); d = dep[b[:, 1], b[:, 0]]
     k = valid[a[:, 1], a[:, 0]] & (al[b[:, 1], b[:, 0]] > 0.9) & (d > NEAR) & (d < 200 / U)
     a, b, d = a[k], b[k], d[k]

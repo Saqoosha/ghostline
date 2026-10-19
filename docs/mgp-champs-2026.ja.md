@@ -86,9 +86,14 @@ QCAM_FROM=dayloc/rounds/fd_loc NRET=20 python night_localize.py sk/sfm <model> s
 WIN=0.7 NRET=5 python night_localize.py sk/sfm <model> sk/images sk/masks sk/loc2 fb_s0 ...                             # 決勝の全フレーム
 FRAME=../top_frame.json FIT=../fit01.png.json COURSE='dayposes/*/*.json' ANCHOR_PREFIX=fd_ LOCAL=1 \
   FOLD=-138,-104,-60,-22 FOLD_K=15 FOLD_MIN=4 python night_anchor.py <results> <inliers> sk/anchor5 <day loc dirs> -- fb_s0 ...
-python night_gs_dataset.py <model> sk/anchor5/transform.json sk/images sk/masks720 ~/mgp/gsnight2 e2100 na11 fa fe      # → spirula
+# 折りたたみの直し：スキャンに描いて確かめる → 夜の姿勢を残す → 反対の弧に置かれたコマを前後からたどる（A・E は夜、B は昼のスキャン）
+python ../night_refine.py <scan.ply> ../top_frame.json ../fit01.png.json sk/sfm/models_srf2 sk/anchor5 sk/images sk/masks720 fold/refine fa_s1 ...
+python ../night_keep.py fold/refine ../top_frame.json ../fit01.png.json fold/keep fa_s1 ...
+JUMP_MPS=1000 ALL=1 MAXGAP=150 python ../cpr_gap.py <scan.ply> ../top_frame.json ../fit01.png.json fold/keep fold/refine/frames fold/gap2 fa_s1 ...
+FIELD=sk/anchor5/field.npz FRAME=../top_frame.json FIT=../fit01.png.json COURSE='dayposes/*/*.json' FOLD=-138,-104,-60,-22 LOC=fold/gap2 STATIC=0.3 \
+  python night_gs_dataset.py <model> sk/anchor5/transform.json sk/images sk/masks720 ~/mgp/gsnight4 e2100 na11 fa fe      # → spirula
 python night_warp.py splat sk/anchor5/field.npz <splat.ply> <out.ply>      # → to_metric.py → ply_to_web.py → .sog
-# Mac
+# Mac（fold/gap2 の loc JSON を build/mgp/loc/q90X/ に置いて）
 ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash tools/mgp/round_mac.sh 905
 ```
 
@@ -109,12 +114,28 @@ ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash too
 - **ゆがみ**：1 つの相似変換だと、発進の場所の近くは 0.3 m で合うのに、遠い区間ほどずれる（3.6 m から数十 m）。D 決勝の基準点ごとに
   近くの 30 点で相似を RANSAC で求め、点ごとに近い 4 つを混ぜる（`night_warp.py`）。基準点をその近傍から予測した誤差は中央値 0.17 m、
   75% で 0.43 m。3DGS も同じ場で splat ごと動かす。
-- **折りたたみ（未解決）**：コースの左の中ほど（左の「？」形の鉤と右の弧、page world で x −138〜−104、z −60〜−22）を、夜の地図が
-  1 か所に重ねた。同じ絵柄のゲートの取り違えらしい。D 決勝を登録しても 2 本の弧が 1 本の帯になる。`FOLD` は近くの基準点を本当の位置で
-  2 群に分け、候補の位置からつながりが最短の並びを動的計画法で選ぶが、斜めの往復が残る。夜の 3DGS もこの区間は 2 か所が重なる。
-  直すなら地図の段で折りたたみをほどく（昼の地図の二重の列と同じ作業）。
-- **結果**：決勝のラップが公式と一致した（B 決勝は 4 人とも 0.02 秒以内、E 決勝は 0.05 秒以内、A 決勝は MCKFPV 0.08 秒・KILLIANFPV
-  0.2 秒以内）。
+- **折りたたみ**：コースの左の中ほど（左の「？」形の鉤と右の弧、page world で x −138〜−104、z −60〜−22）を、夜の地図が
+  1 か所に重ねた。同じ絵柄のゲートの取り違えらしい。D 決勝を登録しても 2 本の弧が 1 本の帯になり、`FOLD`（近くの基準点を本当の位置で
+  2 群に分け、つながりが最短の並びを動的計画法で選ぶ）でも斜めの往復が残った。直したのは地図でなく決勝の姿勢：昼の形に夜の色を
+  付けたスキャン（下の t4）では 2 本の弧が分かれているので、全コマをいまの姿勢で描いて MASt3R で照合する（`night_refine.py`）。
+  正しい弧に置かれたコマは数百〜数千点で合い、反対の弧のコマは 6〜30 点か、PnP が 5 m 以上動かす。照合できなかったコマのうち
+  箱の中のものだけを未解決にし（`night_keep.py`）、`cpr_gap.py`（`ALL=1`）が前後から描いて照合しながらたどる。B 決勝（夕方）は
+  昼のスキャンで照合する（夜のスキャンでは半分外れ、昼なら 584〜5,505 点）。たどれずに残るコマは、なめらかにする段がつなぐ。
+- **照合した姿勢をそのまま使わない**：1 コマずつ描いて照合した位置は、夜の地図の位置よりコマごとのぶれが大きい（となり 2 コマの中点
+  からのずれの中央値 0.67 m 対 0.27 m、一致点 1,500 以上でも 0.62 m）。2 つの差のうちゆっくり変わる部分（1 秒の中央値）は中央値 0.13 m、
+  上位 1 割で 0.42 m しかない。照合は確かめに使い、確かめたコマは夜の姿勢にその遅い差だけ足す（`WIN`）。箱の外で照合できなかった
+  コマ（暗い絵、ぶれた絵）は夜の姿勢のまま残す。
+- **跳びの判定を切る**：`cpr_gap.py` の「前後どちらへも秒速 45 m を超える跳び」は、`ALL=1` だとコース全体にかかり、スタート前の
+  直線（秒速 44 m）の正しいコマを捨てる。A 決勝の MCKFPV は 3 周目のゴールの前の 6 コマを失い、周が数えられなくなった（予選の
+  Round 61 MINJAE_ と同じ）。決勝は `JUMP_MPS=1000` で回し、ありえない速さの外れは `poses_from_loc.py` に任せる。
+- **カメラ**：決勝の loc JSON のカメラは昼の位置合わせの残りで、夜のマスでは焦点が 8 億 px に発散している。描いて照合するときは夜の
+  地図がマスごとに求めた SIMPLE_RADIAL_FISHEYE を使う（`night_refine.py` が JSON に書き、原寸 720×540 のフレームと `masks720` を読む）。
+- **照合の速さ**：MASt3R の `fast_reciprocal_NNs` は 8,192 行ずつの小さな塊で GPU に何千回も命令を出し、1 組 0.16〜0.27 秒（4 本で
+  GPU を分けると 1.4〜2.1 秒）かかる。推論そのものは 0.08 秒。`cpr_gap_lib.reciprocal_nns` は同じ組（99.9% 一致、違いは同点の取り方）を
+  大きな塊で 0.07〜0.12 秒で出す。並べるのは 3 本まで（1 コマ 0.9 秒。4 本だと取り合って 2.6〜3.0 秒）。
+- **結果**：決勝のラップが公式と一致した。B 決勝は 0.03 秒以内（REDSKY の 3 周目だけ 0.078）、E 決勝は 0.054 秒以内、A 決勝は
+  MCKFPV 0.089 秒・KILLIANFPV 0.183 秒以内。前の姿勢をいまの `poses_from_loc.py` に通すと REDSKY の 3 周目が消えるが、直した姿勢では
+  全員の全周がそろう。
 - **名前**：B 決勝の SHARK_FPV（1 周 20.911）は THE-MILKMAN の 1 周目と同じ時刻で、`name_slots.py` が決めない。A 決勝の MINJAE_ は
   ラップが無い。どちらも 4 分割の帯の名前で決め、`build/mgp/poses/q90X/<PILOT>.json` を足して `make_mgp_race.py` を回し直した。
   A 決勝の YUKI のマスは録画に映像が無い。

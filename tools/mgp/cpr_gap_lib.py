@@ -1,4 +1,5 @@
-"""The render-and-match pieces of cpr_gap.py, for cpr_reloc.py: the 3DGS in map coordinates rendered at a pose (gsplat,
+"""The render-and-match pieces of cpr_gap.py, for cpr_reloc.py and night_refine.py (cpr_gap.py takes its reciprocal_nns):
+the 3DGS in map coordinates rendered at a pose (gsplat,
 culled as tools/dvr/frustum.py), a frame matched to a render with MASt3R and solved by PnP from the render's depth,
 and a fisheye cell turned into the pinhole the two work in. Map units throughout (scene.U metres each)."""
 import json, os, sys
@@ -14,13 +15,42 @@ KP = np.array([[213.0, 0, RW / 2], [0, 213.0, RH / 2], [0, 0, 1]])        # the 
 T = lambda a: torch.tensor(a, dtype=torch.float32, device=dev)
 
 
+def reciprocal_nns(d1, d2, S=4, max_iter=10, chunk=2**14):
+    """mast3r.fast_nn.fast_reciprocal_NNs(d1, d2, subsample_or_initxy1=S, dist="dot"): every S-th pixel of the first
+    image followed to a mutual nearest neighbour, (x, y) pairs. The search runs in a few large blocks: the original's
+    8192-row blocks make about ten thousand small GPU launches a pair, 1.4-2.1 s with other jobs on the GPU, where the
+    MASt3R pass itself takes 0.08 s."""
+    from mast3r.fast_nn import merge_corres
+    (H1, W1, D), (H2, W2, _) = d1.shape, d2.shape
+    p1, p2 = torch.as_tensor(d1).to(dev).reshape(-1, D), torch.as_tensor(d2).to(dev).reshape(-1, D)
+    def nn(q, db):                                   # each row of q -> index of the most similar row of db
+        best = idx = None
+        for j in range(0, len(db), chunk):
+            s, i = (q @ db[j:j + chunk].T).max(dim=1)
+            if best is None: best, idx = s, i
+            else: up = s > best; best = torch.where(up, s, best); idx = torch.where(up, i + j, idx)
+        return idx.cpu().numpy()
+    y1, x1 = np.mgrid[S // 2:H1:S, S // 2:W1:S].reshape(2, -1)
+    xy1 = np.int32(np.unique(x1 + W1 * y1)); xy2 = np.full_like(xy1, -1)
+    old1, old2 = xy1.copy(), xy2.copy()
+    notyet = np.ones(len(xy1), dtype=bool)
+    for _ in range(max_iter):
+        if not notyet.any(): break
+        xy2[notyet] = nn(p1[torch.from_numpy(xy1[notyet]).to(dev).long()], p2)
+        notyet &= old2 != xy2
+        xy1[notyet] = nn(p2[torch.from_numpy(xy2[notyet]).to(dev).long()], p1)
+        notyet &= old1 != xy1
+        old2[:] = xy2; old1[:] = xy1
+    return merge_corres(xy1[~notyet], xy2[~notyet], (H1, W1), (H2, W2), ret_xy=True)
+
+
 class Scene:
-    def __init__(self, ply, frame_json, fit_json, near_m=0.5):
+    def __init__(self, ply, frame_json, fit_json, near_m=0.5, min_opacity=0.1):
         F, Tf = json.load(open(frame_json)), json.load(open(fit_json))
         self.E, self.a0 = np.array([F["ex"], F["ey"], F["up"]]), np.array(F["origin"])
         self.R2 = np.array(Tf["R"]) @ np.diag([1, Tf["mirror"]]); self.t2 = np.array(Tf["t"]); self.U = float(Tf["scale"])
         self.near = near_m / self.U
-        v = PlyData.read(ply)["vertex"].data; v = v[1 / (1 + np.exp(-v["opacity"])) >= 0.1]
+        v = PlyData.read(ply)["vertex"].data; v = v[1 / (1 + np.exp(-v["opacity"])) >= min_opacity]   # 0: as a viewer draws it
         self.means, self.quats = T(np.c_[v["x"], v["y"], v["z"]]), T(np.c_[v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]])
         self.scales, self.opac = torch.exp(T(np.c_[v["scale_0"], v["scale_1"], v["scale_2"]])), torch.sigmoid(T(v["opacity"]))
         sh0 = np.c_[v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]][:, None, :]
@@ -55,11 +85,10 @@ class Matcher:
 
     def solve(self, q, valid, R, c):
         """render at (R, c), match the frame q to it, PnP -> (Rot world-from-camera, centre, inliers) or None"""
-        from mast3r.fast_nn import fast_reciprocal_NNs
         from dust3r.inference import inference
         rgb, dep, al, vm = self.scene.render(R, c)
         with torch.no_grad(): o = inference([(self._view(q, 0), self._view(rgb, 1))], self.model, dev, batch_size=1, verbose=False)
-        a, b = fast_reciprocal_NNs(o["pred1"]["desc"][0], o["pred2"]["desc"][0], subsample_or_initxy1=4, device=dev, dist="dot", block_size=2**13)
+        a, b = reciprocal_nns(o["pred1"]["desc"][0], o["pred2"]["desc"][0])
         a, b = np.asarray(a), np.asarray(b); d = dep[b[:, 1], b[:, 0]]
         k = valid[a[:, 1], a[:, 0]] & (al[b[:, 1], b[:, 0]] > 0.9) & (d > self.scene.near) & (d < 200 / self.scene.U)
         a, b, d = a[k], b[k], d[k]
