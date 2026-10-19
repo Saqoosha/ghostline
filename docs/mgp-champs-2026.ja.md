@@ -118,8 +118,12 @@ ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash too
 - **名前**：B 決勝の SHARK_FPV（1 周 20.911）は THE-MILKMAN の 1 周目と同じ時刻で、`name_slots.py` が決めない。A 決勝の MINJAE_ は
   ラップが無い。どちらも 4 分割の帯の名前で決め、`build/mgp/poses/q90X/<PILOT>.json` を足して `make_mgp_race.py` を回し直した。
   A 決勝の YUKI のマスは録画に映像が無い。
-- **夜の 3DGS**：夜の 4 本（21:00、22:09、A・E 決勝）の 2,741 枚を spirula `in-the-wild --distraction-robustness strong
-  --floater-suppression strong` で 32 分。照明のにじみと浮いた霧が残る。
+- **夜の 3DGS は昼のスキャンの形に夜の色を付けて作る**：夜の 4 本（21:00、22:09、A・E 決勝）のフレームだけで学習すると、暗さとノイズで
+  形が決まらず、どの視点でも色のにじみと霧になった（2,741 枚、PSNR 22.3）。昼のスキャン（200 万 splat）を `--init-ply` に、
+  位置と向きを止め（`--means-lr 0 --means-lr-final 0 --quats-lr 0`）、大きさと透明度はゆっくり（`--scales-lr 0.001 --opacities-lr
+  0.005`）、`--cap-max 2000000 --num-iterations 15000 --distraction-robustness strong` で色だけ学ばせる（17 分、PSNR 24.9）。
+  ゲートの枠、地面の LED のライン、照明が出る。カメラは `night_gs_dataset.py` に `FIELD`（場所ごとの補正）と `FOLD`（折りたたみの
+  区間のフレームを外す）を付けて昼の座標に置く。
 - rt4090 の `/mnt/data`（ntfs3）は、シンボリックリンクを 41 本目から作れなくなった（ENOENT）。リンクを張る学習用のフォルダは `~/`（ext4）に置く。
 - hloc：`localize_sfm.main` は解けないフレームを、最初に引いた画像の姿勢に置いてしまう（`night_localize.py` は中の関数を直に呼ぶ）。
   `import_features` などは開いた `pycolmap.Database` を受け取る。MegaLoc は `torch.hub` の信頼の確認で止まるので、一度
