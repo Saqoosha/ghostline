@@ -23,7 +23,7 @@ xcodebuild -project GhostlineAR.xcodeproj -scheme GhostlineAR -configuration Rel
 xcrun devicectl device install app --device <UDID> build/Build/Products/Release-iphoneos/GhostlineAR.app
 ```
 
-地図と ply は rt4090 の Linux から Windows のディスクを読む（`/mnt/c`＝C:、`/mnt/data`＝D:）。iPhone からは Tailscale の `http://rt4090:8790`
+地図は rt4090 の Linux から Windows の C: を読み（`/mnt/c`）、ply は root の ext4 の `/mnt/data` に置く。iPhone からは Tailscale の `http://rt4090:8790`
 （左上の操作のボタンで出る欄の、いちばん下の文字をタップで変えられる。ATS は `NSAllowsLocalNetworking` なので、1 語の名前か `.local` か IP で書く）。`FLIGHT` のフォルダには `poses60.json`（姿勢）・`dvr.mp4`・`index.json`（ビューアのもの。`room` を使う）・`lens.json`（その飛行の `dvr_pinhole.mp4.json`。`source_fisheye` を FPV に使う）を置く。
 
 DVR は再生用に作り直す：録画の左右の黒（1280×720 の左 160 px から幅 960）を切って 4:3 に、離陸の直前から（オフィスは 19.3 s まで机の上なので 18.5 s から）。
