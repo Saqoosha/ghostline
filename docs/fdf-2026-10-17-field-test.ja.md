@@ -93,7 +93,7 @@ MASt3R の環境は rt4090 に一時的に入れて（`~/m3env`、tracker の `~
 
 ## rt4090 に残っているもの
 
-- 作業場 `/mnt/data/fdf-2026-10-17/`（`raw/` の動画、`scene/`、`align/`（`fine68.json` が当日の変換、`shape.json` が形の合わせ）、`logs/`）。`/mnt/data` は root（SN850X）の ext4 のフォルダで、マウントは要らない。Windows の D:（NTFS の Data）は `/mnt/ntfs-data` に移り、fstab に無いので起動後に `sudo mount -t ntfs3 -o uid=1000,gid=1000,iocharset=utf8 /dev/disk/by-label/Data /mnt/ntfs-data`（NVMe の番号は差し替えで変わるのでラベルで指す。`/mnt/data` から D: へ張った symlink はそれまで切れている）
+- 作業場 `/mnt/data/fdf-2026-10-17/`（`raw/` の動画、`scene/`、`align/`（`fine68.json` が当日の変換、`shape.json` が形の合わせ）、`logs/`）。`/mnt/data` は root（SN850X）の ext4 のフォルダで、マウントは要らない。Windows の D:（NTFS の Data）は Ubuntu からは使わない（マウントもしない）。要るときだけ `sudo mount -t ntfs3 -o uid=1000,gid=1000,iocharset=utf8 /dev/disk/by-label/Data /mnt/<どこか>`（NVMe の番号はディスクを足すと変わるのでラベルで指す）
 - シーン `~/scenes/FDF-2026-10-17-s30000.ply`、地図 `~/rt/map_fdf-2026-10-17-s30000.npz`、コースの線 `~/rt/tracks/fdf-2026-10-17.json`、3D `~/rt/view/fdf-2026-10-17/`
 - 答えの退避 `~/rt/live/archive/20261017-{1503,1517,1717}/`（それぞれ 14:18〜15:03、15:10〜15:17、16:48〜17:17 の走り）、録画 `~/rt/rec/`
 
