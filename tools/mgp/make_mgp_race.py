@@ -181,9 +181,9 @@ def build(a):
     R, off = official_for(rnd); names = [p["pilot"] for p in R["pilots"]]
     P = load_poses(a.poses, names)
     if not P: sys.exit(f"no pose files for round {rnd} in {a.poses}")
-    aliases = json.loads(subprocess.check_output(["ssh", "studio", "cat ~/mgp/aliases.json"]))
+    aliases = json.loads(subprocess.check_output(["ssh", MGP_HOST, f"cat {MGP_DIR}/aliases.json"]))
     vfile = a.video_file or video_file(rnd, aliases)
-    dur = float(subprocess.check_output(["ssh", "studio", f"ffprobe -v error -show_entries format=duration -of csv=p=0 ~/mgp/raw/{vfile}"]))
+    dur = float(subprocess.check_output(["ssh", MGP_HOST, f"ffprobe -v error -show_entries format=duration -of csv=p=0 {MGP_DIR}/raw/{vfile}"]))
 
     # slot per pilot: --slots > the pose file's slot > the overlay OCR
     slots = {k: int(v) for k, v in (kv.split("=") for kv in a.slots.split(","))} if a.slots else {}
@@ -259,18 +259,22 @@ def build(a):
     if a.clips: make_clips(a, race, vfile, clip_t0, clip_t1, crop_top)
 
 
+# the machine with the recordings (raw/) and aliases.json; Studio's ~/mgp moved to rt4090 on 2026-10-20
+MGP_HOST, MGP_DIR = os.environ.get("MGP_HOST", "rt4090"), os.environ.get("MGP_DIR", "/mnt/data/mgp_studio")
+
+
 def make_clips(a, race, vfile, t0, t1, crop_top):
-    """One ffmpeg pass on the studio (nice 10): a cropped h264 clip per pilot + the race audio, then scp back."""
+    """One ffmpeg pass on MGP_HOST (nice 10): a cropped h264 clip per pilot + the race audio, then rsync back."""
     ps = race["pilots"]; rd = f"/tmp/mgp_q{race['round']:02d}"
     maps = ""; fc = f"[0:v]split={len(ps)}" + "".join(f"[v{i}]" for i in range(len(ps))) + ";"
     for i, p in enumerate(ps):
         r, c = divmod(p["slot"], GRID)
         fc += f"[v{i}]crop={FEED_W}:{CELL_H - crop_top}:{c * CELL_W + FEED_X}:{r * CELL_H + crop_top}[o{i}];"
         maps += f" -map '[o{i}]' -c:v libx264 -preset veryfast -crf 24 -pix_fmt yuv420p -an -movflags +faststart {rd}/{p['video']}"
-    cmd = (f"mkdir -p {rd} && nice -n 10 ffmpeg -y -loglevel error -ss {t0:.3f} -t {t1 - t0:.3f} -i ~/mgp/raw/{vfile} "
+    cmd = (f"mkdir -p {rd} && nice -n 10 ffmpeg -y -loglevel error -ss {t0:.3f} -t {t1 - t0:.3f} -i {MGP_DIR}/raw/{vfile} "
            f"-filter_complex \"{fc.rstrip(';')}\"{maps} -map '0:a?' -c:a aac -b:a 96k -vn {rd}/audio.m4a")
-    print(cmd); subprocess.check_call(["ssh", "studio", cmd])
-    subprocess.check_call(["rsync", "-a", f"studio:{rd}/", f"{a.out}/"])
+    print(cmd); subprocess.check_call(["ssh", MGP_HOST, cmd])
+    subprocess.check_call(["rsync", "-a", f"{MGP_HOST}:{rd}/", f"{a.out}/"])
 
 
 if __name__ == "__main__":

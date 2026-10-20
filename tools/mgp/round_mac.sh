@@ -1,6 +1,6 @@
 #!/bin/bash
 # Finish a localized round on the Mac: fetch the per-cell poses from the studio, smooth them, name the cells by their lap
-# times, build race.json and the clips (on the studio), add the round to the dev rounds.json.
+# times, build race.json and the clips (on rt4090, where the recordings are), add the round to the dev rounds.json.
 # usage: round_mac.sh <round>      (from the repo root; publishing is a separate step: publish_mgp.sh)
 # A Main's final (rounds 901-905, laps in data/mgp/livefpv_finals.json): ID=<its studio folder, e.g. fd> VF=<recording>
 # LAYOUT=4up round_mac.sh 902
@@ -9,9 +9,9 @@ N="$1"; Q=$(printf "q%02d" "$N"); ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; c
 ID="${ID:-$Q}"                                        # the folder / cell name prefix on the studio
 L="build/mgp/loc/$Q"; mkdir -p "$L"
 # the cells' poses from the machine that localized them (LOC_HOST:LOC_DIR), unless already here
-LOC_HOST="${LOC_HOST:-studio}"; LOC_DIR="${LOC_DIR:-mgp/rounds}"
+LOC_HOST="${LOC_HOST:-rt4090}"; LOC_DIR="${LOC_DIR:-/mnt/data/mgp_studio/rounds}"   # Studio's ~/mgp, moved there
 ls "$L"/${ID}_s*.json >/dev/null 2>&1 || scp -q "$LOC_HOST:$LOC_DIR/${ID}_loc/*.json" "$L/"
-[ -e "$L/top_frame.json" ] || scp -q "$LOC_HOST:mgp/top_frame.json" "$LOC_HOST:mgp/fit01.png.json" "$L/"
+[ -e "$L/top_frame.json" ] || scp -q "$LOC_HOST:$LOC_DIR/../top_frame.json" "$LOC_HOST:$LOC_DIR/../fit01.png.json" "$L/"
 SPECS=$(cd "$L" && ls ${ID}_s*.json | sed -E "s|(${ID}_s([0-9]+))\.json|$L/\1.json=s\2:\2|")
 uv run -q --with numpy --with scipy python tools/mgp/poses_from_loc.py "$L/top_frame.json" "$L/fit01.png.json" "build/mgp/poses/${Q}_slots" $SPECS --smooth 2>&1 | grep -v Warning
 uv run -q --with numpy python tools/mgp/name_slots.py "$N" "build/mgp/poses/${Q}_slots" "build/mgp/poses/$Q" 60

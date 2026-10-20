@@ -184,7 +184,15 @@ ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash too
 
 ## 機械
 
-- Studio（`ssh studio`、`~/mgp`）：ダウンロード・切り出し・OCR・SfM の CPU 仕事。raw/ に 77 本、all/ に 30 fps の切り出し（62 GB）。
+- Studio の `~/mgp` は 2026-10-20 に丸ごと rt4090 の `/mnt/data/mgp_studio/` へ移した（Studio の空きが足りないため）。録画 `raw/`（AWS の
+  一覧の中身のある 230 本が全部そろっている）、今の地図 `mapfinal`・`mapfixed`、`finals`、`rounds/*_loc`、台本。`make_mgp_race.py` の
+  クリップと `round_mac.sh` の loc JSON はそこを読む（`MGP_HOST`・`MGP_DIR`、`LOC_HOST`・`LOC_DIR` で替えられる）。Studio 用の台本
+  （`extract.py`、`localize.py` など）の中の `~/mgp` は書き換えていない。Studio で回すなら場所を戻すか引数で渡す。
+  片付けで消したもの：60 fps の切り出し `all60`、各 Round の画像（録画から作り直せる）、フライスルーと地図の途中の版。
+  手で付けた錨などの小物は `/mnt/data/mgpwork/studio_archive/`。
+- **Mac・Studio から rt4090 への大きな転送は LAN のアドレス（10.0.0.64）で。** 名前の `rt4090` は Tailscale のアドレスに解決され、
+  同じ LAN の中でも暗号化トンネルを通って毎秒 35 MB で頭打ちになる（LAN なら 134 MB、rt4090 は 2.5 GbE）。Mac の tar は `._*` を
+  混ぜるので `COPYFILE_DISABLE=1` を付ける。
 - rt4090（`/mnt/data/mgp`：chain・mapfix・gates・q44・gs_*、`/mnt/data/mgpwork`：穴埋め・夜の地図）：地図のつなぎ足し、位置合わせ、3DGS。
   2026-10-19 に Ubuntu を 2 TB の NVMe に移した。`/mnt/data` はいまルートの ext4 の普通のフォルダで、Linux の作業フォルダ（MGP・FDF・JDL・
   オフィス・spirula など）はここにある（パスは前と同じ）。Windows と共有の NTFS「Data」ドライブは `/mnt/ntfs-data`（fstab に無いので
