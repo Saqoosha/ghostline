@@ -208,8 +208,6 @@ ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash too
   入った地図で Q44 を合わせ直して登録率を見る（走行中）。
 - 7,523 枚の地図からの 3DGS（走行中、`/mnt/data/mgp/gs_1404`）。できたら `.sog` を差し替える。
 - スタートの合図の時刻（帯のラップ表示の変化を密に OCR するか、Round ごとに手で）。`position`・`gap`・国旗の公式ソース。
-- 本番ページ（mgp-champs-2026）を確認ページの中身（予選 125 Round の作り直し、決勝の折りたたみの直し、合成した夜のスキャン）に
-  差し替える：Saqoosha の OK 待ち。
 - 決勝の線に残る長い直線：観測の無い数秒間を `poses_from_loc.py --smooth` がまっすぐ埋めたもの（A 決勝の KILLIANFPV など、直す前からある）。
 - `tools/dvr/` の CPR 系 6 本（`cpr_track.py`・`cpr_rematch.py`・`cpr_match.py`・`gap_track.py`・`eval_align.py`・`pad_refine.py`）も
   MASt3R の遅い `fast_reciprocal_NNs` を使う。`cpr_gap_lib.reciprocal_nns` に替えれば 1 組あたり約 2 倍速い。
