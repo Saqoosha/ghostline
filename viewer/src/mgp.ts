@@ -51,15 +51,22 @@ function showScanLoad(frac: number | null, text = 'Loading scan…') {
   scanLoad.hidden = false; scanText.textContent = text
   scanBar.classList.toggle('busy', frac === null); scanBar.style.width = frac === null ? '' : `${Math.round(frac * 100)}%`
 }
-// The .sog comes from R2 through a Worker, streamed without a content-length, and the stream sometimes stalls part way.
+// The .sog comes from R2 through a Worker; a download can still stall part way (the clips below were the cause seen).
 // A watchdog retries: no progress for STALL_MS (or the asset erroring) drops the asset and loads it again with a
 // cache-busting query, up to RETRIES times; a download that reached its end but whose 'load' never comes (the build
 // hung) gets the longer BUILD_MS before the same retry. After the last try the overlay and the header say so.
 const STALL_MS = 10000, BUILD_MS = 30000, RETRIES = 3
 let sceneTry = 0, sceneTimer = 0
+// The DVR clips and the sound wait for the scan. They share the page's one HTTP/3 connection with the .sog, and a
+// <video> that has buffered enough stops reading its open bytes=0- request; the unread data then holds the connection's
+// flow-control window and the scan stalls part way (13-15 of 23 MB on every load, until the watchdog's retry, measured
+// 2026-10-20). So their src is set once the scan has loaded, failed or turned out missing.
+let scanSettled = true; const afterScan: (() => void)[] = []
+const whenScanSettled = (f: () => void) => { if (scanSettled) f(); else afterScan.push(f) }
+const settleScan = () => { scanSettled = true; afterScan.splice(0).forEach(f => f()) }
 function loadScene(name: string) {
   if (name === sceneName) return
-  sceneName = name; sceneTry = 0; loadSceneTry(name)
+  sceneName = name; sceneTry = 0; scanSettled = false; loadSceneTry(name)
 }
 function loadSceneTry(name: string) {
   sceneReady = false; sceneMissing = false; sceneFailed = false; showSky(); clearTimeout(sceneTimer)
@@ -73,6 +80,7 @@ function loadSceneTry(name: string) {
     console.warn(`scene ${name}: ${why} at ${(got / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB (try ${sceneTry + 1} of ${RETRIES + 1})`); drop()
     if (sceneTry < RETRIES) { sceneTry++; loadSceneTry(name); return }
     sceneFailed = true; scan?.destroy(); scan = null; showSky(); showScanLoad(null, 'Scan failed — reload the page'); scanBar.classList.remove('busy'); scanBar.style.width = '0'; if (!loadingRound) say(sceneNote())
+    settleScan()
   }
   const arm = () => { clearTimeout(sceneTimer); sceneTimer = window.setTimeout(() => fail(building ? 'build hung' : 'download stalled'), building ? BUILD_MS : STALL_MS) }
   arm()
@@ -80,10 +88,10 @@ function loadSceneTry(name: string) {
     got = g; total = t; building = t > 0 && g >= t; arm()
     showScanLoad(t > 0 ? g / t : null, building ? (retry ? `Building scan… (retry ${sceneTry}/${RETRIES})` : 'Building scan…') : `${label} ${(g / 1048576).toFixed(0)} / ${(t / 1048576).toFixed(0)} MB`) })
   a.on('load', () => { if (sceneName !== name || over) return
-    clearTimeout(sceneTimer); scan?.destroy(); const e = new pc.Entity('scan'); e.addComponent('gsplat', { asset: a }); app.root.addChild(e); scan = e; sceneReady = true; topCut = NaN; scanLoad.hidden = true; if (!loadingRound) say('') })
+    clearTimeout(sceneTimer); scan?.destroy(); const e = new pc.Entity('scan'); e.addComponent('gsplat', { asset: a }); app.root.addChild(e); scan = e; sceneReady = true; topCut = NaN; scanLoad.hidden = true; if (!loadingRound) say(''); settleScan() })
   // a 404 (no scan made yet) is final: the round plays over a ground grid; any other error is retried
   a.on('error', (err: string) => { if (sceneName !== name || over) return
-    if (/404|not found/i.test(String(err))) { console.warn('scene', name, err); drop(); scan?.destroy(); scan = null; sceneMissing = true; showSky(); scanLoad.hidden = true; if (!loadingRound) say(sceneNote()); return }
+    if (/404|not found/i.test(String(err))) { console.warn('scene', name, err); drop(); scan?.destroy(); scan = null; sceneMissing = true; showSky(); scanLoad.hidden = true; if (!loadingRound) say(sceneNote()); settleScan(); return }
     fail('error: ' + err) })
   app.assets.load(a)
 }
@@ -161,13 +169,15 @@ async function loadRound(entry: RoundEntry) {
   const videos = P.map(p => {
     if (!p.video) { tiles.push(null); speedTags.push(null); lapTags.push(null); return null }
     const tile = el('div', 'tile'), [vw, vh] = p.video_size ?? [4, 3]; tile.style.setProperty('--ar', `${vw} / ${vh}`)   // 480x320: the overlay bar cropped off
-    const v = el('video'); v.src = dir + p.video; v.muted = true; v.playsInline = true; v.preload = 'auto'
+    const v = el('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'
+    whenScanSettled(() => { if (token === loadToken) v.src = dir + p.video })
     const name = el('span', 'nm'); name.style.borderLeftColor = p.color; const f = flag(p.country); if (f) name.append(f); name.append(p.name)
     const sp = el('div', 'kmh'), lt = el('div', 'lt'); tiles.push(tile); speedTags.push(sp); lapTags.push(lt)
     tile.append(v, name, lt, sp); tile.onclick = () => setMode(camMode === 'p' + P.indexOf(p) ? 'orbit' : 'p' + P.indexOf(p)); dvr.appendChild(tile); return v
   })
   // the broadcast's sound, when the round has one
-  const audio = new Audio(dir + 'audio.m4a'); audio.preload = 'auto'; audio.muted = soundMuted
+  const audio = new Audio(); audio.preload = 'auto'; audio.muted = soundMuted
+  whenScanSettled(() => { if (token === loadToken) audio.src = dir + 'audio.m4a' })
   audio.addEventListener('loadedmetadata', () => { if (R?.audio === audio) $('soundbtn').hidden = false })
   audio.addEventListener('error', () => { if (R?.audio === audio) { R.audio = null; $('soundbtn').hidden = true } })
   // the track: the closed average line (make_race.py), resampled every 0.25 m; trackS is each point's arc length from
