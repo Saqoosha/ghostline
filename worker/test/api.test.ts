@@ -1,5 +1,16 @@
 import { expect, test } from 'bun:test'
-import { applyToIndex, authorized, dropEnded, parseEventPath, validEntry, type HeatIndex, type Msg } from '../src/api'
+import { applyToIndex, authorized, dropEnded, heatFile, parseEventPath, validEntry, type HeatIndex, type Msg } from '../src/api'
+
+test('heatFile', () => {
+  expect(heatFile('heats/151700-h7/R2.mp4')).toEqual({ id: '151700-h7', file: 'R2.mp4', type: 'video/mp4' })
+  expect(heatFile('heats/151700/race.json')).toEqual({ id: '151700', file: 'race.json', type: 'application/json' })
+  expect(heatFile('heats/151700')).toBeNull()                      // the live.json PUT, the room's
+  expect(heatFile('heats/151700/live.json')).toBeNull()            // the room writes it, with the list entry
+  expect(heatFile('heats/151700/../x.mp4')).toBeNull()
+  expect(heatFile('heats/bad/R2.mp4')).toBeNull()
+  expect(heatFile(`heats/151700/${'a'.repeat(24)}.mp4`)?.file).toBe(`${'a'.repeat(24)}.mp4`)   // rt_control.py's longest cell name
+  expect(heatFile(`heats/151700/${'a'.repeat(25)}.mp4`)).toBeNull()
+})
 
 test('parseEventPath', () => {
   expect(parseEventPath('/jdl-2026-10-25/api/push')).toEqual({ event: 'jdl-2026-10-25', rest: 'push' })

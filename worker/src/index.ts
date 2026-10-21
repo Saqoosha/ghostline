@@ -5,7 +5,7 @@
  * its data (data/...: scenes, videos, poses) side by side, uploaded by tools/publish-dvr-viewer.sh. / lists the viewers.
  * A race day's audience pages (tools/publish-event.sh) live the same way; /<event>/api/* is its live relay (room.ts).
  */
-import { authorized, parseEventPath } from './api'
+import { authorized, heatFile, parseEventPath } from './api'
 export { LiveRoom } from './room'
 
 export interface Env {
@@ -18,13 +18,22 @@ const PREFIX = 'dvr/'
 // /<event>/api/live: a viewer's WebSocket; /<event>/api/push and PUT /<event>/api/heats/<id>: the venue's sender, with the key
 function relay(request: Request, env: Env, event: string, rest: string): Promise<Response> | Response {
   if (rest !== 'live' && !authorized(request, env.RELAY_KEY)) return new Response('unauthorized', { status: 401 })
+  const f = heatFile(rest)                                  // a heat's clip or race.json: straight to R2, the room has no part in it
+  if (f && request.method === 'PUT') return putHeatFile(request, env, event, f)
   const headers = new Headers(request.headers); headers.set('x-event', event); headers.set('x-rest', rest)
   return env.ROOM.get(env.ROOM.idFromName(event)).fetch(new Request(request, { headers }))
+}
+
+async function putHeatFile(request: Request, env: Env, event: string, f: { id: string; file: string; type: string }): Promise<Response> {
+  if (!request.body || !Number(request.headers.get('content-length'))) return new Response('empty body', { status: 400 })
+  await env.BUCKET.put(`${PREFIX}${event}/heats/${f.id}/${f.file}`, request.body, { httpMetadata: { contentType: f.type } })
+  return new Response(null, { status: 204 })
 }
 
 function cacheFor(key: string): string {
   // pages and json are replaced under the same name on every publish; Vite's assets/ carry a content hash
   if (/\.(html|json)$/.test(key)) return 'no-cache'
+  if (/\/heats\/[^/]+\/[^/]+\.mp4$/.test(key)) return 'no-cache'   // a heat's clip: the venue's, replaced by the night rebuild's
   if (/\/assets\//.test(key)) return 'public, max-age=31536000, immutable'
   return 'public, max-age=86400'
 }

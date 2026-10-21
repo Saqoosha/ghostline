@@ -65,7 +65,7 @@ class Preview:
             except Exception as e: print("preview:", e, flush=True); time.sleep(2)
             finally: rx.disconnect(); self.jpg = None
 preview = Preview()
-from rt_rec import Recorders, FILE, REC_DIR
+from rt_rec import Recorders, FILE, REC, REC_DIR, REC_ENC
 recorders = Recorders(finder)
 
 courses = {}
@@ -153,7 +153,8 @@ if E("RELAY_BASE") or E("RELAY_EVENT"):
     from rt_relay import Relay, read_key
     try:
         if not (E("RELAY_BASE") and E("RELAY_EVENT")): raise ValueError("RELAY_BASE と RELAY_EVENT の両方が要る")
-        relay = Relay(f"http://127.0.0.1:{PUSH}/", E("RELAY_BASE"), E("RELAY_EVENT"), read_key(), pilots=lambda: pilots(), out_dir=HERE + "/live/relay", order=cell_order).start_threads()
+        relay = Relay(f"http://127.0.0.1:{PUSH}/", E("RELAY_BASE"), E("RELAY_EVENT"), read_key(), pilots=lambda: pilots(), out_dir=HERE + "/live/relay", order=cell_order,
+                      rec_dir=REC_DIR if REC else None, nvenc=REC_ENC == "h264_nvenc").start_threads()   # rec_dir: each heat's DVR, right after it
     except (OSError, ValueError) as e: relay_off = f"送信しない: {e}"; print("relay off:", e, flush=True)
 
 def options():
