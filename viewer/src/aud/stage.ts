@@ -17,6 +17,10 @@ const css = (v: string) => getComputedStyle(document.documentElement).getPropert
 const hex = (h: string) => new pc.Color(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255)
 const TRAIL_PX = 5, LINE_W = 0.12, LINE_DASH = 1.0, LINE_GAP = 0.7, LINE_A = 0.22, PITCH0 = -18, TURN = 6, BLEND = 0.7
 const cLost = new pc.Color(0.55, 0.57, 0.6)
+// a phone gets the light scan (index.json "lite", tools/publish-event.sh) unless ?q=full; a tall screen looks down more steeply,
+// or the orbit, backing off to hold the course across the narrow width, ends up inside the trees round it
+const PHONE = new URLSearchParams(location.search).get('q') !== 'full' && matchMedia('(max-width: 720px), (pointer: coarse)').matches
+const PITCH_TALL = -38
 
 function emptyMesh(m: pc.Mesh) { m.setPositions([0, 0, 0, 0, 0, 0, 0, 0, 0]); m.setNormals([0, 1, 0, 0, 1, 0, 0, 1, 0]); m.setColors(new Array(12).fill(0)); m.setIndices([0, 1, 2]); m.update(pc.PRIMITIVE_TRIANGLES) }
 
@@ -24,11 +28,14 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   const app = new pc.Application(canvas, { mouse: new pc.Mouse(canvas), touch: new pc.TouchDevice(canvas), graphicsDeviceOptions: { antialias: false } })
   app.setCanvasFillMode(pc.FILLMODE_FILL_WINDOW); app.setCanvasResolution(pc.RESOLUTION_AUTO)
   window.addEventListener('resize', () => app.resizeCanvas())
+  // the bottom bars' heights as --foot and --time (look.css stacks the timeline and the pilots over them; the footer wraps on a phone)
+  const bars = new ResizeObserver(() => { for (const [v, q] of [['--foot', '.bar.foot'], ['--time', '.bar.time']]) document.documentElement.style.setProperty(v, `${document.querySelector(q)?.getBoundingClientRect().height ?? 0}px`) })
+  for (const q of ['.bar.foot', '.bar.time']) { const e = document.querySelector(q); if (e) bars.observe(e) }
   const cam = new pc.Entity('cam'); cam.addComponent('camera', { clearColor: hex(css('--paper') || '#f3f4f6'), fov: 60, nearClip: 0.1, farClip: 600 }); app.root.addChild(cam)
 
   // --- camera (as livepage.ts): orbit turns slowly round the course's middle, as near as holds the course and everyone up;
   // top looks straight down; follow sits behind and above one pilot. Drag turns and tilts, the wheel zooms; a switch glides.
-  const view = { yawOffset: 30, topYaw: 0, pitch: PITCH0, zoom: 1 }
+  const view = { yawOffset: 30, topYaw: 0, pitch: innerHeight > innerWidth ? PITCH_TALL : PITCH0, zoom: 1 }
   const home = { target: new pc.Vec3(), dist: 70 }, orb = { target: new pc.Vec3(), dist: 70, init: false }
   const blendFrom = { pos: new pc.Vec3(), rot: new pc.Quat() }; let blendT = BLEND
   let course: pc.Vec3[] = [], line: pc.Vec3[] = [], lineS: number[] = []
@@ -161,8 +168,9 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
     async loadScene() {
       const ix = await json(base + 'index.json')
       if (ix.orbit?.target) { home.target.set(ix.orbit.target[0], ix.orbit.target[1], ix.orbit.target[2]); home.dist = ix.orbit.dist ?? home.dist; orb.init = false }
+      const name = ix.lite && PHONE ? ix.lite : ix.scene
       await new Promise<void>((ok, bad) => {
-        const a = new pc.Asset(ix.scene, 'gsplat', { url: `${base}scene/${ix.scene}.sog` }); app.assets.add(a)
+        const a = new pc.Asset(name, 'gsplat', { url: `${base}scene/${name}.sog` }); app.assets.add(a)
         a.on('load', () => { const e = new pc.Entity('scene'); e.addComponent('gsplat', { asset: a }); app.root.addChild(e); ok() }); a.on('error', bad); app.assets.load(a)
       })
       return { title: ix.title }
