@@ -3,6 +3,7 @@
 #   tools/publish-event.sh <event> <scene folder> [title]   the pages (event.html as index.html, watch.html, heat.html) and the
 #        day's data from the folder: index.json (its "title" set when given), scene/<scene>.sog, and sky.jpg, track.json,
 #        countries.json when there. heats.json is created empty only if the day has none (the relay writes it).
+#        Also scene/<scene>-lite.sog for phones: the folder's own, else made from the .sog (env LITE: splats, 800000)
 #   tools/publish-event.sh <event> --track <file>           the course line alone ({"track": [[x, y, z], ...]}, rt_trackline.py
 #        or make_race.py), as track.json: the live page reads it again every minute
 #   tools/publish-event.sh <event> --night <folder>         the night rebuild (tools/dvr/night_heats.py): <folder>/<heat id>/
@@ -52,12 +53,22 @@ case "$WHAT" in
     python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j.update({"title": sys.argv[3]} if sys.argv[3] else {}); json.dump(j, open(sys.argv[2], "w"))' "$SCENE/index.json" "$PAGE/index.json" "$TITLE"
     SC="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["scene"])' "$SCENE/index.json")"
     cp -L "$SCENE/scene/$SC.sog" "$PAGE/scene/"
+    # the phones' scan (stage.ts reads it on a phone): LITE splats (800000), SH 1; reused when the folder has one
+    if [ -e "$SCENE/scene/$SC-lite.sog" ]; then cp -L "$SCENE/scene/$SC-lite.sog" "$PAGE/scene/"
+    else
+      ST=(npx -y @playcanvas/splat-transform@3.10.2 --no-tty -w)
+      "${ST[@]}" "$SCENE/scene/$SC.sog" -H 1 --decimate-adaptive "${LITE:-800000}" "$TMP/lite.ply"   # decimate writes only .ply
+      "${ST[@]}" "$TMP/lite.ply" "$PAGE/scene/$SC-lite.sog"; rm -f "$TMP/lite.ply"
+    fi
+    [ -s "$PAGE/scene/$SC-lite.sog" ] || { echo "no $SC-lite.sog: phones would get no scan" >&2; exit 1; }
+    python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["lite"]=sys.argv[2]; json.dump(j, open(sys.argv[1], "w"))' "$PAGE/index.json" "$SC-lite"
     for f in sky.jpg track.json countries.json; do [ -e "$SCENE/$f" ] && cp -L "$SCENE/$f" "$PAGE/$f"; done
     # the heat list belongs to the relay once the day starts: an empty one goes up only where there is none
     # (--ignore-existing: a failed listing must not read as "none" and overwrite the day's heats)
     mkdir -p "$TMP/list"
     python3 -c 'import json,sys; t=json.load(open(sys.argv[1])).get("title") or sys.argv[2]; json.dump({"event": sys.argv[2], "title": t, "live": None, "heats": []}, open(sys.argv[3], "w"))' "$PAGE/index.json" "$EV" "$TMP/list/heats.json"
     du -sh "$PAGE"; ls -R "$PAGE" | head -40
-    say "pages and data -> $DEST/"; up --progress "$PAGE" "$DEST/"; up --ignore-existing "$TMP/list/heats.json" "$DEST/" ;;
+    # index.json last: it names the scans, and a phone reading it before its lite scan is up gets none
+    say "pages and data -> $DEST/"; up --progress --exclude index.json "$PAGE" "$DEST/"; up "$PAGE/index.json" "$DEST/"; up --ignore-existing "$TMP/list/heats.json" "$DEST/" ;;
 esac
 echo "https://ghostline.saqoo.sh/$EV/"

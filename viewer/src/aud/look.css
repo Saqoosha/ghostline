@@ -55,6 +55,8 @@ body.stage { overflow: hidden; }
 
 @media (max-width: 720px) {
   .bar.top { height: auto; flex-wrap: wrap; gap: 6px 14px; padding: 8px 16px; }
-  .pilots { left: 16px; top: auto; bottom: 64px; min-width: 0; }
+  .bar.top #title { display: none; }                                  /* the day's name is on the front page */
+  .bar.foot { padding: 6px 16px; gap: 4px 12px; }
+  .pilots { left: 16px; top: auto; bottom: calc(var(--foot, 34px) + var(--time, 0px) + 10px); min-width: 0; }
   .mark i { width: 24px; }
 }
