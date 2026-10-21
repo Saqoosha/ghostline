@@ -1,5 +1,6 @@
 """tests for rt_relay.py (python -m unittest test_rt_relay -v, from tools/dvr)"""
-import datetime, gzip, json, os, tempfile, unittest
+import datetime, gzip, io, json, os, tempfile, unittest
+from unittest import mock
 from rt_relay import Heats, Relay
 
 T0 = 1792211516.0                                  # 2026-10-17 13:31:56 JST (the first FDF recording)
@@ -240,9 +241,11 @@ class RelayTest(unittest.TestCase):
         self.assertEqual(len([s for s in self.sent if s[0].startswith("heats/")]), 1); self.assertEqual(self.r.uploads, [])
 
     def test_requests_name_themselves(self):       # Cloudflare refuses urllib's default user agent (403, error 1010)
-        req = self.r.request("push", b"{}", {})
-        self.assertTrue(req.get_header("User-agent", "").startswith("ghostline-relay/")); self.assertEqual(req.get_method(), "POST")
-        self.assertEqual(self.r.request("heats/133156", b"", {}).get_method(), "PUT")
+        sent = []
+        with mock.patch("rt_relay.urllib.request.urlopen", lambda req, timeout: sent.append(req) or io.BytesIO()):
+            self.r._post("push", b"{}", {}); self.r._post("heats/133156", b"", {})
+        self.assertTrue(all(q.get_header("User-agent", "").startswith("ghostline-relay/") for q in sent))
+        self.assertEqual([q.get_method() for q in sent], ["POST", "PUT"])
 
     def test_order_from_venue_config(self):
         r = Relay("http://x/", "http://y", "e", "k", out_dir=self.dir, post=lambda *a: None, order=lambda: ["A", "B", "C", "D"])

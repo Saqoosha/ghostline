@@ -48,6 +48,7 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 - **上から見た図（`rt_topview.js`）の点の時刻は、届いた時刻でなくフレーム番号（`i / fps`）で置く。** 届いた時刻だと処理の 30〜40 ms の揺れで点の間隔が乱れ、軌跡がカクつく（ページは 60 fps で軽いのに、動きだけが不揃いに見える）。操作ページと OBS ページ（`/obs`）は描く部分とスライダーの設定を共有する
 - **ライブの速度や精度をいじる前に、設計の報告書を読む**（`docs/realtime-architecture.html`。オフラインの通しは `docs/offline-architecture.html`）。解像度は効かない、1 人 60 fps・4 人で 1 周 9 ms など、測り直しになる数字がそこにある
 - **cyndilib の NDI の Receiver は使い回す。** 捨てて作り直すと、ガベージコレクションの中の `NDIlib_framesync_destroy` が GIL を握ったまま止まり、操作ページのサーバーごと固まった（`rt_rec.py`）
+- **Python から ghostline.saqoo.sh に送るときは user-agent を名乗る。** urllib の既定の名前は Cloudflare が 403（error 1010）で弾き、会場の中継の書き込みが届かなかった（`rt_relay.py` は `ghostline-relay/1`）
 - **ピンホールの動画を tracker や `cpr_track.py` に入れるときは、カメラ定義の `source_fisheye` を同じ大きさにする。** 両方とも HDZero の OSD を消すマスクをそこから作り、別のカメラの魚眼（THETA の 1920 px）が入るとマスクが全面「使わない」になって 0 フレームしか解けない
 - **rt4090 で長い処理は `sudo systemd-run --uid=saqoosha ...` で回す。** ユーザーの systemd（`--user`）は ssh が切れると止まる（linger が切ってある）。`ghostline-control` を再起動すると子の tracker も止まる
 - **tracker が落ちると、その走りの答え（`live/<マス>.jsonl`）は書かれない。** 止めたら `live/archive/` に退避する。2026-10-17 に gsplat の中の 0 除算（SIGFPE、`gsplat_cuda.so`）で 2 回落ちた原因は、**視野で切った splat が 0 個のまま gsplat 1.5.3 に渡ったこと**（渡す数が 0 だと毎回落ちる。描いた結果が 0 個になるのは平気）。dmesg の `trap divide error` の位置が、0 個を渡す試験と同じ命令（`gsplat_cuda.so`+0xa955e）。`frustum.rasterize_culled` と `rt_render.py` の RBATCH の経路は、0 個なら不透明度 0 の splat を 1 つ渡して空の絵を返す
