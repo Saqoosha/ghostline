@@ -19,7 +19,7 @@ const TRAIL_PX = 5, LINE_W = 0.12, LINE_DASH = 1.0, LINE_GAP = 0.7, LINE_A = 0.2
 const cLost = new pc.Color(0.55, 0.57, 0.6)
 // a phone gets the light scan (index.json "lite", tools/publish-event.sh) unless ?q=full; a tall screen looks down more steeply,
 // or the orbit, backing off to hold the course across the narrow width, ends up inside the trees round it
-const PHONE = new URLSearchParams(location.search).get('q') !== 'full' && matchMedia('(max-width: 720px), (pointer: coarse)').matches
+const PHONE = new URLSearchParams(location.search).get('q') !== 'full' && matchMedia('(pointer: coarse) and (max-width: 1000px) and (max-height: 1000px)').matches   // not a tablet
 const PITCH_TALL = -38
 
 function emptyMesh(m: pc.Mesh) { m.setPositions([0, 0, 0, 0, 0, 0, 0, 0, 0]); m.setNormals([0, 1, 0, 0, 1, 0, 0, 1, 0]); m.setColors(new Array(12).fill(0)); m.setIndices([0, 1, 2]); m.update(pc.PRIMITIVE_TRIANGLES) }
