@@ -258,7 +258,7 @@ class RelayTest(unittest.TestCase):
         self.assertEqual([m["at"] for m in hs], [round(T0 * 1000), round((T0 + 4) * 1000)]); self.assertEqual(hs[1]["t"], round(T0 * 1000))
 
     def test_status_before_any_send(self):
-        self.assertEqual(self.r.status(), dict(ok=False, age=None, event="staging-test", err=None, pending=0))
+        self.assertEqual(self.r.status(), dict(ok=False, age=None, event="staging-test", err=None, pending=0, dvr=0))
 
     def test_status_after_send(self):
         self.row(T0, 1); self.r.flush(T0 + 0.6)
@@ -270,6 +270,42 @@ class RelayTest(unittest.TestCase):
         hs = lambda: [m for _, b, _ in self.sent if not _.get("x-heat-entry") for m in json.loads(b)["msgs"] if m["k"] == "h"]
         n = len(hs()); self.row(T0 + 5, 2); self.r.tick(T0 + 5); self.r.flush(T0 + 5.6); self.assertEqual(len(hs()), n)
         self.row(T0 + 11, 3); self.r.tick(T0 + 11); self.r.flush(T0 + 11.6); self.assertEqual(len(hs()), n + 1)
+
+
+class DvrTest(unittest.TestCase):
+    """a heat's DVR right after it: cut from a recording still being written, the clips up before race.json"""
+    def setUp(self):
+        import subprocess
+        self.dir = tempfile.mkdtemp(); self.recd = os.path.join(self.dir, "rec"); os.makedirs(self.recd); self.sent = []
+        stem = f"{datetime.datetime.fromtimestamp(T0, JST):%Y%m%d-%H%M%S}_SRC"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=40", "-pix_fmt", "yuv420p", f"{self.recd}/{stem}.mp4"], check=True)
+        json.dump(dict(start=T0, size=[320, 180], fps=30.0, live=True, frames=0), open(f"{self.recd}/{stem}.json", "w"))   # live: frames from the clock
+        self.r = Relay("http://x/", "http://y", "staging-test", "k", out_dir=os.path.join(self.dir, "relay"), rec_dir=self.recd,
+                       post=lambda path, body, headers: self.sent.append((path, len(body), headers.get("content-type"))))
+        ans = [[round((T0 + 5 + k / 30) * 1000), k * 0.1, 1.0, 0.0, 0, 0, 0, 1, 200] for k in range(300)]
+        self.rec = dict(id=hms(T0 + 5), start=round((T0 + 5) * 1000), end=round((T0 + 15) * 1000), heat=None, cls=None, cells={"R2": "A"},
+                        order=["R2", "F1", "R4", "R5"], answers={"R2": ans})
+    marker = lambda self, r, rec: r.path(rec)[:-len(".json")] + ".dvr"
+
+    def test_upload_marks_then_clips_then_race(self):
+        self.r.save(self.rec); self.assertTrue(self.r.upload(self.rec))
+        m = self.marker(self.r, self.rec); self.assertTrue(os.path.exists(m))
+        self.r.dvr(m, T0 + 60)
+        hid = self.rec["id"]
+        self.assertEqual([x[0] for x in self.sent[1:]], [f"heats/{hid}/R2.mp4", f"heats/{hid}/race.json"])   # [0] is live.json
+        self.assertEqual(self.sent[1][2], "video/mp4"); self.assertGreater(self.sent[1][1], 1000)
+        self.assertFalse(os.path.exists(m))
+
+    def test_no_recording_gives_up(self):
+        self.rec.update(start=round((T0 + 500) * 1000), end=round((T0 + 510) * 1000), id=hms(T0 + 500))
+        self.r.save(self.rec); self.r.upload(self.rec)
+        m = self.marker(self.r, self.rec); self.r.dvr(m, T0 + 600)
+        self.assertTrue(os.path.exists(m + ".none")); self.assertEqual(len(self.sent), 1)
+
+    def test_no_marker_without_recordings(self):
+        r = Relay("http://x/", "http://y", "staging-test", "k", out_dir=os.path.join(self.dir, "plain"), post=lambda *a: None)
+        r.save(self.rec); r.upload(self.rec)
+        self.assertFalse(os.path.exists(self.marker(r, self.rec)))
 
 
 def fake_push(folder, port=8766, start=0.0, speed=1.0):

@@ -17,6 +17,12 @@ export function parseEventPath(path: string): { event: string; rest: string } | 
   return m && EVENT.test(m[1]) ? { event: m[1], rest: m[2] } : null
 }
 
+// a heat's DVR replay, put by the venue right after the heat (rt_relay.py): its clips (<cell>.mp4) and then race.json
+export function heatFile(rest: string): { id: string; file: string; type: string } | null {
+  const m = /^heats\/([^/]+)\/(race\.json|[\w-]{1,16}\.mp4)$/.exec(rest)
+  return m && HEAT_ID.test(m[1]) ? { id: m[1], file: m[2], type: m[2].endsWith('.mp4') ? 'video/mp4' : 'application/json' } : null
+}
+
 export function authorized(req: Request, key: string): boolean {
   if (!key) return false
   const got = req.headers.get('authorization') ?? '', want = 'Bearer ' + key

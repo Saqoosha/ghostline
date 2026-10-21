@@ -23,6 +23,7 @@ JST = datetime.timezone(datetime.timedelta(hours=9))
 ORDER = ("R2", "F1", "R4", "R5")                     # the cells tl, tr, bl, br when there is no venue config (FDF's names)
 EVENT = re.compile(r"(staging-)?[a-z0-9][a-z0-9-]*")  # as the Worker's
 HOLD, X_EVERY, H_EVERY, SAVE_EVERY, RETRY_EVERY, KEEPALIVE = 0.5, 0.5, 10.0, 10.0, 30.0, 5.0
+DVR_MAX, DVR_TRIES = 95 << 20, 10                    # a clip's bytes (the Worker takes 100 MB a request), a heat's DVR attempts
 ms = lambda t: round(t * 1000)
 day = lambda t: datetime.datetime.fromtimestamp(t, JST).strftime("%Y%m%d")
 
@@ -66,7 +67,7 @@ class Heats:
 
 
 class Relay:
-    def __init__(self, push_url, base_url, event, key, pilots=None, out_dir="live/relay", post=None, order=ORDER):
+    def __init__(self, push_url, base_url, event, key, pilots=None, out_dir="live/relay", post=None, order=ORDER, rec_dir=None, nvenc=False):
         if not EVENT.fullmatch(event or ""): raise ValueError(f"not an event name: {event!r}")
         self.push_url, self.base, self.event, self.key, self.pilots, self.out = push_url, base_url.rstrip("/"), event, key, pilots, out_dir
         self.post = post or self._post
@@ -75,7 +76,8 @@ class Relay:
         self.held, self.queue, self.last_x, self.rec, self.ends, self.uploads = {}, [], {}, None, [], []
         self.last_h = self.last_save = self.last_retry = self.last_names = 0.0
         self.sent_at = self.tried = None
-        self.push_err = self.upload_err = self.bg_err = None   # kept apart: a good push must not hide a failing upload
+        self.push_err = self.upload_err = self.bg_err = self.dvr_err = None   # kept apart: a good push must not hide a failing upload
+        self.rec_dir, self.nvenc, self.dvr_tried = rec_dir, nvenc, {}   # rec_dir: the venue's recordings (rt_rec.py), for the heats' DVR
 
     def _order(self, fallback):                      # a fresh box has no config yet (rt_control.py's cell_order raises)
         try: return list(self.order())
@@ -87,7 +89,8 @@ class Relay:
                                       headers={"authorization": f"Bearer {self.key}", "content-type": "application/json", "user-agent": "ghostline-relay/1", **headers})
 
     def _post(self, path, body, headers):
-        with urllib.request.urlopen(self.request(path, body, headers), timeout=10 if path.startswith("heats/") else 2) as f: f.read()
+        t = 300 if path.endswith(".mp4") else 10 if path.startswith("heats/") else 2
+        with urllib.request.urlopen(self.request(path, body, headers), timeout=t) as f: f.read()
 
     def send(self, msgs, now):
         self.tried = now
@@ -97,7 +100,8 @@ class Relay:
     def status(self, now=None):                      # for the control page: ok while posts go through (an empty one goes every 5 s)
         age = None if self.sent_at is None else (now or time.time()) - self.sent_at
         return dict(ok=age is not None and age < 15 and self.push_err is None, age=age, event=self.event,
-                    err=self.push_err or self.upload_err or self.bg_err, pending=len(glob.glob(f"{self.out}/*/*.json.pending")))
+                    err=self.push_err or self.upload_err or self.bg_err or self.dvr_err, pending=len(glob.glob(f"{self.out}/*/*.json.pending")),
+                    dvr=len(glob.glob(f"{self.out}/*/*.dvr")))
 
     # --- rows in
     def on_row(self, r, now):
@@ -215,8 +219,40 @@ class Relay:
                       {"x-heat-entry": json.dumps(entry, ensure_ascii=True)})   # ASCII: header values go out as latin-1
         except Exception as e: self.upload_err = f"heat upload {rec['id']}: {why(e)}"; return False
         os.remove(f + ".pending")
+        if self.rec_dir: open(f[:-len(".json")] + ".dvr", "w").close()   # its DVR next, on dvr_loop's thread
         if not glob.glob(f"{self.out}/*/*.json.pending"): self.upload_err = None   # another heat may still be failing
         return True
+
+    # --- the heat's DVR (night_heats.py's cut, from the recording still being written): the clips, then race.json, which
+    # turns the replay page to them. Minutes of ffmpeg and upload, so on its own thread; a failure is tried again every 30 s,
+    # DVR_TRIES times. A clip over the Worker's 100 MB request limit goes without its video (that pilot keeps the line only)
+    def dvr(self, marker, now):
+        from night_heats import cut_heat, recordings
+        rec = json.load(open(marker[:-len(".dvr")] + ".json")); hid = rec["id"]
+        base = f"{os.path.dirname(marker)}/dvr"; d = f"{base}/{hid}"
+        if not os.path.exists(f"{d}/race.json"):     # cut once: a failed upload sends the same files again
+            h = dict(id=hid, start=rec["start"], end=rec["end"], heat=rec["heat"], cls=rec["cls"], cells=rec["cells"], order=rec["order"])
+            d = cut_heat(h, recordings(self.rec_dir, day(rec["start"] / 1000), now=now), base, relay=self.out, nvenc=self.nvenc, log=lambda m: print("dvr:", m, flush=True))
+            if not d: os.replace(marker, marker + ".none"); return   # no recording or no answers: the replay stays the live one
+        race = json.load(open(f"{d}/race.json"))
+        for p in race["pilots"]:
+            f = f"{d}/{p['stream']}.mp4"
+            if os.path.getsize(f) > DVR_MAX: print(f"dvr: {hid} {p['stream']}: {os.path.getsize(f) >> 20} MB, sent without it", flush=True); p.pop("video", None); continue
+            with open(f, "rb") as o: self.post(f"heats/{hid}/{p['stream']}.mp4", o.read(), {"content-type": "video/mp4"})
+        self.post(f"heats/{hid}/race.json", json.dumps(race, separators=(",", ":"), ensure_ascii=False).encode(), {})
+        os.remove(marker); self.dvr_tried.pop(marker, None); print(f"dvr: {hid} up", flush=True)
+
+    def dvr_loop(self):
+        while True:
+            now = time.time()
+            for m in sorted(glob.glob(f"{self.out}/*/*.dvr")):
+                n, last = self.dvr_tried.get(m, (0, 0.0))
+                if now - last < RETRY_EVERY: continue
+                try: self.dvr(m, now); self.dvr_err = None
+                except Exception as e:
+                    self.dvr_tried[m] = (n + 1, now); self.dvr_err = f"dvr {os.path.basename(m)}: {why(e)}"
+                    if n + 1 >= DVR_TRIES: os.replace(m, m + ".failed"); self.dvr_tried.pop(m, None)
+            time.sleep(5)
 
     def retry_pending(self, now):
         self.last_retry = now
@@ -261,7 +297,7 @@ class Relay:
             time.sleep(1)
 
     def start_threads(self):
-        for f in (self.read, self.loop, self.slow): threading.Thread(target=f, daemon=True).start()
+        for f in (self.read, self.loop, self.slow) + ((self.dvr_loop,) if self.rec_dir else ()): threading.Thread(target=f, daemon=True).start()
         return self
 
 
