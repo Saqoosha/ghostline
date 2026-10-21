@@ -25,7 +25,7 @@ function render() {
   const v = visibleIndex(ix, Date.now() + skew, delay * 1000)
   $('now').replaceChildren(v.live
     ? el('a', { className: 'now on', href: 'watch.html' + (keep ? '?' + keep : '') }, el('span', { className: 'live on' }, 'LIVE'), el('b', {}, heatName(v.live)), el('span', { className: 'who' }, who(v.live)), el('span', { className: 'go' }, '見る →'))
-    : el('a', { className: 'now', href: 'watch.html' + (keep ? '?' + keep : '') }, el('span', { className: 'live' }, 'NO HEAT'), el('b', {}, 'いま飛んでいるヒートはありません'), el('span', { className: 'go' }, 'ライブのページ →')))
+    : el('a', { className: 'now', href: 'watch.html' + (keep ? '?' + keep : '') }, el('span', { className: 'live' }, 'NO HEAT'), el('b', {}, 'いま\u200b飛んでいる\u200bヒートは\u200bありません'), el('span', { className: 'go' }, 'ライブのページ →')))
   $('list').replaceChildren(...v.done.map(h => el('li', {}, el('a', { href: `heat.html?h=${encodeURIComponent(h.id)}${keep ? '&' + keep : ''}` },
     el('span', { className: 't' }, clock(h.start)), el('b', {}, h.heat ? heatName(h) : 'HEAT'), el('span', { className: 'who' }, who(h))))))
   $('empty').hidden = v.done.length > 0

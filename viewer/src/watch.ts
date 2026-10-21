@@ -29,7 +29,7 @@ let delay = loadDelay(EVENT), connected = false, countries: Record<string, strin
 const note = (s: string) => { $('note').textContent = s; $('note').hidden = !s }
 
 // --- the scene, the course line, the day's title and flags
-stage.loadScene().then(ix => { if (ix.title) $('title').textContent = ix.title }).catch(e => { console.error(e); note('スキャンを読めなかった') })
+stage.loadScene().then(ix => { if (ix.title) $('title').textContent = ix.title }).catch(e => { console.error(e); note('スキャンを​読めなかった') })
 // a failed read keeps what was there (only a 404 means there is no line yet)
 const course = () => fetch(BASE + 'track.json', { cache: 'no-cache' }).then(r => r.status === 404 ? stage.setCourse(null) : r.ok ? r.json().then(j => stage.setCourse(j?.track ?? null)) : null)
   .catch(e => console.warn('track.json', e))
@@ -110,7 +110,7 @@ function frame() {
   // the header: the day, the heat, LIVE
   $('heat').textContent = shown ? heatName({ heat: shown.heat, cls: shown.cls, start: shown.t }) : ''
   $('live').classList.toggle('on', !!shown); $('live').textContent = shown ? 'LIVE' : 'NO HEAT'
-  note(!connected ? '接続中…' : shown ? '' : 'いま飛んでいるヒートはありません')
+  note(!connected ? '接続中…' : shown ? '' : 'いま\u200b飛んでいる\u200bヒートは\u200bありません')
   const ts = (view - t0) / 1000
   for (const [k, s] of order.entries()) {
     const r = runs.get(s), p = stage.pilot(s, SLOTS[k] ?? 'tl')
