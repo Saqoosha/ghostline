@@ -277,8 +277,12 @@ class DvrTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):                                 # one small recording for all: 25 s, so a heat at 5-15 s fits with its margins
         import subprocess
-        cls.video = os.path.join(tempfile.mkdtemp(), "v.mp4")
+        cls.tmp = tempfile.mkdtemp(); cls.video = os.path.join(cls.tmp, "v.mp4")
         subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=25", "-pix_fmt", "yuv420p", cls.video], check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil; shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def setUp(self):
         import shutil

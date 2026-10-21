@@ -52,12 +52,13 @@ class HeatsOfDupTest(unittest.TestCase):
 
 
 class RecordingsTest(unittest.TestCase):
-    def test_live_one_only_with_now(self):              # a file being written holds up to its last write, less its last fragment
+    def test_live_one_up_to_its_last_write(self):       # a file still marked live holds up to its last write (and now), less its last fragment
         import tempfile, os, json
         from night_heats import recordings
         d = tempfile.mkdtemp(); open(f"{d}/20261017-1_X.mp4", "w").close()
         json.dump(dict(start=1000.0, fps=60.0, live=True, frames=0), open(f"{d}/20261017-1_X.json", "w"))
-        self.assertEqual(recordings(d, "20261017"), [])
+        os.utime(f"{d}/20261017-1_X.mp4", (1010.0, 1010.0))
+        self.assertEqual(recordings(d, "20261017")[0]["frames"], 420)                # the night: (1010 - 1000 - 3) * 60
         os.utime(f"{d}/20261017-1_X.mp4", (2000.0, 2000.0))
         self.assertEqual(recordings(d, "20261017", now=1012.0)[0]["frames"], 540)   # (1012 - 1000 - 3) * 60
         os.utime(f"{d}/20261017-1_X.mp4", (1005.0, 1005.0))                         # its writer died at 1005: live for good, no longer growing

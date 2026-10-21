@@ -77,7 +77,7 @@ class Relay:
         self.last_h = self.last_save = self.last_retry = self.last_names = 0.0
         self.sent_at = self.tried = None
         self.push_err = self.upload_err = self.bg_err = self.dvr_err = None   # kept apart: a good push must not hide a failing upload
-        self.rec_dir, self.nvenc, self.dvr_tried, self.dvr_fail, self.dvr_note = rec_dir, nvenc, {}, None, None   # rec_dir: the venue's recordings (rt_rec.py), for the heats' DVR
+        self.rec_dir, self.nvenc, self.dvr_tried, self.dvr_note = rec_dir, nvenc, {}, None   # dvr_tried: marker -> (tries, last, why)   # rec_dir: the venue's recordings (rt_rec.py), for the heats' DVR
 
     def _order(self, fallback):                      # a fresh box has no config yet (rt_control.py's cell_order raises)
         try: return list(self.order())
@@ -101,7 +101,7 @@ class Relay:
         age = None if self.sent_at is None else (now or time.time()) - self.sent_at
         return dict(ok=age is not None and age < 15 and self.push_err is None, age=age, event=self.event,
                     err=self.push_err or self.upload_err or self.bg_err or self.dvr_err, pending=len(glob.glob(f"{self.out}/*/*.json.pending")),
-                    dvr=len(glob.glob(f"{self.out}/*/*.dvr")), dvr_failed=len(glob.glob(f"{self.out}/*/*.dvr.failed")))
+                    dvr=len(glob.glob(f"{self.out}/*/*.dvr")), dvr_failed=len(glob.glob(f"{self.out}/{day(now or time.time())}/*.dvr.failed")))   # today's
 
     # --- rows in
     def on_row(self, r, now):
@@ -233,8 +233,8 @@ class Relay:
         if not os.path.exists(f"{d}/race.json"):     # cut once: a failed upload sends the same files again
             h = dict(id=hid, start=rec["start"], end=rec["end"], heat=rec["heat"], cls=rec["cls"], cells=rec["cells"], order=rec["order"])
             d = cut_heat(h, recordings(self.rec_dir, day(rec["start"] / 1000), now=now), base, relay=self.out, nvenc=self.nvenc, log=lambda m: print("dvr:", m, flush=True))
-            if not d: os.replace(marker, marker + ".none"); return   # no recording or no answers: the replay stays the live one
-        race = json.load(open(f"{d}/race.json"))
+            if not d: os.replace(marker, marker + ".none"); self.dvr_tried.pop(marker, None); return   # no recording or no answers: the replay stays the live one
+        race = json.load(open(f"{d}/race.json")); self.dvr_note = None
         for p in race["pilots"]:
             f = f"{d}/{p['stream']}.mp4"
             if os.path.getsize(f) > DVR_MAX:
@@ -247,14 +247,14 @@ class Relay:
         while True:
             try:
                 for m in sorted(glob.glob(f"{self.out}/*/*.dvr")):
-                    n, last = self.dvr_tried.get(m, (0, 0.0)); now = time.time()   # each heat its own now: the one before may take minutes
+                    n, last, _ = self.dvr_tried.get(m, (0, 0.0, "")); now = time.time()   # each heat its own now: the one before may take minutes
                     if now - last < RETRY_EVERY: continue
                     try: self.dvr(m, now)
                     except Exception as e:
-                        self.dvr_tried[m] = (n + 1, now); self.dvr_fail = f"dvr {os.path.basename(m)}: {why(e)}"
+                        self.dvr_tried[m] = (n + 1, now, f"dvr {os.path.basename(m)}: {why(e)}")
                         if n + 1 >= DVR_TRIES: os.replace(m, m + ".failed"); self.dvr_tried.pop(m, None)
-                if not self.dvr_tried: self.dvr_fail = None   # nothing failing now (a heat given up shows in status: dvr_failed)
-                self.dvr_err = self.dvr_fail or self.dvr_note
+                # a heat still failing (one given up shows in status: dvr_failed), else the last clip sent without its video
+                self.dvr_err = next((v[2] for v in self.dvr_tried.values()), None) or self.dvr_note
             except Exception as e: self.dvr_err = f"dvr loop: {why(e)}"
             time.sleep(5)
 

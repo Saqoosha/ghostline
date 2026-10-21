@@ -84,9 +84,9 @@ def recordings(rec_dir, date, now=None):
         mp4 = f[:-5] + ".mp4"
         try: r = json.load(open(f)); written = os.path.getmtime(mp4)
         except (ValueError, OSError) as e: print(f"{os.path.basename(f)}: skipped ({e})"); continue
-        if r.get("live"):
-            if now is None or not r.get("fps") or "start" not in r: continue
-            r = dict(r, frames=int(max(0.0, min(now, written) - r["start"] - 3.0) * r["fps"]))
+        if r.get("live"):                            # the night: one whose recorder was killed, up to its last write
+            if not r.get("fps") or "start" not in r: continue
+            r = dict(r, frames=int(max(0.0, min(written if now is None else now, written) - r["start"] - 3.0) * r["fps"]))
         out.append(dict(r, mp4=mp4, stem=os.path.basename(f)[:-5]))
     return out
 
@@ -115,8 +115,9 @@ def cut_heat(h, recs, out, relay="live/relay", answers=None, fps=30, nvenc=False
         enc = (["-c:v", "h264_nvenc", "-rc", "vbr", "-cq", "30", "-b:v", "1500k", "-maxrate", "2000k", "-bufsize", "4000k"] if nvenc
                else ["-c:v", "libx264", "-crf", "28", "-preset", "veryfast", "-maxrate", "2000k", "-bufsize", "4000k"]) + ["-r", "30"]
         # 4 threads: on the venue box this runs while the next heat's tracker starts
-        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-threads", "4", "-ss", f"{w[0]:.3f}", "-i", rec["mp4"], "-t", f"{w[1] - w[0]:.3f}", "-vf", f"crop={W // 2}:{H // 2}:{x}:{y}",
+        try: r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-threads", "4", "-ss", f"{w[0]:.3f}", "-i", rec["mp4"], "-t", f"{w[1] - w[0]:.3f}", "-vf", f"crop={W // 2}:{H // 2}:{x}:{y}",
                             "-an", *enc, "-threads", "4", "-pix_fmt", "yuv420p", "-movflags", "+faststart", f"{d}/{s}.mp4"], capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired: shutil.rmtree(d, ignore_errors=True); raise RuntimeError(f"{h['id']} {s}: ffmpeg took over 10 minutes")
         if r.returncode: shutil.rmtree(d, ignore_errors=True); raise RuntimeError(f"{h['id']} {s}: ffmpeg failed: {r.stderr.strip()[-300:]}")
         pilots.append(dict(stream=s, name=h["cells"].get(s, ""), pos=grid(ans, c0, c1, fps), video=f"{s}.mp4", source=how))
         log(f"{h['id']} {s}: {how}, {len(ans)} answers, {SLOTS[k]}")
@@ -139,7 +140,7 @@ def main():
     recs = recordings(a.rec, a.date)
     for h in heats_of(read_jsonl(f"{a.relay}/heats-{a.date}.jsonl")):
         try: cut_heat(h, recs, a.out, a.relay, a.answers, a.fps, a.nvenc, a.shift)
-        except (RuntimeError, subprocess.TimeoutExpired) as e: print(f"{h['id']}: left out - {e}")
+        except RuntimeError as e: print(f"{h['id']}: left out - {e}")
 
 
 if __name__ == "__main__": main()
