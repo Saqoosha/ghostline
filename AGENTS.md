@@ -62,10 +62,11 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
   答えには SfM の姿勢を残す（`tools/mgp/night_keep.py`）
 - **`tools/mgp/publish_mgp.sh` に Round を並べると、上がる `rounds.json` がその Round だけになる**（ページの一覧から他が消える）。
   差し替えは Round を並べずに全部で流す（変わったファイルだけが送られる）
-- **MGP のページで、スキャン（`.sog`）の読み込みが毎回 13〜15 MB（全体 23 MB）で止まり、見張りの取り直しでやっと届いていた。**
-  ページは HTTP/3 の 1 本の接続でスキャンと DVR の動画を同時に取る。`<video>` は十分ためると `bytes=0-` の取得を開いたまま読むのを
-  やめ、読まれないデータが接続ごとの流量制御の枠を占めてスキャンが止まる（動画が打ち切られた瞬間にスキャンが再開した）。curl では
-  再現しない。動画と音の `src` はスキャンが決まってから入れる（`viewer/src/mgp.ts` の `whenScanSettled`）。17〜18 秒 → 2〜4 秒
+- **MGP のページで、DVR の動画を `<video>` に直接取らせると、同じ HTTP/3 の接続のほかの取得が止まる。** `<video>` は十分ためると
+  `bytes=0-` の取得を開いたまま読むのをやめ、読まれないデータが接続ごとの流量制御の枠を占める。スキャン（`.sog`）が毎回 13〜15 MB
+  （全体 23 MB）で止まって見張りの取り直しを待ち、昼 → 夜の Round の切り替えでは次の `race.json` が 12 秒届かなかった。curl では
+  再現しない。動画と音は `fetch` で最後まで読んで blob で渡し、スキャンが決まってから始め、Round を移ったら打ち切る
+  （`viewer/src/mgp.ts` の `loadMedia`・`whenScanSettled`）
 - **8up 録画の帯の名前は映像のマスとずれることがある。** マス→pilot はラップの並びで決める（`name_slots.py`）
 - **race ページの splat がぼやける**：PlayCanvas の CPU ソートは走行中の依頼を捨てる。カメラが止まったら `resortWhenIdle` がソートを頼み直す
   （PlayCanvas の内部フィールドを読んでいるので、上げたら確かめる）

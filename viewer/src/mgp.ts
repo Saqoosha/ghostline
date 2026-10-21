@@ -57,11 +57,20 @@ function showScanLoad(frac: number | null, text = 'Loading scan…') {
 // hung) gets the longer BUILD_MS before the same retry. After the last try the overlay and the header say so.
 const STALL_MS = 10000, BUILD_MS = 30000, RETRIES = 3
 let sceneTry = 0, sceneTimer = 0
-// The DVR clips and the sound wait for the scan. They share the page's one HTTP/3 connection with the .sog, and a
-// <video> that has buffered enough stops reading its open bytes=0- request; the unread data then holds the connection's
-// flow-control window and the scan stalls part way (13-15 of 23 MB on every load, until the watchdog's retry, measured
-// 2026-10-20). So their src is set once the scan has loaded, failed or turned out missing.
+// The DVR clips and the sound wait for the scan, and are read whole into blobs instead of streamed by the <video>. They
+// share the page's one HTTP/3 connection with everything else, and a <video> that has buffered enough stops reading its
+// open bytes=0- request; the unread data then holds the connection's flow-control window and every other request
+// stalls behind it: the scan at 13-15 of 23 MB on every load (until the watchdog's retry), and the next round's race.json
+// for 12 s on a switch from a day round to a night one (measured 2026-10-20/21). A fetch read to its end leaves no such
+// request open; a round switch aborts the reads still running.
 let scanSettled = true; const afterScan: (() => void)[] = []
+let mediaAbort: AbortController | null = null
+function loadMedia(m: HTMLMediaElement, url: string, token: number) {
+  const ac = mediaAbort!
+  fetch(url, { signal: ac.signal }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob() })
+    .then(b => { if (token === loadToken) m.src = URL.createObjectURL(b) })
+    .catch(e => { if (token === loadToken && !ac.signal.aborted) m.dispatchEvent(new Event('error')); if (!ac.signal.aborted) console.warn('media', url, e) })
+}
 const whenScanSettled = (f: () => void) => { if (scanSettled) f(); else afterScan.push(f) }
 const settleScan = () => { scanSettled = true; afterScan.splice(0).forEach(f => f()) }
 function loadScene(name: string) {
@@ -149,7 +158,7 @@ async function loadRound(entry: RoundEntry) {
   catch (e) { if (token === loadToken) { loadingRound = false; say(`could not load ${dir}race.json: ${(e as Error).message}`) } return }
   if (token !== loadToken) return                                     // another round was picked meanwhile
   const prevFollow = R && camMode[0] === 'p' ? R.P[Number(camMode.slice(1))]?.name : null
-  disposeRound()
+  disposeRound(); mediaAbort = new AbortController()
   // ?scene=<name>: another scan from the same data folder, to compare a retrained one before it replaces the published
   loadScene(/^[A-Za-z0-9._-]+$/.test(QS.get('scene') ?? '') ? QS.get('scene')! : race.scene)
   loadSky(/^[A-Za-z0-9._-]+$/.test(race.sky ?? '') ? race.sky! : 'sky.jpg')
@@ -170,14 +179,14 @@ async function loadRound(entry: RoundEntry) {
     if (!p.video) { tiles.push(null); speedTags.push(null); lapTags.push(null); return null }
     const tile = el('div', 'tile'), [vw, vh] = p.video_size ?? [4, 3]; tile.style.setProperty('--ar', `${vw} / ${vh}`)   // 480x320: the overlay bar cropped off
     const v = el('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'
-    whenScanSettled(() => { if (token === loadToken) v.src = dir + p.video })
+    whenScanSettled(() => { if (token === loadToken) loadMedia(v, dir + p.video, token) })
     const name = el('span', 'nm'); name.style.borderLeftColor = p.color; const f = flag(p.country); if (f) name.append(f); name.append(p.name)
     const sp = el('div', 'kmh'), lt = el('div', 'lt'); tiles.push(tile); speedTags.push(sp); lapTags.push(lt)
     tile.append(v, name, lt, sp); tile.onclick = () => setMode(camMode === 'p' + P.indexOf(p) ? 'orbit' : 'p' + P.indexOf(p)); dvr.appendChild(tile); return v
   })
   // the broadcast's sound, when the round has one
   const audio = new Audio(); audio.preload = 'auto'; audio.muted = soundMuted
-  whenScanSettled(() => { if (token === loadToken) audio.src = dir + 'audio.m4a' })
+  whenScanSettled(() => { if (token === loadToken) loadMedia(audio, dir + 'audio.m4a', token) })
   audio.addEventListener('loadedmetadata', () => { if (R?.audio === audio) $('soundbtn').hidden = false })
   audio.addEventListener('error', () => { if (R?.audio === audio) { R.audio = null; $('soundbtn').hidden = true } })
   // the track: the closed average line (make_race.py), resampled every 0.25 m; trackS is each point's arc length from
@@ -233,7 +242,8 @@ async function loadRound(entry: RoundEntry) {
 }
 function disposeRound() {
   if (!R) return
-  for (const v of [...R.videos, R.audio]) if (v) { v.pause(); v.removeAttribute('src'); v.load() }
+  mediaAbort?.abort(); mediaAbort = null
+  for (const v of [...R.videos, R.audio]) if (v) { v.pause(); if (v.src.startsWith('blob:')) URL.revokeObjectURL(v.src); v.removeAttribute('src'); v.load() }
   for (const d of R.drones) d.tag.remove()
   $('dvr').replaceChildren(); R.root.destroy(); R = null
 }
