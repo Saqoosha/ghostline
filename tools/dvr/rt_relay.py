@@ -82,10 +82,12 @@ class Relay:
         except Exception: return list(fallback)
 
     # --- the wire
+    def request(self, path, body, headers):          # named: Cloudflare refuses urllib's default user agent (403, error 1010)
+        return urllib.request.Request(f"{self.base}/{self.event}/api/{path}", data=body, method="PUT" if path.startswith("heats/") else "POST",
+                                      headers={"authorization": f"Bearer {self.key}", "content-type": "application/json", "user-agent": "ghostline-relay/1", **headers})
+
     def _post(self, path, body, headers):
-        req = urllib.request.Request(f"{self.base}/{self.event}/api/{path}", data=body, method="PUT" if path.startswith("heats/") else "POST",
-                                     headers={"authorization": f"Bearer {self.key}", "content-type": "application/json", **headers})
-        with urllib.request.urlopen(req, timeout=10 if path.startswith("heats/") else 2) as f: f.read()
+        with urllib.request.urlopen(self.request(path, body, headers), timeout=10 if path.startswith("heats/") else 2) as f: f.read()
 
     def send(self, msgs, now):
         self.tried = now
