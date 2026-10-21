@@ -86,7 +86,7 @@ export default {
       return new Response(request.method === 'HEAD' ? null : object.body, { status: 206, headers })
     }
     // the size, so a loader can show progress against a total and a browser can resume a dropped transfer
-    headers.set('content-length', String(object.size))
+    if (!request.headers.has('range')) headers.set('content-length', String(object.size))   // a range not answered above (a suffix "bytes=-n") has a shorter body
     // stored gzipped (a heat's live.json): sent as it is, or the runtime gzips it a second time
     const encodeBody = object.httpMetadata?.contentEncoding ? 'manual' : 'automatic'
     return new Response(request.method === 'HEAD' ? null : object.body, { headers, encodeBody })
