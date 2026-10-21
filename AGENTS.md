@@ -64,6 +64,7 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 bash tools/publish-dvr-viewer.sh jdl-2026-r6 build/dvr/hdz_0067
 bash tools/publish-dvr-viewer.sh fdf-2026-r6 viewer/public/flights.json
 bash tools/publish-event.sh jdl-2026-10-25 <シーンのフォルダ> "JDL 2026 R7 DAY 1"   # 観客向け（--track / --night もある、DRY_RUN=1）
+bash tools/publish-site.sh             # ghostline.saqoo.sh/ のランディングページ（site/index.html、一覧は手書き）
 (cd worker && npx wrangler deploy)     # Worker を変えたときだけ
 ```
 
