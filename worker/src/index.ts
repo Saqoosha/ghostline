@@ -33,6 +33,7 @@ async function putHeatFile(request: Request, env: Env, event: string, f: { id: s
 function cacheFor(key: string): string {
   // pages and json are replaced under the same name on every publish; Vite's assets/ carry a content hash
   if (/\.(html|json)$/.test(key)) return 'no-cache'
+  if (/\/heats\/[^/]+\/[^/]+\.mp4$/.test(key)) return 'no-cache'   // a heat's clip: the venue's, replaced by the night rebuild's
   if (/\/assets\//.test(key)) return 'public, max-age=31536000, immutable'
   return 'public, max-age=86400'
 }

@@ -19,7 +19,7 @@ export function parseEventPath(path: string): { event: string; rest: string } | 
 
 // a heat's DVR replay, put by the venue right after the heat (rt_relay.py): its clips (<cell>.mp4) and then race.json
 export function heatFile(rest: string): { id: string; file: string; type: string } | null {
-  const m = /^heats\/([^/]+)\/(race\.json|[\w-]{1,16}\.mp4)$/.exec(rest)
+  const m = /^heats\/([^/]+)\/(race\.json|[\w-]{1,24}\.mp4)$/.exec(rest)   // a cell's name: rt_control.py cell_name, up to 24
   return m && HEAT_ID.test(m[1]) ? { id: m[1], file: m[2], type: m[2].endsWith('.mp4') ? 'video/mp4' : 'application/json' } : null
 }
 

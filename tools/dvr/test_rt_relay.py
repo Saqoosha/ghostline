@@ -258,7 +258,7 @@ class RelayTest(unittest.TestCase):
         self.assertEqual([m["at"] for m in hs], [round(T0 * 1000), round((T0 + 4) * 1000)]); self.assertEqual(hs[1]["t"], round(T0 * 1000))
 
     def test_status_before_any_send(self):
-        self.assertEqual(self.r.status(), dict(ok=False, age=None, event="staging-test", err=None, pending=0, dvr=0))
+        self.assertEqual(self.r.status(), dict(ok=False, age=None, event="staging-test", err=None, pending=0, dvr=0, dvr_failed=0))
 
     def test_status_after_send(self):
         self.row(T0, 1); self.r.flush(T0 + 0.6)
@@ -274,12 +274,18 @@ class RelayTest(unittest.TestCase):
 
 class DvrTest(unittest.TestCase):
     """a heat's DVR right after it: cut from a recording still being written, the clips up before race.json"""
-    def setUp(self):
+    @classmethod
+    def setUpClass(cls):                                 # one small recording for all: 25 s, so a heat at 5-15 s fits with its margins
         import subprocess
+        cls.video = os.path.join(tempfile.mkdtemp(), "v.mp4")
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=25", "-pix_fmt", "yuv420p", cls.video], check=True)
+
+    def setUp(self):
+        import shutil
         self.dir = tempfile.mkdtemp(); self.recd = os.path.join(self.dir, "rec"); os.makedirs(self.recd); self.sent = []
-        stem = f"{datetime.datetime.fromtimestamp(T0, JST):%Y%m%d-%H%M%S}_SRC"
-        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=40", "-pix_fmt", "yuv420p", f"{self.recd}/{stem}.mp4"], check=True)
+        stem = f"{datetime.datetime.fromtimestamp(T0, JST):%Y%m%d-%H%M%S}_SRC"; self.mp4 = f"{self.recd}/{stem}.mp4"; shutil.copy(self.video, self.mp4)
         json.dump(dict(start=T0, size=[320, 180], fps=30.0, live=True, frames=0), open(f"{self.recd}/{stem}.json", "w"))   # live: frames from the clock
+        os.utime(self.mp4, (T0 + 25, T0 + 25))         # last written when the recording reached 25 s
         self.r = Relay("http://x/", "http://y", "staging-test", "k", out_dir=os.path.join(self.dir, "relay"), rec_dir=self.recd,
                        post=lambda path, body, headers: self.sent.append((path, len(body), headers.get("content-type"))))
         ans = [[round((T0 + 5 + k / 30) * 1000), k * 0.1, 1.0, 0.0, 0, 0, 0, 1, 200] for k in range(300)]
@@ -301,6 +307,13 @@ class DvrTest(unittest.TestCase):
         self.r.save(self.rec); self.r.upload(self.rec)
         m = self.marker(self.r, self.rec); self.r.dvr(m, T0 + 600)
         self.assertTrue(os.path.exists(m + ".none")); self.assertEqual(len(self.sent), 1)
+
+    def test_failed_cut_is_tried_again(self):           # ffmpeg's failure is not "no DVR": the marker stays for the next try
+        open(self.mp4, "wb").write(b"not a video"); os.utime(self.mp4, (T0 + 25, T0 + 25))
+        self.r.save(self.rec); self.r.upload(self.rec)
+        m = self.marker(self.r, self.rec)
+        with self.assertRaises(RuntimeError): self.r.dvr(m, T0 + 60)
+        self.assertTrue(os.path.exists(m)); self.assertEqual(len(self.sent), 1)
 
     def test_no_marker_without_recordings(self):
         r = Relay("http://x/", "http://y", "staging-test", "k", out_dir=os.path.join(self.dir, "plain"), post=lambda *a: None)

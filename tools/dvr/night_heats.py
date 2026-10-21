@@ -77,21 +77,23 @@ def heats_of(rows):
 
 def recordings(rec_dir, date, now=None):
     """the day's recordings. One still being written is used only with now (the relay right after a heat): rt_rec.py keeps
-    its file to the wall clock, so it holds now - start seconds, less the last fragment (2 s) still in the encoder"""
+    its file to the wall clock, so it holds up to when the mp4 was last written (not now: a recorder killed mid-file leaves
+    live=True for good), less the last fragment (2 s, and 1 s of margin) still in the encoder"""
     out = []
     for f in sorted(glob.glob(f"{rec_dir}/{date}-*.json")):
-        try: r = json.load(open(f))
-        except ValueError: continue                  # being replaced as it is read
-        if not os.path.exists(f[:-5] + ".mp4"): continue
+        mp4 = f[:-5] + ".mp4"
+        try: r = json.load(open(f)); written = os.path.getmtime(mp4)
+        except (ValueError, OSError) as e: print(f"{os.path.basename(f)}: skipped ({e})"); continue
         if r.get("live"):
-            if now is None or not r.get("fps"): continue
-            r = dict(r, frames=int(max(0.0, now - r["start"] - 2.0) * r["fps"]))
-        out.append(dict(r, mp4=f[:-5] + ".mp4", stem=os.path.basename(f)[:-5]))
+            if now is None or not r.get("fps") or "start" not in r: continue
+            r = dict(r, frames=int(max(0.0, min(now, written) - r["start"] - 3.0) * r["fps"]))
+        out.append(dict(r, mp4=mp4, stem=os.path.basename(f)[:-5]))
     return out
 
 
 def cut_heat(h, recs, out, relay="live/relay", answers=None, fps=30, nvenc=False, shift=SHIFT, log=print):
-    """one heat (heats_of's) -> <out>/<id>/race.json and <cell>.mp4; the folder, or None when it has no recording or no answers"""
+    """one heat (heats_of's) -> <out>/<id>/race.json and <cell>.mp4; the folder, or None when it has no recording or no answers.
+    A clip that fails (ffmpeg's error or timeout) raises: worth trying again, unlike a heat with nothing to cut"""
     t0, t1 = h["start"] / 1000 - PAD_BEFORE, h["end"] / 1000 + PAD_AFTER
     rec = max(recs, key=lambda r: (lambda w: w[1] - w[0] if w else 0)(clip_window(r, t0, t1)), default=None)
     w = rec and clip_window(rec, t0, t1)
@@ -112,14 +114,17 @@ def cut_heat(h, recs, out, relay="live/relay", answers=None, fps=30, nvenc=False
         # 30 fps, about 1.5 Mbit/s: the 60 fps quarter at the encoder's defaults was 4.6 Mbit/s (71-89 MB for 155 s), too much for a phone
         enc = (["-c:v", "h264_nvenc", "-rc", "vbr", "-cq", "30", "-b:v", "1500k", "-maxrate", "2000k", "-bufsize", "4000k"] if nvenc
                else ["-c:v", "libx264", "-crf", "28", "-preset", "veryfast", "-maxrate", "2000k", "-bufsize", "4000k"]) + ["-r", "30"]
-        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{w[0]:.3f}", "-i", rec["mp4"], "-t", f"{w[1] - w[0]:.3f}", "-vf", f"crop={W // 2}:{H // 2}:{x}:{y}",
-                            "-an", *enc, "-pix_fmt", "yuv420p", "-movflags", "+faststart", f"{d}/{s}.mp4"], capture_output=True, text=True)
-        if r.returncode: log(f"{h['id']} {s}: ffmpeg failed: {r.stderr.strip()[-300:]}"); pilots = None; break
+        # 4 threads: on the venue box this runs while the next heat's tracker starts
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-threads", "4", "-ss", f"{w[0]:.3f}", "-i", rec["mp4"], "-t", f"{w[1] - w[0]:.3f}", "-vf", f"crop={W // 2}:{H // 2}:{x}:{y}",
+                            "-an", *enc, "-threads", "4", "-pix_fmt", "yuv420p", "-movflags", "+faststart", f"{d}/{s}.mp4"], capture_output=True, text=True, timeout=600)
+        if r.returncode: shutil.rmtree(d, ignore_errors=True); raise RuntimeError(f"{h['id']} {s}: ffmpeg failed: {r.stderr.strip()[-300:]}")
         pilots.append(dict(stream=s, name=h["cells"].get(s, ""), pos=grid(ans, c0, c1, fps), video=f"{s}.mp4", source=how))
         log(f"{h['id']} {s}: {how}, {len(ans)} answers, {SLOTS[k]}")
     if not pilots: shutil.rmtree(d, ignore_errors=True); log(f"{h['id']}: left out"); return None
-    json.dump(dict(id=h["id"], start=round(c0 * 1000), end=round(c1 * 1000), heat=h["heat"], cls=h["cls"], fps=fps, version="night", order=h["order"],
-                   recording=rec["stem"], pilots=pilots), open(f"{d}/race.json", "w"), separators=(",", ":"), ensure_ascii=False)
+    with open(f"{d}/race.json.tmp", "w") as o:    # whole or not at all: the relay reads its presence as "cut"
+        json.dump(dict(id=h["id"], start=round(c0 * 1000), end=round(c1 * 1000), heat=h["heat"], cls=h["cls"], fps=fps, version="night", order=h["order"],
+                       recording=rec["stem"], pilots=pilots), o, separators=(",", ":"), ensure_ascii=False)
+    os.replace(f"{d}/race.json.tmp", f"{d}/race.json")
     return d
 
 
@@ -133,7 +138,8 @@ def main():
     a = ap.parse_args()
     recs = recordings(a.rec, a.date)
     for h in heats_of(read_jsonl(f"{a.relay}/heats-{a.date}.jsonl")):
-        cut_heat(h, recs, a.out, a.relay, a.answers, a.fps, a.nvenc, a.shift)
+        try: cut_heat(h, recs, a.out, a.relay, a.answers, a.fps, a.nvenc, a.shift)
+        except (RuntimeError, subprocess.TimeoutExpired) as e: print(f"{h['id']}: left out - {e}")
 
 
 if __name__ == "__main__": main()
