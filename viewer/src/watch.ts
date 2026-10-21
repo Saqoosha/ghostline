@@ -29,7 +29,7 @@ let delay = loadDelay(EVENT), connected = false, countries: Record<string, strin
 const note = (s: string) => { $('note').textContent = s; $('note').hidden = !s }
 
 // --- the scene, the course line, the day's title and flags
-stage.loadScene().then(ix => { if (ix.title) $('title').textContent = ix.title }).catch(e => { console.error(e); note('スキャンを読めなかった') })
+stage.loadScene().then(ix => { if (ix.title) $('title').textContent = ix.title }).catch(e => { console.error(e); note('スキャンを​読めなかった') })
 // a failed read keeps what was there (only a 404 means there is no line yet)
 const course = () => fetch(BASE + 'track.json', { cache: 'no-cache' }).then(r => r.status === 404 ? stage.setCourse(null) : r.ok ? r.json().then(j => stage.setCourse(j?.track ?? null)) : null)
   .catch(e => console.warn('track.json', e))

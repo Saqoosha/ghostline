@@ -42,22 +42,24 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   let drag: { x: number; y: number } | null = null
   // two fingers pinch the zoom (as the wheel) and do not turn; lifting one does not start a drag
   const touches = new Map<number, { x: number; y: number }>(); let pinch: { d: number; zoom: number } | null = null
-  const spread = () => { const [a, b] = [...touches.values()]; return Math.hypot(a.x - b.x, a.y - b.y) }
+  const spread = () => { const [a, b] = [...touches.values()]; return Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)) }
+  const setZoom = (z: number) => { view.zoom = Math.max(0.4, Math.min(3, z)) }
+  const rebase = () => { pinch = touches.size === 2 ? { d: spread(), zoom: view.zoom } : null }   // whenever two fingers are down, measured from now
   canvas.addEventListener('pointerdown', e => {
-    canvas.setPointerCapture(e.pointerId); touches.set(e.pointerId, { x: e.clientX, y: e.clientY })
-    if (touches.size === 2) { pinch = { d: Math.max(1, spread()), zoom: view.zoom }; drag = null } else if (touches.size === 1) drag = { x: e.clientX, y: e.clientY }
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY }); canvas.setPointerCapture(e.pointerId)
+    rebase(); drag = touches.size === 1 ? { x: e.clientX, y: e.clientY } : null
   })
-  const lift = (e: PointerEvent) => { touches.delete(e.pointerId); if (touches.size < 2) pinch = null; drag = null }
-  canvas.addEventListener('pointerup', lift); canvas.addEventListener('pointercancel', lift)
+  const lift = (e: PointerEvent) => { if (!touches.delete(e.pointerId)) return; rebase(); drag = null }
+  for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) canvas.addEventListener(ev, lift)
   canvas.addEventListener('pointermove', e => {
     if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY })
-    if (pinch && touches.size === 2) { view.zoom = Math.max(0.4, Math.min(3, pinch.zoom * pinch.d / Math.max(1, spread()))); return }
+    if (pinch) { setZoom(pinch.zoom * pinch.d / spread()); return }
     if (!drag) return
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY
     if (stage.mode === 'top') view.topYaw -= dx * 0.3
     else { view.yawOffset -= dx * 0.3; view.pitch = Math.max(-85, Math.min(-5, view.pitch - dy * 0.3)) }
   })
-  canvas.addEventListener('wheel', e => { view.zoom = Math.max(0.4, Math.min(3, view.zoom * Math.exp(e.deltaY * 0.001))); e.preventDefault() }, { passive: false })
+  canvas.addEventListener('wheel', e => { setZoom(view.zoom * Math.exp(e.deltaY * 0.001)); e.preventDefault() }, { passive: false })
 
   const pilots = new Map<string, Pilot>()
   function cameraAt(t: number, dt: number) {

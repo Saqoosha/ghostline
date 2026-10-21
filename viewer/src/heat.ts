@@ -22,16 +22,16 @@ let rp: Replay | null = null, t = 0, playing = true, speed = 1, countries: Recor
 const note = (s: string) => { $('note').textContent = s; $('note').hidden = !s }
 $<HTMLAnchorElement>('home').href = BASE + (QS.has('e') ? `?e=${EVENT}` : '')
 
-stage.loadScene().then(ix => { if (ix.title) $('title').textContent = ix.title }).catch(e => { console.error(e); note('スキャンを読めなかった') })
+stage.loadScene().then(ix => { if (ix.title) $('title').textContent = ix.title }).catch(e => { console.error(e); note('スキャンを​読めなかった') })
 fetch(BASE + 'track.json').then(r => r.ok ? r.json() : null).then(j => stage.setCourse(j?.track ?? null)).catch(() => {})
 fetch(BASE + 'countries.json').then(r => r.ok ? r.json() : {}).then(j => { countries = j ?? {} }).catch(() => {})
 
 const get = (f: string) => fetch(`${BASE}heats/${ID}/${f}`, { cache: 'no-cache' }).then(r => r.ok ? r.json() : null)
 async function load() {
-  if (!ID) { note('ヒートが指定されていない'); return }
+  if (!ID) { note('ヒートが​指定されていない'); return }
   const night = await get('race.json').catch(() => null)
   rp = night ? fromNight(night) : await get('live.json').then(j => j && fromLive(j)).catch(() => null)
-  if (!rp) { note('このヒートの記録が見つからない'); return }
+  if (!rp) { note('この​ヒートの記録が​見つからない'); return }
   note('')
   $('heat').textContent = heatName({ heat: rp.heat, cls: rp.cls, start: rp.start }) + (rp.heat ? ` · ${clock(rp.start)}` : '')   // without a number the name is the time
   $('ver').textContent = rp.version === 'night' ? 'DVR 付き' : '速報'

@@ -6,7 +6,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--paper); color: var(--ink); font: 400 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
 /* Japanese wraps only where a phrase ends (<wbr>, or U+200B in a script's text), not mid-word; a run too long still wraps */
-body { word-break: keep-all; overflow-wrap: anywhere; }
+body { word-break: keep-all; overflow-wrap: break-word; }
 a { color: inherit; }
 [hidden] { display: none !important; }
 
