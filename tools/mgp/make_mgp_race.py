@@ -194,6 +194,9 @@ def build(a):
     for n, s in ocr_slots.items(): slots.setdefault(n, s)
     has_overlay = bool(ocr_slots)
     crop_top = a.crop_top if a.crop_top is not None else (40 if has_overlay else 0)
+    # 4-up: each cell's own picture rectangle (feed_rects.py on MGP_HOST); the feeds are not placed alike within the cells
+    rects = {int(k): v for k, v in json.loads(subprocess.check_output(
+        ["ssh", MGP_HOST, f"~/mastenv/bin/python {MGP_DIR}/feed_rects.py {MGP_DIR}/raw/{vfile}"])).items()} if LAYOUT == "4up" else {}
 
     # holeshots in video time, from the poses alone (3 s grid: crossings from a long pre-roll resample)
     t_lo = min(p["t"][0] for p in P.values()); t_hi = max(p["t"][-1] for p in P.values())
@@ -239,7 +242,7 @@ def build(a):
         race["pilots"].append(dict(
             name=n, color=COLORS[len(race["pilots"]) % 8], end=end, crashed=k < L, finish=fin, lap_ends=[round(x, 3) for x in ends], laps=laps,
             total=round(ends[-1] - hs, 3) if hs is not None and ends else 0.0, official=dict(pos=pos_of[n], laps=k, time=fmt_time(tot), gap=gap),
-            pos=pr.tolist(), video=f"dvr_{slug(n)}.mp4", video_size=[FEED_W, CELL_H - crop_top], holeshot_at=round(hs, 3) if hs is not None else None,
+            pos=pr.tolist(), video=f"dvr_{slug(n)}.mp4", video_size=rects[slots[n]][2:] if slots[n] in rects else [FEED_W, CELL_H - crop_top], holeshot_at=round(hs, 3) if hs is not None else None,
             holeshot=round(hs - start, 3) if hs is not None else None, slot=slots[n], official_laps=ol, position=pos_of[n],
             **({"country": countries[n]} if n in countries else {})))
     # track line from the pilot with the most path laps
@@ -256,20 +259,21 @@ def build(a):
     print(f"round {rnd}: recording {vfile} ({dur:.1f} s), clip [{clip_t0:.2f}, {clip_t1:.2f}], start {start} (video {start_v:.2f}), {L} laps")
     for n, c in cmp_.items():
         print(f"  {n}: official {c['official']} total {c['official_total']}  path {c['path']} total {c['path_total']}  diff {c['diff']}")
-    if a.clips: make_clips(a, race, vfile, clip_t0, clip_t1, crop_top)
+    if a.clips: make_clips(a, race, vfile, clip_t0, clip_t1, crop_top, rects)
 
 
 # the machine with the recordings (raw/) and aliases.json; Studio's ~/mgp moved to rt4090 on 2026-10-20
 MGP_HOST, MGP_DIR = os.environ.get("MGP_HOST", "rt4090"), os.environ.get("MGP_DIR", "/mnt/data/mgp_studio")
 
 
-def make_clips(a, race, vfile, t0, t1, crop_top):
+def make_clips(a, race, vfile, t0, t1, crop_top, rects):
     """One ffmpeg pass on MGP_HOST (nice 10): a cropped h264 clip per pilot + the race audio, then rsync back."""
     ps = race["pilots"]; rd = f"/tmp/mgp_q{race['round']:02d}"
     maps = ""; fc = f"[0:v]split={len(ps)}" + "".join(f"[v{i}]" for i in range(len(ps))) + ";"
     for i, p in enumerate(ps):
         r, c = divmod(p["slot"], GRID)
-        fc += f"[v{i}]crop={FEED_W}:{CELL_H - crop_top}:{c * CELL_W + FEED_X}:{r * CELL_H + crop_top}[o{i}];"
+        x, y, w, h = rects.get(p["slot"], (c * CELL_W + FEED_X, r * CELL_H + crop_top, FEED_W, CELL_H - crop_top))
+        fc += f"[v{i}]crop={w}:{h}:{x}:{y}[o{i}];"
         maps += f" -map '[o{i}]' -c:v libx264 -preset veryfast -crf 24 -pix_fmt yuv420p -an -movflags +faststart {rd}/{p['video']}"
     cmd = (f"mkdir -p {rd} && nice -n 10 ffmpeg -y -loglevel error -ss {t0:.3f} -t {t1 - t0:.3f} -i {MGP_DIR}/raw/{vfile} "
            f"-filter_complex \"{fc.rstrip(';')}\"{maps} -map '0:a?' -c:a aac -b:a 96k -vn {rd}/audio.m4a")
