@@ -110,7 +110,7 @@ function frame() {
   // the header: the day, the heat, LIVE
   $('heat').textContent = shown ? heatName({ heat: shown.heat, cls: shown.cls, start: shown.t }) : ''
   $('live').classList.toggle('on', !!shown); $('live').textContent = shown ? 'LIVE' : 'NO HEAT'
-  note(!connected ? '接続中…' : shown ? '' : 'いま飛んでいるヒートはありません')
+  note(!connected ? '接続中…' : shown ? '' : 'いま\u200b飛んでいる\u200bヒートは\u200bありません')
   const ts = (view - t0) / 1000
   for (const [k, s] of order.entries()) {
     const r = runs.get(s), p = stage.pilot(s, SLOTS[k] ?? 'tl')
