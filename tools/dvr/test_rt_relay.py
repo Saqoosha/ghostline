@@ -239,6 +239,11 @@ class RelayTest(unittest.TestCase):
         self.r.save = save; self.r.work(T0 + 41)
         self.assertEqual(len([s for s in self.sent if s[0].startswith("heats/")]), 1); self.assertEqual(self.r.uploads, [])
 
+    def test_requests_name_themselves(self):       # Cloudflare refuses urllib's default user agent (403, error 1010)
+        req = self.r.request("push", b"{}", {})
+        self.assertTrue(req.get_header("User-agent", "").startswith("ghostline-relay/")); self.assertEqual(req.get_method(), "POST")
+        self.assertEqual(self.r.request("heats/133156", b"", {}).get_method(), "PUT")
+
     def test_order_from_venue_config(self):
         r = Relay("http://x/", "http://y", "e", "k", out_dir=self.dir, post=lambda *a: None, order=lambda: ["A", "B", "C", "D"])
         r.on_row(dict(stream="A", i=1, lat=0, how="none"), T0)
