@@ -29,8 +29,9 @@ LAYOUT="${LAYOUT:-8up}" uv run -q --with numpy python tools/mgp/make_mgp_race.py
   --scene "${SCENE:-MGP-Champs-2026-unfold}" "${CA[@]}" "${SA[@]}" 2>&1 | grep -E "^round|diff"
 ln -sfn "../../../build/mgp/$Q" "viewer/public/mgp-dev/$Q"
 uv run -q python - "$N" "$Q" <<'PY'
-import json, sys
+import fcntl, json, sys
 n, q = int(sys.argv[1]), sys.argv[2]
+lock = open("viewer/public/mgp-dev/.rounds.lock", "w"); fcntl.flock(lock, fcntl.LOCK_EX)   # rounds built side by side
 p = "viewer/public/mgp-dev/rounds.json"; r = json.load(open(p))
 race = json.load(open(f"viewer/public/mgp-dev/{q}/race.json"))
 laps = json.load(open("data/mgp/livefpv_laps.json")) + json.load(open("data/mgp/livefpv_finals.json"))

@@ -269,14 +269,15 @@ MGP_HOST, MGP_DIR = os.environ.get("MGP_HOST", "rt4090"), os.environ.get("MGP_DI
 def make_clips(a, race, vfile, t0, t1, crop_top, rects):
     """One ffmpeg pass on MGP_HOST (nice 10): a cropped h264 clip per pilot + the race audio, then rsync back."""
     ps = race["pilots"]; rd = f"/tmp/mgp_q{race['round']:02d}"
+    th = os.environ.get("CLIP_THREADS", "8")                 # several rounds cut at once on one machine
     maps = ""; fc = f"[0:v]split={len(ps)}" + "".join(f"[v{i}]" for i in range(len(ps))) + ";"
     for i, p in enumerate(ps):
         r, c = divmod(p["slot"], GRID)
         x, y, w, h = rects.get(p["slot"], (c * CELL_W + FEED_X, r * CELL_H + crop_top, FEED_W, CELL_H - crop_top))
         fc += f"[v{i}]crop={w}:{h}:{x}:{y}[o{i}];"
-        maps += f" -map '[o{i}]' -c:v libx264 -preset veryfast -crf 24 -pix_fmt yuv420p -an -movflags +faststart {rd}/{p['video']}"
-    cmd = (f"mkdir -p {rd} && nice -n 10 ffmpeg -y -loglevel error -ss {t0:.3f} -t {t1 - t0:.3f} -i {MGP_DIR}/raw/{vfile} "
-           f"-filter_complex \"{fc.rstrip(';')}\"{maps} -map '0:a?' -c:a aac -b:a 96k -vn {rd}/audio.m4a")
+        maps += f" -map '[o{i}]' -c:v libx264 -threads {th} -preset veryfast -crf 24 -pix_fmt yuv420p -an -movflags +faststart {rd}/{p['video']}"
+    cmd = (f"mkdir -p {rd} && nice -n 10 ffmpeg -y -loglevel error -threads {th} -ss {t0:.3f} -t {t1 - t0:.3f} -i {MGP_DIR}/raw/{vfile} "
+           f"-filter_threads {th} -filter_complex \"{fc.rstrip(';')}\"{maps} -map '0:a?' -c:a aac -b:a 96k -vn {rd}/audio.m4a")
     print(cmd); subprocess.check_call(["ssh", MGP_HOST, cmd])
     subprocess.check_call(["rsync", "-a", f"{MGP_HOST}:{rd}/", f"{a.out}/"])
 
