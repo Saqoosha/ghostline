@@ -7,7 +7,8 @@
 - 本番 https://ghostline.saqoo.sh/mgp-champs-2026/ は確認用ページ（`-check`）と同じ中身：予選 125 Round（作り直したもの）、
   D・C・B・A・E の決勝、A Main の Race 1〜13。143 Round。差し替える前の本番の Round は 117
 - 夜の決勝と A Main は、夜の地図の折りたたみを描いて照合して直した線。夜のスキャンは箱の中が t5、外が t4 の合成
-- 残り：B・C・D・E Main の勝ち抜きのレース（公式ラップは保存済み）。Round 157 RECONFPV・Round 2 RECONFPV・Round 83 WILLFPV は
+- Main の勝ち抜きのレース：A（Race 1〜13）、E（2〜13）、D（3〜13）、C（1〜13）、B（1）を本番に出した（180 Round）。B の 2〜13 は rt4090 で処理中。
+- 残り：Round 157 RECONFPV・Round 2 RECONFPV・Round 83 WILLFPV は
   作り直しで悪くなったまま
 - Studio の `~/mgp` は rt4090 の `/mnt/data/mgp_studio/` に移した（正本の「機械」）
 

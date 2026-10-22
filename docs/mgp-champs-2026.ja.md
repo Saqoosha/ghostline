@@ -137,15 +137,25 @@ ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash too
 - **結果**：決勝のラップが公式と一致した。B 決勝は 0.03 秒以内（REDSKY の 3 周目だけ 0.078）、E 決勝は 0.054 秒以内、A 決勝は
   MCKFPV 0.089 秒・KILLIANFPV 0.183 秒以内。前の姿勢をいまの `poses_from_loc.py` に通すと REDSKY の 3 周目が消えるが、直した姿勢では
   全員の全周がそろう。
-- **A Main の全レース**（Round 911〜923 ＝ Race 1〜13、ラップは `data/mgp/livefpv_a_main.json` から `livefpv_finals.json` へ）：
-  1 本ずつ `night_race.sh <id> gs/t45.ply`（rt4090）→ loc JSON を `build/mgp/loc/q9NN/` に置いて `round_mac.sh`。地図に無いマスの
-  カメラは `night_race_prep.py` がマスの位置ごとの中央値で決める（4 番目のマスだけ焦点 274〜278、ほかは 300〜318）。確かめの照合は
-  折りたたみの箱の中だけ（`night_refine.py ONLY_BOX`、手間は 2 割）。19:49〜20:15 の録画 7 本は、21:00 からやり直す前の走りで公式ラップに
-  合わない。録画↔レースは帯の名前（OCR）で決め、Race 4 は 21:15（帯に CRASH / LAND NOW）でなく 21:32。公式ラップの無い人と 1 周だけで
-  決めきれない人（Race 3 PINO、7 THE-MILKMAN、10 TJ_FPV、12 REDSKY）は顔ぶれの消去法で足す。ラップは公式とおおむね 0.1 秒以内。
-  Mac の tar で送ると `._*` の付録ファイルが混ざり、フレームの一覧の先頭が読めない画像になる（`COPYFILE_DISABLE=1` を付けるか消す）
-- **名前**：B 決勝の SHARK_FPV（1 周 20.911）は THE-MILKMAN の 1 周目と同じ時刻で、`name_slots.py` が決めない。A 決勝の MINJAE_ は
-  ラップが無い。どちらも 4 分割の帯の名前で決め、`build/mgp/poses/q90X/<PILOT>.json` を足して `make_mgp_race.py` を回し直した。
+- **Main の勝ち抜きのレース**（Round：A 911〜、E 931〜、D 951〜、C 971〜、B 991〜 ＋ Race 番号。ラップは `data/mgp/livefpv_<x>_main.json`
+  から `livefpv_finals.json` へ）。録画↔レースは公式の終了時刻＋1 時間と AWS の一覧の録画の開始時刻で引き、1 本に何レースも入った録画
+  （E Race 5〜7、D Race 4・5）は Round ごとに同じ位置合わせから組む（`make_mgp_race.py` がレースごとの通過を選ぶ）。A Main の 19:49〜20:15 と
+  B Main の 16:41〜16:53 の録画は、やり直す前の走りで公式ラップに合わない。A Race 4 は 21:15（帯に CRASH / LAND NOW）でなく 21:32。
+  D Race 1・2 は AWS に録画が無い。
+  - 夜（A・E）と夕方（B）：rt4090 の `main_night_race.sh <id> <録画> [スキャン]`（rt4090 の `mgp_studio/mains/` に置いて回す） → 切り出しと原寸 → `night_race.sh`（夜の地図、
+    折りたたみの箱の中だけ描いて確かめる `ONLY_BOX`、地図に無いマスのカメラは `night_race_prep.py` がマスの位置ごとの中央値：4 番目のマスだけ
+    焦点 274〜278、ほかは 300〜318）→ `drop_static.py`。B は昼の地図に 641 中 52 しか乗らず、夜の流れで確かめを昼のスキャンにする
+  - 昼（C・D）：`main_day_race.sh <id> <録画>` → 切り出し → `localize.py`（`mapfinal`）→ `drop_static.py`
+  - Mac：loc JSON を `build/mgp/loc/q<N>/` に置いて `round_mac.sh`。3 本並べて組める（`rounds.json` は鍵つき、クリップの符号化は `CLIP_THREADS`）
+- **4 分割の切り抜き**：4 分割の録画は、マスの中の映像の位置と幅がマスごとに違う（左から 90〜121 px、幅 644〜738 px、日によっても違う）。
+  決まった切り抜きだと片側に黒い帯、反対側が欠けた。`feed_rects.py` が録画ごとに時間で動く画素の四角を測り、`make_mgp_race.py` がそれで切る。
+- **ゴール後のカード**：ゴール後、4 分割の録画は各マスに順位カード（写真・順位・時間）を重ねる。夜の地図はそのカードの絵を 1 か所
+  （track frame で x −123.8、y 6.5、高さ 3.4 m）に登録していて、カードのコマが一致点 1,000 前後でそこに置かれ、ゴールした全員がそこへ
+  飛んだ。背景の機体が動いていても照合はカードに勝つので、絵が止まったかの判定では拾えない。`drop_static.py` が、止まった絵、位置が
+  10 cm 以内で 6 コマ続くもの、確かめのない夜の姿勢でその場所から 1 m 以内のものを外す（63 人中、そこに残る人 0）。
+- **名前**：ラップの並び（`name_slots.py`）で決まらないマスは、消去法（`name_by_elimination.py`：残りのマスと残りの人が 1 つずつ）、
+  次に 4 分割の帯の名前（`name_from_bars.py`：macOS Vision で各マスの帯を Round の窓の 3 か所で読む）。足したら `make_mgp_race.py` を
+  直接回す（`round_mac.sh` は名前付けからやり直して、足した名前を消す）。10/16 の E Main の録画には帯が無く、Race 2・3・5 は決まらない。
   A 決勝の YUKI のマスは録画に映像が無い。
 - **夜の 3DGS は昼のスキャンの形に夜の色を付けて作る**：夜の 4 本（21:00、22:09、A・E 決勝）のフレームだけで学習すると、暗さとノイズで
   形が決まらず、どの視点でも色のにじみと霧になった（2,741 枚、PSNR 22.3）。昼のスキャン（200 万 splat）を `--init-ply` に、
