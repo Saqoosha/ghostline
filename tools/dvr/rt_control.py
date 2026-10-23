@@ -16,7 +16,7 @@ Between heats (all cells without a picture for GROW_QUIET s) it grows the map wi
 GROW_WINDOW s (rt_map_grow.py: the day's light, docs/realtime-architecture.html 12) and the tracker swaps it in without stopping;
 the page can grow now or go back to the scan alone. Needs "描いて照合" (RENDER): the new keyframes are matched beside the render.
 routes beside the page: /api/state, /rec (recordings), /obs (top view for OBS), /view/ (the 3D live page, viewer/live.html built with VITE_BASE=/view/,
-     and its data folders in view/), /api/pilots (the pilot per cell, from the heat manager), /api/cam (the sent picture's camera; POST sets it; /api/cam/events pushes each change), /api/out (rt_ndiview.py's output; POST sets it)
+     and its data folders in view/), /api/pilots (the pilot per cell, from the heat manager), /api/cam (the sent picture's camera; POST sets it; /api/cam/events pushes each change), /api/out (rt_ndiview.py's output; POST sets it), /obs-setup (how to receive it in OBS), /api/addr (this box's LAN addresses)
 No login: whoever reaches the port can start and stop the tracker. Keep it on the venue LAN / Tailscale."""
 import collections, glob, http.server, json, mimetypes, os, re, signal, subprocess, sys, threading, time, traceback, urllib.parse, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
@@ -311,6 +311,12 @@ def set_view(v):                                   # ms; the delay lets the smoo
     with open(tmp, "w") as f: json.dump(dict(delay=round(d), smooth=round(m)), f)
     os.replace(tmp, VIEW)                # whole: /api/state reads it on other threads
 
+def addrs():                                       # this box's IPv4 on the LAN, for the OBS page's URLs: not loopback, Tailscale (100.64/10) or docker
+    try: out = subprocess.run(["ip", "-4", "-o", "addr", "show"], capture_output=True, text=True, timeout=3).stdout
+    except Exception: return []
+    ips = [l.split()[3].split("/")[0] for l in out.splitlines() if len(l.split()) > 3 and not l.split()[1].startswith(("lo", "tailscale", "docker", "br-"))]
+    return [ip for ip in ips if not ip.startswith("127.")]
+
 def cam():
     try: v = json.load(open(CAM))
     except Exception: v = {}
@@ -496,6 +502,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif u.path == "/obs": self.send(200, open(HERE + "/rt_obs.html", "rb").read(), "text/html")   # the top view alone, for an OBS browser source
         elif u.path == "/rt_topview.js": self.send(200, open(HERE + "/rt_topview.js", "rb").read(), "text/javascript")
         elif u.path == "/api/state": self.send(200, state())
+        elif u.path == "/obs-setup": self.send(200, open(HERE + "/rt_obs_setup.html", "rb").read(), "text/html")   # for the venue's OBS operator
+        elif u.path == "/api/addr": self.send(200, addrs())
         elif u.path == "/api/cam": self.send(200, cam())
         elif u.path == "/api/cam/events": self.cam_events()
         elif u.path == "/api/out": self.send(200, out())

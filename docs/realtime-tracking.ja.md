@@ -432,6 +432,7 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   | NDI 1080p 60 fps | 約 5 コア（Chrome 3、Python 1〜2：JPEG の展開と NDI の SpeedHQ 圧縮） | +50〜110 W |
   | SRT 720p 30 fps | 約 1.4 コア（大半は Chrome のページ、送り手は 0.03） | +20〜35 W |
 
+  運営の OBS の受け方は `http://rt4090:8080/obs-setup`（操作ページの「OBS」。NDI・SRT・ブラウザソースの設定を、開いたときの会場の IP で書く）。
   **受け手がいるときだけ描く**：NDI の受け手（`get_num_connections`）も SRT の相手（ffmpeg の「Output #0」の行。相手がつないだときに初めて出る）も無い状態が 5 秒続くと、ページの rAF を止め（`window.ghostlineHold`）、screencast も止める。最後の 1 枚は 0.5 秒ごとに送り続ける。来れば約 1 秒で描き始める。止めている間は GPU 10〜11 W・CPU 約 10 W で、「止める」と同じ。描いている間は `/tmp/ghostline-ndiview.rendering` を毎秒更新し、`rt_gpu_idle.sh` はこれが 5 秒以内なら打たない（描画中の Chrome は P8・約 20 W で、見張りが打つと効かずに倍々で打ち続け、そのうちの 1 回で描画が 10 秒止まって送り手が立ち上げ直した）。`Page.setWebLifecycleState` の frozen は使わない（active に戻してもページが hidden のままで、二度と描かない）。
   明日の軽いシーン（JDL-2026-R7、80 万 splat SH1）で描いているときの増え（待機 GPU 11 W・CPU 10 W から）：SRT 720p30 は GPU +8・CPU +11 W、NDI 720p30 は +9・+21 W、NDI 1080p60 は +26・+65 W。
   NDI|HX（H.264 の NDI）は NDI Advanced SDK（商用ライセンス）でしか送れないので使っていない。

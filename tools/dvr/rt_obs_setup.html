@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ghostline OBS 設定</title>
+<style>
+  /* the control page's look, one column of text: what the venue's OBS operator needs to pull the 3D feed */
+  :root { --paper: #f3f4f6; --ink: #0c0f14; --dim: rgba(12, 15, 20, .58); --faint: rgba(12, 15, 20, .2);
+          --sans: "Helvetica Neue", -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 400 14px/1.75 var(--sans); -webkit-font-smoothing: antialiased; }
+  main { max-width: 760px; margin: 0 auto; padding: 40px 24px 72px; }
+  a { color: inherit; }
+  .back { font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); text-decoration: none; }
+  h1 { font: 300 26px var(--sans); letter-spacing: .06em; margin: 18px 0 6px; }
+  .lead { color: var(--dim); margin: 0 0 8px; }
+  h2 { font: 400 11px var(--sans); letter-spacing: .3em; color: var(--dim); margin: 40px 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--faint); }
+  h3 { font: 600 15px var(--sans); margin: 22px 0 6px; }
+  ol, ul { padding-left: 22px; margin: 6px 0; }
+  li { margin: 3px 0; }
+  code, .v { font: 400 12.5px var(--mono); background: rgba(12, 15, 20, .06); padding: 1px 6px; border-radius: 3px; overflow-wrap: anywhere; }
+  .v { display: inline-block; user-select: all; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px 7px 0; border-bottom: 1px solid var(--faint); vertical-align: top; }
+  th { font-weight: 400; color: var(--dim); white-space: nowrap; width: 38%; }
+  .note { color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="/">← 操作ページ</a>
+  <h1>OBS で 3D の絵を受ける</h1>
+  <p class="lead">スキャンの上にドローンの位置と軌跡を描いた 3D の絵を、この機械（会場の網では <b class="host">rt4090</b>）が NDI と SRT で送っている。受け方は 3 つ。下の URL の IP は、このページを開いたときの機械の住所で埋めてある。会場の網が変わったら、このページを開き直す。</p>
+
+  <h2>1. NDI（おすすめ）</h2>
+  <p>Windows の OBS に NDI のプラグイン（DistroAV）と、NDI Runtime（DistroAV が入れるよう求める）が入っていること。</p>
+  <ol>
+    <li>ソースの「＋」→「NDI™ Source」</li>
+    <li>Source name で <span class="v">… (ghostline 3D)</span> を選ぶ</li>
+    <li>Bandwidth は Highest、Latency mode は Low</li>
+  </ol>
+  <p class="note">遅れは数フレーム。網の上の何台からでも同時に受けられる。一覧に出ないとき（網が分かれている、Windows のファイアウォール）：NDI Access Manager →「Remote Sources」に <span class="v host">rt4090</span> を足して OBS を開き直す。初回に Windows が OBS の通信を許可するか聞いてきたら「許可」。</p>
+
+  <h2>2. SRT（プラグイン不要）</h2>
+  <ol>
+    <li>ソースの「＋」→「メディアソース」</li>
+    <li>「ローカルファイル」のチェックを外す</li>
+    <li>下の表のとおりに入れる</li>
+  </ol>
+  <table>
+    <tr><th>入力</th><td><span class="v" id="srt">srt://rt4090:9000?mode=caller&amp;latency=120000</span></td></tr>
+    <tr><th>入力形式</th><td><span class="v">mpegts</span></td></tr>
+    <tr><th>ネットワークのバッファリング</th><td>0 MB</td></tr>
+    <tr><th>再接続の遅延</th><td>1〜2 秒</td></tr>
+    <tr><th>ハードウェアデコード</th><td>オン（Windows でも同じ）</td></tr>
+    <tr><th>FFmpeg Options</th><td><span class="v">fflags=nobuffer analyzeduration=1000000 probesize=1000000</span></td></tr>
+  </table>
+  <p class="note">遅れは OBS の中で 3〜4 秒（既定のままだと 6〜10 秒）。つなげるのは 1 台だけ。latency はマイクロ秒で、120000 は 120 ms。</p>
+
+  <h2>3. ブラウザソース（転送なし）</h2>
+  <table>
+    <tr><th>URL</th><td><span class="v" id="browser">http://rt4090:8080/view/?ndi=1&amp;fps=30</span></td></tr>
+    <tr><th>幅 × 高さ</th><td>1920 × 1080</td></tr>
+  </table>
+  <p class="note">描くのは OBS の PC の GPU。遅れはいちばん小さいが、OBS の PC が重くなる。設定 → 詳細設定で「ブラウザソースのハードウェアアクセラレーション」をオンにしておく。</p>
+
+  <h2>知っておくこと</h2>
+  <ul>
+    <li><b>カメラは操作ページで切り替える</b>：「配信のカメラ」の 全体・真上・マスの名前（その人を追いかける）とズーム。押すとすぐ OBS の絵が変わる（約 0.5 秒）。</li>
+    <li><b>受け手がいないあいだは描いていない</b>（電池のため）。つないでから約 1 秒で動き出し、最初の 1 秒は前の絵が出る。OBS のソースを非表示にしても受け続けるなら描き続ける。</li>
+    <li><b>大きさと fps</b>は操作ページの「配信」で選ぶ（既定 1280×720・30 fps）。変えると送り手が 2〜3 秒止まって立ち上げ直すので、ヒートの合間に。</li>
+    <li>絵が出ないとき：操作ページの「配信」が「止める」になっていないか。NDI なら送り手の名前が一覧に出るか（同じ網か）。SRT なら別の PC が先につないでいないか。</li>
+  </ul>
+</main>
+<script>
+  // the box's LAN address now (the venue's network changes; a name or a Tailscale address may not reach it from the OBS PC)
+  const fill = h => {
+    for (const el of document.querySelectorAll(".host")) el.textContent = h;
+    document.getElementById("srt").textContent = `srt://${h}:9000?mode=caller&latency=120000`;
+    document.getElementById("browser").textContent = `http://${h}:${location.port || 80}/view/?ndi=1&fps=30`;
+  };
+  fill(location.hostname);
+  fetch("/api/addr").then(r => r.json()).then(a => { if (a.length) fill(a[0]); }).catch(() => {});
+</script>
+</body>
+</html>
