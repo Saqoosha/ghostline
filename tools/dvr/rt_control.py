@@ -415,6 +415,21 @@ def poll_gpu():
         except Exception: gpu.clear()
         time.sleep(1)
 
+RAPL = "/sys/class/powercap/intel-rapl:0"         # the CPU package's energy counter: root only by default (CVE-2020-8694), the service's ExecStartPre opens it to its user's group
+cpu = {}
+def poll_cpu():                                    # W over each second from the counter's µJ (it wraps at max_energy_range_uj)
+    prev, said = None, None
+    while True:
+        try:
+            top, uj, t = int(open(RAPL + "/max_energy_range_uj").read()), int(open(RAPL + "/energy_uj").read()), time.monotonic()
+            if prev: cpu["w"] = round((uj - prev[0]) % top / 1e6 / (t - prev[1]), 1)
+            prev, said = (uj, t), None; cpu.pop("err", None)
+        except Exception as e:                     # the reason goes to the page; the log says it once per kind of failure
+            why = "読めない（ExecStartPre の chgrp / chmod）" if isinstance(e, PermissionError) else "RAPL が無い" if isinstance(e, FileNotFoundError) else type(e).__name__
+            cpu["err"] = why; cpu.pop("w", None); prev = None   # in this order: a reader on another thread never sees neither
+            if said != why: print(f"CPU power: {e} ({why})", flush=True); said = why
+        time.sleep(1)
+
 def latency(now):
     """ms from a frame's arrival to its position, the median over the last second's answers of every cell (None when there were none).
     The tracker's own "ms each" line is the time since its start over the passes made: it grows through every gap without a picture."""
@@ -426,7 +441,7 @@ def sample():
         time.sleep(1); now = time.time()
         with lock:
             on = S["phase"] != "stopped"
-            hist.append(dict(w=gpu.get("w"), temp=gpu.get("temp"), lat=latency(now) if on else None,
+            hist.append(dict(w=gpu.get("w"), cw=cpu.get("w"), temp=gpu.get("temp"), lat=latency(now) if on else None,
                              cells={c["cell"]: round(sum(1 for t, ok, _ in c["rows"] if ok and t > now - 1), 1) for c in S["cells"].values()} if on else {}))
 
 def state():
@@ -441,8 +456,8 @@ def state():
             try: conf = json.load(open(CONF))
             except Exception: conf = None
         return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], lat=latency(now) if S["phase"] != "stopped" else None, ndi=S["ndi"], input=S["input"],
-                    config=conf, view=view(), cam=cam(), out=out(), grow=dict(phase=G["phase"], error=G["error"], last=G["last"] and dict(G["last"], age=round(now - G["last"]["t"]), swapped=G["using"] == G["last"]["map"])), cells=cells, rec=recorders.recording(), relay=relay.status() if relay else relay_off and dict(ok=False, age=None, event=E("RELAY_EVENT"), err=relay_off, pending=0), log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
-                    hist=dict(n=HIST, w=[h["w"] for h in hist], temp=[h["temp"] for h in hist], lat=[h["lat"] for h in hist],
+                    config=conf, view=view(), cam=cam(), out=out(), grow=dict(phase=G["phase"], error=G["error"], last=G["last"] and dict(G["last"], age=round(now - G["last"]["t"]), swapped=G["using"] == G["last"]["map"])), cells=cells, rec=recorders.recording(), relay=relay.status() if relay else relay_off and dict(ok=False, age=None, event=E("RELAY_EVENT"), err=relay_off, pending=0), log=list(S["log"])[-80:], gpu=dict(gpu), cpu=dict(cpu), options=options(), push=PUSH,
+                    hist=dict(n=HIST, w=[h["w"] for h in hist], cw=[h["cw"] for h in hist], temp=[h["temp"] for h in hist], lat=[h["lat"] for h in hist],
                               cells={c: [h["cells"].get(c) for h in hist] for c in CELLS}))
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -551,6 +566,6 @@ def on_term(*_):                                   # systemctl stop: the tracker
         except Exception: pass
     recorders.stop_all(); os._exit(0)
 signal.signal(signal.SIGTERM, on_term)
-threading.Thread(target=poll_gpu, daemon=True).start(); threading.Thread(target=sample, daemon=True).start(); threading.Thread(target=between_heats, daemon=True).start()
+threading.Thread(target=poll_gpu, daemon=True).start(); threading.Thread(target=poll_cpu, daemon=True).start(); threading.Thread(target=sample, daemon=True).start(); threading.Thread(target=between_heats, daemon=True).start()
 print(f"control page on :{PORT}", flush=True)
 http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
