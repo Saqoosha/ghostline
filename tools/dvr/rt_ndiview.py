@@ -51,7 +51,7 @@ latest, got, painted = [None], threading.Event(), [0]     # the newest JPEG: old
 
 def write(m):
     with wlock: out.write(json.dumps(m).encode() + b"\0")
-def call(method, params=None, sid=None, tries=1):
+def call(method, params=None, sid=None, tries=1, soft=False):   # soft: None on a refusal instead of exiting
     for k in range(tries):                                # the screencast is refused while the page is still loading
         i = next(ids); ev = threading.Event(); waits[i] = [ev, None]
         write(dict(id=i, method=method, params=params or {}, **({"sessionId": sid} if sid else {})))
@@ -59,6 +59,7 @@ def call(method, params=None, sid=None, tries=1):
         m = waits.pop(i)[1]
         if "error" not in m: return m["result"]
         if k < tries - 1: time.sleep(1)
+    if soft: return None
     sys.exit(f"{method}: {m['error']}")
 def read():                                               # any error here ends the process: a dead reader would freeze the feed on its last frame
     try:
@@ -85,7 +86,8 @@ call("Page.enable", sid=sid); call("Inspector.enable", sid=sid)
 nav = call("Page.navigate", dict(url=URL), sid)
 if nav.get("errorText"): sys.exit(f"{URL}: {nav['errorText']}")    # e.g. the control page not up yet at boot: the service tries again
 for _ in range(30):                                       # the live page sets window.ghostline once it runs; a 404 or an error page never does
-    if call("Runtime.evaluate", dict(expression="!!window.ghostline", returnByValue=True), sid)["result"].get("value"): break
+    r = call("Runtime.evaluate", dict(expression="!!window.ghostline", returnByValue=True), sid, soft=True)   # refused while the old document goes
+    if r and r["result"].get("value"): break
     time.sleep(1)
 else: sys.exit(f"{URL}: the 3D page did not start")
 call("Page.startScreencast", dict(format="jpeg", quality=Q, maxWidth=W, maxHeight=H, everyNthFrame=1), sid, tries=30)
@@ -93,7 +95,9 @@ print(f"{URL} -> {' and '.join(sorted(OUT))} {W}x{H} {FPS} fps", flush=True)
 
 srt_jpg, srt_got = [None], threading.Event()
 def srt():                                                # its own thread: ffmpeg blocks until a caller comes, and NDI must not wait for it
+    quick = 0
     while True:
+        began = time.time()
         # no probing (its default 5 MB, ~4 s of 720p JPEGs, is held for good) and no mux delay.
         # Not -fflags nobuffer: with the mjpeg demuxer on a pipe it lets almost nothing through
         ff = subprocess.Popen(["ffmpeg", "-hide_banner", "-loglevel", "warning", "-probesize", "32", "-analyzeduration", "0",
@@ -107,7 +111,10 @@ def srt():                                                # its own thread: ffmp
                 if srt_got.wait(0.5): srt_got.clear()
                 if srt_jpg[0]: ff.stdin.write(srt_jpg[0])  # nothing new for 0.5 s: the last frame again
         except (BrokenPipeError, OSError): pass
-        ff.kill(); ff.wait(); print(f"SRT: ffmpeg ended ({ff.returncode}: the caller left, or see its lines above), listening again", flush=True); time.sleep(1)
+        ff.kill(); ff.wait(); print(f"SRT: ffmpeg ended ({ff.returncode}: the caller left, or see its lines above), listening again", flush=True)
+        quick = quick + 1 if time.time() - began < 3 else 0
+        if quick >= 5: raise RuntimeError("ffmpeg ended within 3 s five times running (NVENC, the port?)")
+        time.sleep(1)
 def srt_or_exit():                                        # NDI must not carry on alone when SRT is broken for good (e.g. no ffmpeg)
     try: srt()
     except Exception as e: print(f"SRT: {type(e).__name__}: {e}", flush=True); os._exit(1)

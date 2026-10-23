@@ -110,11 +110,11 @@ window.addEventListener('keydown', e => {
 })
 if (NDI) {                                                // mode orbit | top | p<output name> (not on the feed yet: orbit until it is), zoom 0.4-3
   $('panel').style.display = 'none'
-  const ev = new EventSource('/api/cam/events')            // a dropped connection is retried by the browser, a refused or failed one is not: load again
+  const ev = new EventSource('/api/cam/events')            // the browser retries a dropped connection, but gives up on an HTTP error: load again
   ev.onmessage = e => { const c = JSON.parse(e.data); if (typeof c.zoom === 'number') view.zoom = c.zoom; if (typeof c.mode === 'string') setMode(c.mode) }
   ev.onerror = () => { if (ev.readyState === EventSource.CLOSED) setTimeout(() => location.reload(), 3000) }
 }
-let followOn = false                                       // the followed pilot was on screen last frame
+let followOn = false, lostAt = 0                           // the followed pilot was on screen last frame; when it went
 function cameraAt(t: number, dt: number) {
   const up = [...pilots.values()].filter(p => p.dot.enabled && p.state > 1).map(p => p.dot.getPosition())   // in the air and answered
   if (!orb.init) { orb.target.copy(home.target); orb.dist = home.dist; orb.init = true }
@@ -127,8 +127,10 @@ function cameraAt(t: number, dt: number) {
     cam.setPosition(home.target.x, home.target.y + home.dist * 1.1 * view.zoom, home.target.z); cam.setRotation(r); return
   }
   if (camMode[0] === 'p') {
-    const p = pilots.get(camMode.slice(1)), on = !!p?.dot.enabled
-    if (on !== followOn) { blendFrom.pos.copy(cam.getPosition()); blendFrom.rot.copy(cam.getRotation()); blendT = 0; followOn = on }   // the pilot came or went: glide, not cut
+    const p = pilots.get(camMode.slice(1)), on = !!p?.dot.enabled, now = performance.now()
+    if (on) lostAt = 0; else if (followOn && !lostAt) lostAt = now
+    if (!on && lostAt && now - lostAt < 3000) return          // lost for a moment: hold where the camera is
+    if (on !== followOn) { blendFrom.pos.copy(cam.getPosition()); blendFrom.rot.copy(cam.getRotation()); blendT = 0; followOn = on }   // the pilot came, or is gone: glide, not cut
     if (p && on) {                              // behind and above the drone, looking a little ahead along where it is going
       const now = p.dot.getPosition().clone(), fwd = p.fwd
       cam.setPosition(now.clone().sub(fwd.clone().mulScalar(8 * view.zoom)).add(new pc.Vec3(0, 3 * view.zoom, 0))); cam.lookAt(now.add(fwd.clone().mulScalar(5)))

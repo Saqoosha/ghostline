@@ -342,7 +342,9 @@ def set_out(v):                                    # the sender's output: writte
     if c["out"] not in OUTS: raise ValueError("出力は ndi・srt・ndi,srt・off")
     if (c["w"], c["h"]) not in SIZES: raise ValueError("大きさは 1280x720 か 1920x1080")
     if c["fps"] not in (30, 60): raise ValueError("fps は 30 か 60")
-    if c == out() and os.path.exists(OUTCONF): return   # unchanged: a write would restart the sender for nothing
+    try:
+        if json.load(open(OUTCONF)) == c: return       # unchanged: a write would restart the sender for nothing
+    except Exception: pass                             # missing or broken: written
     tmp = f"{OUTCONF}.{threading.get_ident()}.tmp"
     with open(tmp, "w") as f: json.dump(c, f)
     os.replace(tmp, OUTCONF)
