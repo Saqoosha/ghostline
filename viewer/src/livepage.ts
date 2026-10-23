@@ -28,9 +28,11 @@ const FEED = QS.get('feed') ?? `http://${location.hostname}:8765`   // served by
 const REPLAY = QS.get('replay')
 const NDI = QS.has('ndi')
 const FPS = Number(QS.get('fps')) || 0
-if (FPS > 0) {                                             // before the app starts: every animation frame of the page waits its turn
+const hold = { paused: false }                             // rt_ndiview.py sets it (window.ghostlineHold) while no one receives: no update, no draw
+if (FPS > 0 || NDI) {                                      // before the app starts: every animation frame of the page waits its turn
   const raf = window.requestAnimationFrame.bind(window); let due = 0
-  window.requestAnimationFrame = (cb: FrameRequestCallback) => raf(function wait(t) { if (t + 2 < due) { raf(wait); return } due = Math.max(due, t) + 1000 / FPS; cb(t) })
+  window.requestAnimationFrame = (cb: FrameRequestCallback) => raf(function wait(t) { if (hold.paused || t + 2 < due) { raf(wait); return } due = Math.max(due, t) + (FPS > 0 ? 1000 / FPS : 0); cb(t) })
+  Object.assign(window, { ghostlineHold: hold })
 }
 const ONLY = QS.get('stream')                     // one cell (rt_track.py's output name) to draw; unset: every cell on the feed
 const KEY = 'ghostline-live:' + (QS.get('data') ?? 'data')
