@@ -415,18 +415,19 @@ def poll_gpu():
         except Exception: gpu.clear()
         time.sleep(1)
 
-RAPL = "/sys/class/powercap/intel-rapl:0"         # the CPU package's energy counter: root only by default, the service's ExecStartPre opens it
+RAPL = "/sys/class/powercap/intel-rapl:0"         # the CPU package's energy counter: root only by default (CVE-2020-8694), the service's ExecStartPre opens it to its user's group
 cpu = {}
 def poll_cpu():                                    # W over each second from the counter's µJ (it wraps at max_energy_range_uj)
-    prev, said = None, False
+    prev, said = None, None
     while True:
         try:
-            top, e, t = int(open(RAPL + "/max_energy_range_uj").read()), int(open(RAPL + "/energy_uj").read()), time.monotonic()
-            if prev: cpu["w"] = round((e - prev[0]) % top / 1e6 / (t - prev[1]), 1)
-            prev = (e, t)
-        except Exception as e:
-            cpu.clear(); prev = None
-            if not said: print(f"CPU power: {e} (ExecStartPre=+chmod 0444 {RAPL}/energy_uj in the unit)", flush=True); said = True
+            top, uj, t = int(open(RAPL + "/max_energy_range_uj").read()), int(open(RAPL + "/energy_uj").read()), time.monotonic()
+            if prev: cpu["w"] = round((uj - prev[0]) % top / 1e6 / (t - prev[1]), 1)
+            prev, said = (uj, t), None; cpu.pop("err", None)
+        except Exception as e:                     # the reason goes to the page; the log says it once per kind of failure
+            why = "読めない（ExecStartPre の chgrp / chmod）" if isinstance(e, PermissionError) else "RAPL が無い" if isinstance(e, FileNotFoundError) else type(e).__name__
+            cpu.clear(); cpu["err"] = why; prev = None
+            if said != why: print(f"CPU power: {e} ({why})", flush=True); said = why
         time.sleep(1)
 
 def latency(now):

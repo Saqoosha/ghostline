@@ -144,6 +144,7 @@
         -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 70%); mask-image: linear-gradient(to bottom, transparent 0, #000 70%); }
 
   @media (max-width: 640px) {
+    .cast .grow { flex-wrap: wrap; row-gap: 6px; } .cast .grow > span:first-child { min-width: 0; flex-basis: 100%; }
     main { padding: 20px 16px 48px; } .mark { font-size: 17px; letter-spacing: .34em; gap: 10px; } .ctl { gap: 12px; margin-top: 14px; } #up { display: none; }
     .pilots { grid-template-columns: 1fr 1fr; } .q { height: 126px; padding: 10px 10px 0; } .q:nth-child(3) { border-left: 0; } .q:nth-child(-n+2) { border-bottom: 1px solid var(--faint); }
     .val .num { font-size: 44px; } .hd input[type=text] { font-size: 14px; letter-spacing: .12em; } .q .trail { left: 10px; right: 10px; } .tag { font-size: 10px; padding-left: 8px; }
@@ -186,7 +187,7 @@
 
   <div class="metrics">
     <div class="m"><b class="num" id="gw">–</b><u>W</u><span>GPU の電力</span><div class="trail"><svg id="sp-w" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-w" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-w)"/></svg><i class="head" id="hd-w"></i></div></div>
-    <div class="m"><b class="num" id="cw">–</b><u>W</u><span>CPU の電力</span><div class="trail"><svg id="sp-cw" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-cw" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-cw)"/></svg><i class="head" id="hd-cw"></i></div></div>
+    <div class="m"><b class="num" id="cw">–</b><u>W</u><span id="cp">CPU の電力</span><div class="trail"><svg id="sp-cw" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-cw" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-cw)"/></svg><i class="head" id="hd-cw"></i></div></div>
     <div class="m"><b class="num" id="gt">–</b><u>℃</u><span id="gp">GPU の温度</span><div class="trail"><svg id="sp-temp" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-temp" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-temp)"/></svg><i class="head" id="hd-temp"></i></div></div>
     <div class="m"><b class="num" id="cyc">–</b><u>ms</u><span>映像が届いてから位置が出るまで</span><div class="trail"><svg id="sp-cycle" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-cycle" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-cycle)"/></svg><i class="head" id="hd-cycle"></i></div></div>
   </div>
@@ -317,7 +318,7 @@ function render(s) {
   $("go-l").textContent = stopped ? "開始" : "停止"; $("go").className = stopped ? "" : "stop"; $("go").disabled = s.phase === "stopping";
   for (const el of document.querySelectorAll("#form input, #form select, .q .hd input")) el.disabled = !stopped;
   num("gw", s.gpu.w != null ? s.gpu.w.toFixed(0) : "–");
-  num("cw", s.cpu && s.cpu.w != null ? s.cpu.w.toFixed(0) : "–");
+  num("cw", s.cpu && s.cpu.w != null ? s.cpu.w.toFixed(0) : "–"); $("cp").textContent = "CPU の電力" + (s.cpu && s.cpu.err ? ` · ${s.cpu.err}` : "");
   num("gt", s.gpu.temp != null ? String(s.gpu.temp) : "–");
   $("gp").textContent = "GPU の温度" + (s.gpu.pstate ? ` · ${s.gpu.pstate === "P8" ? "待機" : "動作中"}` : "");   // P8 is the idle state, P0-P2 working
   num("cyc", s.lat != null ? s.lat.toFixed(0) : "–");
@@ -341,7 +342,7 @@ function render(s) {
   }
   pvName = (stopped ? $("source").value : (s.config && s.config.source) || "").trim();
   TopView.update(s, ...(stopped ? [$("map").value, $("scene").value, $("trackfile").value] : [s.config && s.config.map, (s.config && s.config.scene) || "", (s.config && s.config.track) || ""]));
-  const h = s.hist; spark("w", h.w, h.n, 0, 150); spark("cw", h.cw || [], h.n, 0, 150); spark("temp", h.temp, h.n, 25, 60); spark("cycle", h.lat, h.n, 0, 40);
+  const h = s.hist; spark("w", h.w, h.n, 0, 150); spark("cw", h.cw || [], h.n, 40, 120); spark("temp", h.temp, h.n, 25, 60); spark("cycle", h.lat, h.n, 0, 40);
   for (const [cell] of CELLS) spark(cell, h.cells[cell], h.n, 0, 30);
   const log = $("log"); log.textContent = s.log.join("\n"); if (logAtEnd) log.scrollTop = log.scrollHeight;
   phase = s.phase;
