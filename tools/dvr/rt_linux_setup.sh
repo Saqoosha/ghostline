@@ -126,11 +126,12 @@ step "the 3D page out over NDI / SRT (rt_ndiview.py): headless Chrome on the GPU
 if ! command -v google-chrome >/dev/null; then
   d=$(mktemp -d); wget -q -O "$d/chrome.deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt-get install -y "$d/chrome.deb"; rm -rf "$d"
 fi
-cp "$(dirname "$0")/rt_ndiview.py" ~/rt/
+cp "$(dirname "$0")/rt_ndiview.py" ~/rt/   # the page it draws (?ndi=1) is the viewer's build in ~/rt/view/, built and copied from the Mac (realtime doc)
 sudo tee /etc/systemd/system/ghostline-ndiview.service > /dev/null <<UNIT
 [Unit]
 Description=ghostline: the control page's 3D page as an NDI source / SRT stream (rt_ndiview.py)
 After=network-online.target avahi-daemon.service ghostline-control.service
+Wants=ghostline-control.service
 # every change of output is a restart: systemd's default limit (5 starts in 10 s) would leave it stopped after a few quick changes
 StartLimitIntervalSec=0
 

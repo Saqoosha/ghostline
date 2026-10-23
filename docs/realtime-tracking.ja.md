@@ -423,6 +423,8 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   ヘッドレスの Chrome が `/view/?ndi=1`（パネルと DVR の枠なし）を 4090 で描き、screencast の JPEG を NDI（名前「ghostline 3D」）か SRT（`srt://rt4090:9000`、NVENC の H.264、MPEG-TS、待ち受けは 1 台）で出す。
   操作ページの「配信」で出力（NDI / SRT / 両方 / 止める）・大きさ（720p / 1080p）・fps（30 / 60）を選ぶ（`~/.ghostline-out.json`。変わると送り手が終わり、service が 1 秒後に新しい設定で立ち上げ直す。止めている間は Chrome を起こさない）。
   「配信のカメラ」で全体・真上・マスの追いかけとズーム（`~/.ghostline-cam.json`）。ページは `/api/cam/events`（SSE）で押した瞬間に受ける。押してから SRT の絵が変わるまで 0.55 秒（カメラは 0.7 秒かけて滑る）。fps を下げるとページ自身がその間隔でしか描かない（`?fps=`）ので、GPU も splat の並べ替えも JPEG も減る。
+  配る：`scp tools/dvr/rt_ndiview.py tools/dvr/rt_control.* tools/dvr/rt_topview.js tools/dvr/rt_rec.py rt4090:~/rt/`、ページは Mac で `(cd viewer && VITE_BASE=/view/ npx vite build --outDir /tmp/view)` して `scp -r /tmp/view/{assets,live.html} rt4090:~/rt/view/`（`rt_linux_setup.sh` はビルドを配らない）。
+  録画係（`rt_rec.py`）は自分の配信を録らない（`REC_SKIP`、既定 `(ghostline 3D)`。外すと 16 Mbps で録り続ける）。
   Chrome は `--use-angle=gl-egl` でないと GPU を使わない（既定は SwiftShader で 2 fps、Vulkan は GPU プロセスが落ちる）。X は要らない。
 
   | 配信の形（spirula の学習と同時で揺れる値） | CPU | CPU パッケージの増え |
