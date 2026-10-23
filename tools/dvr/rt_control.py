@@ -426,7 +426,7 @@ def poll_cpu():                                    # W over each second from the
             prev, said = (uj, t), None; cpu.pop("err", None)
         except Exception as e:                     # the reason goes to the page; the log says it once per kind of failure
             why = "読めない（ExecStartPre の chgrp / chmod）" if isinstance(e, PermissionError) else "RAPL が無い" if isinstance(e, FileNotFoundError) else type(e).__name__
-            cpu.clear(); cpu["err"] = why; prev = None
+            cpu["err"] = why; cpu.pop("w", None); prev = None   # in this order: a reader on another thread never sees neither
             if said != why: print(f"CPU power: {e} ({why})", flush=True); said = why
         time.sleep(1)
 
