@@ -90,15 +90,15 @@ call("Page.enable", sid=sid); call("Inspector.enable", sid=sid)
 nav = call("Page.navigate", dict(url=URL), sid)
 if nav.get("errorText"): sys.exit(f"{URL}: {nav['errorText']}")    # e.g. the control page not up yet at boot: the service tries again
 for _ in range(30):                                       # the live page sets window.ghostline once it runs; a 404 or an error page never does
-    r = call("Runtime.evaluate", dict(expression="!!window.ghostline", returnByValue=True), sid, soft=True)   # refused while the old document goes
+    r = call("Runtime.evaluate", dict(expression="!!(window.ghostline && window.ghostlineHold)", returnByValue=True), sid, soft=True)   # refused while the old document goes
     if r and r["result"].get("value"): break
     time.sleep(1)
-else: sys.exit(f"{URL}: the 3D page did not start")
+else: sys.exit(f"{URL}: the 3D page did not start, or is an old viewer build without ghostlineHold")
 CAST = dict(format="jpeg", quality=Q, maxWidth=W, maxHeight=H, everyNthFrame=1)
 call("Page.startScreencast", CAST, sid, tries=30)
 def hold(paused):                                         # the page's own animation frames held (livepage.ts ghostlineHold): no update, no draw, no GPU.
-    r = call("Runtime.evaluate", dict(expression=f"window.ghostlineHold.paused = {'true' if paused else 'false'}"), sid)   # Not Page.setWebLifecycleState: back to "active" the page stays hidden and never draws again
-    if "exceptionDetails" in r: sys.exit(f"the page cannot be held ({r['exceptionDetails'].get('exception', {}).get('description', '?')}): an old viewer build in view/?")
+    call("Runtime.evaluate", dict(expression=f"window.ghostlineHold && (window.ghostlineHold.paused = {'true' if paused else 'false'})"), sid, soft=True)   # Not Page.setWebLifecycleState: back to "active" the page stays hidden and never draws again
+    # soft and unchecked: mid-reload there is no page to hold, and the next second's call holds the new one
 def draw(on):
     if on: hold(False); call("Page.startScreencast", CAST, sid)
     else: call("Page.stopScreencast", sid=sid); hold(True)
