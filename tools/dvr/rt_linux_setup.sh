@@ -122,6 +122,29 @@ WantedBy=multi-user.target
 UNIT
 sudo systemctl daemon-reload; sudo systemctl enable --now ghostline-control.service
 
+step "the 3D page out over NDI / SRT (rt_ndiview.py): headless Chrome on the GPU; the control page picks the output, size and rate"
+if ! command -v google-chrome >/dev/null; then
+  wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt-get install -y /tmp/chrome.deb
+fi
+cp "$(dirname "$0")/rt_ndiview.py" ~/rt/
+sudo tee /etc/systemd/system/ghostline-ndiview.service > /dev/null <<UNIT
+[Unit]
+Description=ghostline: the control page's 3D page as an NDI source / SRT stream (rt_ndiview.py)
+After=network-online.target avahi-daemon.service ghostline-control.service
+
+[Service]
+User=$USER
+WorkingDirectory=$HOME/rt
+ExecStart=$HOME/mastenv/bin/python -u rt_ndiview.py
+# it exits when the control page changes its output, and starts again with the new one
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload; sudo systemctl enable --now ghostline-ndiview.service
+
 step "done: a paced 4-pilot run to compare with WSL"
 echo 'cd ~/rt && GLUE=eng_linux/glue_mix.engine XFEAT=eng_linux/xfeat_fp32.engine RENDER=1 RCLIP=2 PACE=1 \'
 echo '  SCENE=~/scenes/FDF-2026-R6b-spirula-web-dvr2.ply ~/mastenv/bin/python rt_track.py map_fdf-r6b-d05.npz,../fdf-r6b-d05/dvr_pinhole.mp4,pw/o_d05,truth-d05.json ...'

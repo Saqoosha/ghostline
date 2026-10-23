@@ -10,6 +10,9 @@
 //                           and <name>.mp4 if it is there (what the sender sent). Each answer shows up when it did live
 //                           (its frame's time plus the tracker's latency), so the sliders can be tried on the same flight.
 //   ?from=30&to=175         the part of the recording that is played (seconds); it loops
+//   ?ndi=1                  the picture rt_ndiview.py sends out over NDI: no panel and no capture box, and the camera is
+//                           the control page's (rt_control.py /api/cam/events: each change pushed as it is made)
+//   ?fps=30                 draw at most this often (rt_ndiview.py FPS): the GPU, the splat sort and the screencast all halve
 // The sliders and the Free camera's view are remembered in this browser (localStorage); the page always opens on Orbit.
 // The dot and the trail are live.ts': the dot 100 ms late, fitted between the answers around it; the trail refitted as
 // answers arrive (the dot's delay is the slider's, 100 ms to start with). The clock is the tracker's (when each frame reached it), and "now" is the newest time on it that an
@@ -23,6 +26,12 @@ const QS = new URLSearchParams(location.search)
 const DATA = import.meta.env.BASE_URL + (/^[\w.-]+$/.test(QS.get('data') ?? '') ? QS.get('data') : 'data') + '/'   // a folder name only: never another site
 const FEED = QS.get('feed') ?? `http://${location.hostname}:8765`   // served by rt_control.py (/view/): its tracker's PUSH
 const REPLAY = QS.get('replay')
+const NDI = QS.has('ndi')
+const FPS = Number(QS.get('fps')) || 0
+if (FPS > 0) {                                             // before the app starts: every animation frame of the page waits its turn
+  const raf = window.requestAnimationFrame.bind(window); let due = 0
+  window.requestAnimationFrame = (cb: FrameRequestCallback) => raf(function wait(t) { if (t + 2 < due) { raf(wait); return } due = Math.max(due, t) + 1000 / FPS; cb(t) })
+}
 const ONLY = QS.get('stream')                     // one cell (rt_track.py's output name) to draw; unset: every cell on the feed
 const KEY = 'ghostline-live:' + (QS.get('data') ?? 'data')
 const stored = (() => { try { return JSON.parse(localStorage.getItem(KEY) ?? '{}') } catch { return {} } })()
@@ -99,6 +108,12 @@ window.addEventListener('keydown', e => {
   const ps = [...pilots.values()], v = k <= 3 ? ['orbit', 'top', 'free'][k - 1] : ps[k - 4] ? 'p' + ps[k - 4].name : ''
   if (v) setMode(v)
 })
+if (NDI) {                                                // mode orbit | top | p<cell> (a cell not on the feed yet: orbit until it is), zoom 0.4-3
+  $('panel').style.display = 'none'
+  new EventSource('/api/cam/events').onmessage = e => {     // the browser connects again by itself when the control page restarts
+    const c = JSON.parse(e.data); if (typeof c.zoom === 'number') view.zoom = c.zoom; if (typeof c.mode === 'string') setMode(c.mode)
+  }
+}
 function cameraAt(t: number, dt: number) {
   const up = [...pilots.values()].filter(p => p.dot.enabled && p.state > 1).map(p => p.dot.getPosition())   // in the air and answered
   if (!orb.init) { orb.target.copy(home.target); orb.dist = home.dist; orb.init = true }
@@ -299,7 +314,7 @@ async function startVideo() {
     const st = s.getVideoTracks()[0].getSettings(); note.textContent = `${st.width}x${st.height} ${Math.round(st.frameRate ?? 0)} fps`
   } catch (e) { note.textContent = 'no live image: ' + (e as Error).message }
 }
-if (!REPLAY && navigator.mediaDevices) startVideo()
+if (!REPLAY && !NDI && navigator.mediaDevices) startVideo()
 else if (!REPLAY) $('dvr').hidden = true               // plain http from another machine (rt_control.py's /view/): no camera to read here
 
 let events: { due: number; win: number[][] }[] = [], evK = 0, lastRt = 0   // replay: the revisions, in the order they came
