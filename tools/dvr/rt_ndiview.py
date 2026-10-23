@@ -11,8 +11,11 @@
 # usage (rt4090, mastenv for cv2 and cyndilib): python rt_ndiview.py      env: URL (http://localhost:8080/view/?ndi=1), NAME (ghostline 3D),
 #        OUT (ndi, srt, ndi,srt or off), W, H (1920, 1080), FPS (60; below that the page itself draws less often: ?fps=),
 #        SRT (srt://0.0.0.0:9000?mode=listener&latency=120000, latency in µs), BITRATE (6M), Q (the JPEG quality, 90),
-#        STATS (seconds between the fps lines in the log, 60)
-# Exits when Chrome or the page goes away, the page does not load, or nothing is painted for 10 s (the service restarts it).
+#        STATS (seconds between the fps lines in the log, 60), IDLE (5), RENDERING (/tmp/ghostline-ndiview.rendering)
+# Draws only while someone receives: with no NDI receiver and no SRT caller for IDLE s the page is held (no update, no GPU) and the
+# screencast stopped, and the last frame goes on being sent every 0.5 s (what a new receiver sees first; SRT's ffmpeg needs input to
+# listen at all). While drawing it touches RENDERING each second, so rt_gpu_idle.sh leaves the GPU alone.
+# Exits when Chrome or the page goes away, the page does not load, or nothing is painted for 10 s while drawing (the service restarts it).
 import json, os, subprocess, sys, threading, time, base64, cv2, numpy as np
 from fractions import Fraction
 E = os.environ.get
@@ -24,6 +27,7 @@ except FileNotFoundError: conf = {}
 except Exception as e: print(f"{OUTCONF}: {e}, the env's settings instead", flush=True); conf = {}
 URL, NAME, Q = E("URL", "http://localhost:8080/view/?ndi=1"), E("NAME", "ghostline 3D"), int(E("Q", 90))
 W, H, FPS = int(conf.get("w", E("W", 1920))), int(conf.get("h", E("H", 1080))), int(conf.get("fps", E("FPS", 60)))
+IDLE, RENDERING = float(E("IDLE", 5)), E("RENDERING", "/tmp/ghostline-ndiview.rendering")
 OUT, STATS = set(str(conf.get("out", E("OUT", "ndi"))).split(",")), float(E("STATS", 60))
 SRT, BITRATE = E("SRT", "srt://0.0.0.0:9000?mode=listener&latency=120000"), E("BITRATE", "6M")
 if not OUT or OUT - {"ndi", "srt", "off"} or ("off" in OUT and len(OUT) > 1): sys.exit(f"the output is ndi, srt, ndi,srt or off, not {','.join(OUT)}")
@@ -86,33 +90,49 @@ call("Page.enable", sid=sid); call("Inspector.enable", sid=sid)
 nav = call("Page.navigate", dict(url=URL), sid)
 if nav.get("errorText"): sys.exit(f"{URL}: {nav['errorText']}")    # e.g. the control page not up yet at boot: the service tries again
 for _ in range(30):                                       # the live page sets window.ghostline once it runs; a 404 or an error page never does
-    r = call("Runtime.evaluate", dict(expression="!!window.ghostline", returnByValue=True), sid, soft=True)   # refused while the old document goes
+    r = call("Runtime.evaluate", dict(expression="!!(window.ghostline && window.ghostlineHold)", returnByValue=True), sid, soft=True)   # refused while the old document goes
     if r and r["result"].get("value"): break
     time.sleep(1)
-else: sys.exit(f"{URL}: the 3D page did not start")
-call("Page.startScreencast", dict(format="jpeg", quality=Q, maxWidth=W, maxHeight=H, everyNthFrame=1), sid, tries=30)
+else: sys.exit(f"{URL}: the 3D page did not start, or is an old viewer build without ghostlineHold")
+CAST = dict(format="jpeg", quality=Q, maxWidth=W, maxHeight=H, everyNthFrame=1)
+call("Page.startScreencast", CAST, sid, tries=30)
+def hold(paused):                                         # the page's own animation frames held (livepage.ts ghostlineHold): no update, no draw, no GPU.
+    call("Runtime.evaluate", dict(expression=f"window.ghostlineHold && (window.ghostlineHold.paused = {'true' if paused else 'false'})"), sid, soft=True)   # Not Page.setWebLifecycleState: back to "active" the page stays hidden and never draws again
+    # soft and unchecked: mid-reload there is no page to hold, and the next second's call holds the new one
+def draw(on):
+    if on: hold(False); call("Page.startScreencast", CAST, sid)
+    else: call("Page.stopScreencast", sid=sid); hold(True)
 print(f"{URL} -> {' and '.join(sorted(OUT))} {W}x{H} {FPS} fps", flush=True)
 
-srt_jpg, srt_got = [None], threading.Event()
+srt_jpg, srt_got, srt_caller = [None], threading.Event(), [False]
+def srt_log(ff):                                          # ffmpeg's lines to the journal, and the caller's arrival; dying here would leave ffmpeg blocked on a full stderr
+    try:
+        for line in ff.stderr:
+            line = line.decode(errors="replace").rstrip()
+            if line.startswith("Output #0") and ff.poll() is None: srt_caller[0] = True; print("SRT: a caller connected", flush=True)   # not a late line of an ffmpeg already gone
+            elif line.startswith(("[", "Error")) or "rror" in line: print(line, flush=True)   # warnings and errors; the stream dumps are left out
+    except Exception as e: print(f"SRT log: {type(e).__name__}: {e}", flush=True); os._exit(1)
 def srt():                                                # its own thread: ffmpeg blocks until a caller comes, and NDI must not wait for it
     quick = 0
     while True:
-        began = time.time()
+        began = time.monotonic()
         # no probing (its default 5 MB, ~4 s of 720p JPEGs, is held for good) and no mux delay.
         # Not -fflags nobuffer: with the mjpeg demuxer on a pipe it lets almost nothing through
-        ff = subprocess.Popen(["ffmpeg", "-hide_banner", "-loglevel", "warning", "-probesize", "32", "-analyzeduration", "0",
+        # its "Output #0" line comes when a caller has connected (measured): that is how this knows someone receives
+        ff = subprocess.Popen(["ffmpeg", "-hide_banner", "-loglevel", "info", "-nostats", "-probesize", "32", "-analyzeduration", "0",
                                "-use_wallclock_as_timestamps", "1", "-f", "mjpeg", "-i", "pipe:0",
                                "-fps_mode", "cfr", "-r", str(FPS), "-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ll", "-rc", "cbr", "-b:v", BITRATE,
                                "-g", str(FPS), "-bf", "0", "-delay", "0", "-pix_fmt", "yuv420p",
-                               "-muxdelay", "0", "-muxpreload", "0", "-flush_packets", "1", "-f", "mpegts", SRT], stdin=subprocess.PIPE)
+                               "-muxdelay", "0", "-muxpreload", "0", "-flush_packets", "1", "-f", "mpegts", SRT], stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        threading.Thread(target=srt_log, args=(ff,), daemon=True).start()
         print("SRT: waiting for a caller", flush=True)
         try:
             while ff.poll() is None:
                 if srt_got.wait(0.5): srt_got.clear()
                 if srt_jpg[0]: ff.stdin.write(srt_jpg[0])  # nothing new for 0.5 s: the last frame again
         except (BrokenPipeError, OSError): pass
-        ff.kill(); ff.wait(); print(f"SRT: ffmpeg ended ({ff.returncode}: the caller left, or see its lines above), listening again", flush=True)
-        quick = quick + 1 if time.time() - began < 3 else 0
+        ff.kill(); ff.wait(); srt_caller[0] = False; print(f"SRT: ffmpeg ended ({ff.returncode}: the caller left, or see its lines above), listening again", flush=True)
+        quick = quick + 1 if time.monotonic() - began < 3 else 0
         if quick >= 5: raise RuntimeError("ffmpeg ended within 3 s five times running (NVENC, the port?)")
         time.sleep(1)
 def srt_or_exit():                                        # NDI must not carry on alone when SRT is broken for good (e.g. no ffmpeg)
@@ -124,10 +144,26 @@ if "ndi" in OUT:
     vf = VideoSendFrame(); vf.set_resolution(W, H); vf.set_frame_rate(Fraction(FPS, 1)); vf.set_fourcc(FourCC.BGRX)
     s = Sender(NAME, clock_video=False); s.set_video_frame(vf); s.open()
 # two buffers in turn: the async send reads one while the next frame is decoded into the other (a decode ~7 ms, the send ~4)
-bufs = [np.empty((H, W, 4), np.uint8) for _ in range(2)]; t0 = time.time(); n = k = 0; last = 0.0; seen = (t0, 0, 0); paint_at = (t0, 0)
+clock = time.monotonic                                    # the loop's timers: a step of the wall clock (NTP at the venue) must not hold or wake the page
+bufs = [np.empty((H, W, 4), np.uint8) for _ in range(2)]; t0 = clock(); n = k = 0; last = 0.0; seen = (t0, 0, 0); paint_at = (t0, 0); touch_err = None
+drawing, heard, touched = True, t0, 0.0                   # heard: when a receiver was last there
 while True:
-    if painted[0] != paint_at[1]: paint_at = (time.time(), painted[0])
-    elif time.time() - paint_at[0] > 10: sys.exit("nothing painted for 10 s")   # a hung page or GPU: the last frame would go out for ever
+    now = clock(); ndi_n = s.get_num_connections(0) if "ndi" in OUT else 0
+    if ndi_n or srt_caller[0]: heard = now
+    want = now - heard < IDLE or not n                    # the first frame is drawn whatever: a receiver that comes later sees it
+    if want != drawing:
+        draw(want); drawing = want; paint_at = (now, painted[0])
+        print(f"{'drawing' if want else 'held'}: {ndi_n} NDI receiver(s), SRT caller {'yes' if srt_caller[0] else 'no'}", flush=True)
+    if now - touched >= 1:                                # each second: drawing, the mark for rt_gpu_idle.sh; held, the hold again (a reload of the page drops it)
+        if drawing:
+            try: open(RENDERING, "w").close()
+            except OSError as e:                          # without the mark rt_gpu_idle.sh suspends the GPU under the page: say so once
+                if touch_err != str(e): print(f"{RENDERING}: {e}", flush=True); touch_err = str(e)
+        else: hold(True)
+        touched = now
+    if not drawing: paint_at = (now, painted[0])
+    elif painted[0] != paint_at[1]: paint_at = (now, painted[0])
+    elif now - paint_at[0] > 10: sys.exit("nothing painted for 10 s")   # a hung page or GPU: the last frame would go out for ever
     if got.wait(0.5):
         got.clear(); jpg = base64.b64decode(latest[0])
         if "srt" in OUT: srt_jpg[0] = jpg; srt_got.set()
@@ -136,8 +172,8 @@ while True:
             if f is None: continue
             if f.shape[:2] != (H, W): f = cv2.resize(f, (W, H), interpolation=cv2.INTER_LINEAR)
             buf = bufs[k % 2]; k += 1; cv2.cvtColor(f, cv2.COLOR_BGR2BGRA, dst=buf)   # k: decodes only, so a re-send does not flip it
-    elif time.time() - last < 0.5 or not n: continue
+    elif clock() - last < 0.5 or not n: continue
     if "ndi" in OUT: s.write_video_async(buf.ravel())
-    n += 1; last = time.time()
+    n += 1; last = clock()
     if last - seen[0] >= STATS:                           # sent, and painted by the page, over the last STATS seconds
         dt = last - seen[0]; print(f"sent {(n - seen[1]) / dt:.1f} fps, painted {(painted[0] - seen[2]) / dt:.1f}", flush=True); seen = (last, n, painted[0])

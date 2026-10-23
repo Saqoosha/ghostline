@@ -38,6 +38,7 @@
   #go-l { margin-right: -.3em; }
   /* the recordings: a link, with a red dot and the count while any source is being recorded */
   #view3d { flex: none; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); text-decoration: none; } #view3d:hover { color: var(--ink); }
+  #obsdoc { flex: none; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); text-decoration: none; } #obsdoc:hover { color: var(--ink); }
   #rec { flex: none; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); text-decoration: none; white-space: nowrap; }
   #relay { flex: none; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--spirit); white-space: nowrap; } #relay.off { color: var(--dim); }
   #rec:hover { color: var(--ink); } #rec.on { color: var(--alarm); } #rec.on::before { content: "● "; animation: breathe 2.4s ease-in-out infinite; }
@@ -162,6 +163,7 @@
     <div id="src"><b id="ndi">–</b><span id="ndi-sub"></span></div>
     <a id="view3d" href="/view/" target="_blank" title="シーンを 3D で見る（tracker の答えも描く）">3D</a>
     <a id="rec" href="/rec" title="NDI の録画の一覧">録画</a>
+    <a id="obsdoc" href="/obs-setup" target="_blank" title="運営の OBS で 3D の配信を受ける手順">OBS</a>
     <span id="relay" hidden title="観客向けページへの送信（rt_relay.py）"></span>
     <button id="go"><span id="go-l">開始</span></button>
   </div>

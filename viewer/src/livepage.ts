@@ -28,9 +28,11 @@ const FEED = QS.get('feed') ?? `http://${location.hostname}:8765`   // served by
 const REPLAY = QS.get('replay')
 const NDI = QS.has('ndi')
 const FPS = Number(QS.get('fps')) || 0
-if (FPS > 0) {                                             // before the app starts: every animation frame of the page waits its turn
+const hold = { paused: false }                             // rt_ndiview.py sets it (window.ghostlineHold) while no one receives: no update, no draw
+if (FPS > 0 || NDI) {                                      // before the app starts: every animation frame of the page waits its turn
   const raf = window.requestAnimationFrame.bind(window); let due = 0
-  window.requestAnimationFrame = (cb: FrameRequestCallback) => raf(function wait(t) { if (t + 2 < due) { raf(wait); return } due = Math.max(due, t) + 1000 / FPS; cb(t) })
+  window.requestAnimationFrame = (cb: FrameRequestCallback) => raf(function wait(t) { if (hold.paused || t + 2 < due) { raf(wait); return } due = Math.max(due, t) + (FPS > 0 ? 1000 / FPS : 0); cb(t) })
+  Object.assign(window, { ghostlineHold: hold })
 }
 const ONLY = QS.get('stream')                     // one cell (rt_track.py's output name) to draw; unset: every cell on the feed
 const KEY = 'ghostline-live:' + (QS.get('data') ?? 'data')
@@ -355,7 +357,8 @@ function connect() {
     const prev = live.byDone.length ? live.byDone[live.byDone.length - 1].done : -Infinity   // byDone is searched by done: keep it in order when the offset grows
     const a = { i: fi, done: Math.max(t - p.offset, prev), pos: m.pos, quat: m.quat, inl: m.inl, how: m.how, raw: { pos: m.pos, quat: m.quat }, src: m.i } as Stored
     live.byDone.push(a); p.byFrame.set(m.i, a); p.revise(m.win)
-    p.got.push(t); p.lastLat = m.lat ?? 0; p.lastInl = m.inl
+    p.got.push(t); while (p.got[0] < t - 2) p.got.shift()   // also here: with the page held (rt_ndiview.py) the draw loop does not trim it
+    p.lastLat = m.lat ?? 0; p.lastInl = m.inl
   }
 }
 // --- replay: the recording's own clock (the video's when there is one), every answer due at frame time + latency

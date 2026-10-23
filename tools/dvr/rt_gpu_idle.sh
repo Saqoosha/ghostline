@@ -4,9 +4,12 @@
 # at that moment live (about 2 s with the four-pilot tracker's context, and the tracker goes on) - see
 # docs/realtime-tracking.ja.md, "電池で回す". Runs as root (ghostline-gpu-idle.service, installed by rt_linux_setup.sh).
 # Fires only after SECS of P8 at WATTS or more: during a heat the GPU is in P2, so it never fires in the middle of one.
-WATTS=${WATTS:-15} SECS=${SECS:-20}
+# Not while rt_ndiview.py draws (it touches RENDERING every second): its Chrome holds P8 at ~20 W, the suspend does not help,
+# and one of the tries froze the page for 10 s, so the sender restarted and the feed dropped.
+WATTS=${WATTS:-15} SECS=${SECS:-20} RENDERING=${RENDERING:-/tmp/ghostline-ndiview.rendering}
 read_gpu() { IFS=', ' read -r ps w <<< "$(nvidia-smi --query-gpu=pstate,power.draw --format=csv,noheader,nounits 2>/dev/null)"; w=${w%.*}; }
-high() { [ "$ps" = P8 ] && [[ $w =~ ^[0-9]+$ ]] && [ "$w" -ge "$WATTS" ]; }
+drawing() { local m; m=$(stat -c %Y "$RENDERING" 2>/dev/null) && [ $(( $(date +%s) - m )) -lt 5 ]; }
+high() { [ "$ps" = P8 ] && [[ $w =~ ^[0-9]+$ ]] && [ "$w" -ge "$WATTS" ] && ! drawing; }
 n=0; hold=60
 while sleep 5; do
   read_gpu; if high; then n=$((n + 5)); else n=0; fi
