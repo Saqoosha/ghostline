@@ -110,6 +110,8 @@ After=network-online.target avahi-daemon.service nvidia-persistenced.service
 [Service]
 User=$USER
 WorkingDirectory=$HOME/rt
+# the CPU package's energy counter is root only: opened for the page's CPU power ("+": as root, "-": a box without it still starts)
+ExecStartPre=-+/bin/chmod 0444 /sys/class/powercap/intel-rapl:0/energy_uj
 ExecStart=$HOME/mastenv/bin/python -u rt_control.py
 Restart=always
 RestartSec=5
