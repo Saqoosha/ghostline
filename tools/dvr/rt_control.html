@@ -59,7 +59,7 @@
 
 
   /* the main thing: the scan from above, each pilot's last 12 seconds on it in their colour and their name at the point where they are now */
-  .top { position: relative; aspect-ratio: 1.5; overflow: hidden; }   /* the box's own proportions once the course is known */
+  .top { position: relative; aspect-ratio: 1.5; overflow: hidden; width: min(100%, calc(50vh * var(--ar, 1.5))); margin-inline: auto; }   /* the box's own proportions once the course is known; at most half the window high, so the rest shows below */
   .top svg { display: block; width: 100%; height: 100%; }
   #course { fill: none; stroke: var(--faint); stroke-width: 2.4; stroke-linecap: round; vector-effect: non-scaling-stroke; }
   #top.pic #course { display: none; } #top.pic #trails { filter: drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 2px #fff); }   /* a white edge: the scan keeps its own colours */
@@ -273,7 +273,7 @@ for (const k of ["smooth", "delay"]) {
   el.addEventListener("change", async () => { await post("/api/view", viewNow()); viewBusy = false; });
 }
 
-// the NDI picture's camera: orbit, top, or follow a cell's pilot (p<the tracker's output name>), and the zoom
+// the sent picture's camera: orbit, top, or follow a pilot (p<the tracker's output name>), and the zoom
 let camKey = "", zoomBusy = false;
 function drawCam(s) {
   if (!s.cam) return;

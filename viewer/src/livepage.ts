@@ -10,9 +10,9 @@
 //                           and <name>.mp4 if it is there (what the sender sent). Each answer shows up when it did live
 //                           (its frame's time plus the tracker's latency), so the sliders can be tried on the same flight.
 //   ?from=30&to=175         the part of the recording that is played (seconds); it loops
-//   ?ndi=1                  the picture rt_ndiview.py sends out over NDI: no panel and no capture box, and the camera is
+//   ?ndi=1                  the picture rt_ndiview.py sends out (NDI or SRT): no panel and no capture box, and the camera is
 //                           the control page's (rt_control.py /api/cam/events: each change pushed as it is made)
-//   ?fps=30                 draw at most this often (rt_ndiview.py FPS): the GPU, the splat sort and the screencast all halve
+//   ?fps=30                 draw at most this often (rt_ndiview.py FPS): less GPU, splat sorting and screencast
 // The sliders and the Free camera's view are remembered in this browser (localStorage); the page always opens on Orbit.
 // The dot and the trail are live.ts': the dot 100 ms late, fitted between the answers around it; the trail refitted as
 // answers arrive (the dot's delay is the slider's, 100 ms to start with). The clock is the tracker's (when each frame reached it), and "now" is the newest time on it that an
@@ -108,12 +108,13 @@ window.addEventListener('keydown', e => {
   const ps = [...pilots.values()], v = k <= 3 ? ['orbit', 'top', 'free'][k - 1] : ps[k - 4] ? 'p' + ps[k - 4].name : ''
   if (v) setMode(v)
 })
-if (NDI) {                                                // mode orbit | top | p<cell> (a cell not on the feed yet: orbit until it is), zoom 0.4-3
+if (NDI) {                                                // mode orbit | top | p<output name> (not on the feed yet: orbit until it is), zoom 0.4-3
   $('panel').style.display = 'none'
-  new EventSource('/api/cam/events').onmessage = e => {     // the browser connects again by itself when the control page restarts
-    const c = JSON.parse(e.data); if (typeof c.zoom === 'number') view.zoom = c.zoom; if (typeof c.mode === 'string') setMode(c.mode)
-  }
+  const ev = new EventSource('/api/cam/events')            // a dropped connection is retried by the browser, a refused or failed one is not: load again
+  ev.onmessage = e => { const c = JSON.parse(e.data); if (typeof c.zoom === 'number') view.zoom = c.zoom; if (typeof c.mode === 'string') setMode(c.mode) }
+  ev.onerror = () => { if (ev.readyState === EventSource.CLOSED) setTimeout(() => location.reload(), 3000) }
 }
+let followOn = false                                       // the followed pilot was on screen last frame
 function cameraAt(t: number, dt: number) {
   const up = [...pilots.values()].filter(p => p.dot.enabled && p.state > 1).map(p => p.dot.getPosition())   // in the air and answered
   if (!orb.init) { orb.target.copy(home.target); orb.dist = home.dist; orb.init = true }
@@ -126,8 +127,9 @@ function cameraAt(t: number, dt: number) {
     cam.setPosition(home.target.x, home.target.y + home.dist * 1.1 * view.zoom, home.target.z); cam.setRotation(r); return
   }
   if (camMode[0] === 'p') {
-    const p = pilots.get(camMode.slice(1))
-    if (p && p.dot.enabled) {                              // behind and above the drone, looking a little ahead along where it is going
+    const p = pilots.get(camMode.slice(1)), on = !!p?.dot.enabled
+    if (on !== followOn) { blendFrom.pos.copy(cam.getPosition()); blendFrom.rot.copy(cam.getRotation()); blendT = 0; followOn = on }   // the pilot came or went: glide, not cut
+    if (p && on) {                              // behind and above the drone, looking a little ahead along where it is going
       const now = p.dot.getPosition().clone(), fwd = p.fwd
       cam.setPosition(now.clone().sub(fwd.clone().mulScalar(8 * view.zoom)).add(new pc.Vec3(0, 3 * view.zoom, 0))); cam.lookAt(now.add(fwd.clone().mulScalar(5)))
       return
@@ -315,7 +317,7 @@ async function startVideo() {
   } catch (e) { note.textContent = 'no live image: ' + (e as Error).message }
 }
 if (!REPLAY && !NDI && navigator.mediaDevices) startVideo()
-else if (!REPLAY) $('dvr').hidden = true               // plain http from another machine (rt_control.py's /view/): no camera to read here
+else if (!REPLAY) $('dvr').hidden = true               // plain http from another machine (rt_control.py's /view/), or ?ndi=1: no capture box
 
 let events: { due: number; win: number[][] }[] = [], evK = 0, lastRt = 0   // replay: the revisions, in the order they came
 baIn.onchange = () => { store({ ba: baIn.checked }); for (const p of pilots.values()) p.toRaw(); evK = 0; lastRt = 0; resmoothAll() }   // live: revisions start again with the next answer

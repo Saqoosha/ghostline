@@ -7,7 +7,7 @@ Beside all that, every NDI source is recorded while any cell of its grid shows a
 usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080, the top view alone at /obs
 env: PORT (8080), PUSH (8765: the tracker's answers, also what viewer/live.html reads), ENG (eng_linux),
      REC, REC_* (rt_rec.py), CONF (~/.ghostline-control.json: the last start, shown again when the page opens), VIEW (~/.ghostline-view.json: the trails' delay and smoothing),
-     CAM (~/.ghostline-cam.json: the camera of the 3D page that rt_ndiview.py sends over NDI),
+     CAM (~/.ghostline-cam.json: the camera of the 3D page that rt_ndiview.py sends),
      OUTCONF (~/.ghostline-out.json: what rt_ndiview.py sends - NDI, SRT, both or nothing - and at what size and rate),
      PILOTS_URL (unset: no names; the venue heat manager's current_pilots, e.g. http://192.168.3.20:8001/current_pilots at FDF),
      RELAY_BASE, RELAY_EVENT (both set and ~/.config/ghostline/key there: the answers go out to the audience pages,
@@ -16,12 +16,12 @@ Between heats (all cells without a picture for GROW_QUIET s) it grows the map wi
 GROW_WINDOW s (rt_map_grow.py: the day's light, docs/realtime-architecture.html 12) and the tracker swaps it in without stopping;
 the page can grow now or go back to the scan alone. Needs "描いて照合" (RENDER): the new keyframes are matched beside the render.
 routes beside the page: /api/state, /rec (recordings), /obs (top view for OBS), /view/ (the 3D live page, viewer/live.html built with VITE_BASE=/view/,
-     and its data folders in view/), /api/pilots (the pilot per cell, from the heat manager), /api/cam (the NDI picture's camera; POST sets it; /api/cam/events pushes each change), /api/out (rt_ndiview.py's output; POST sets it)
+     and its data folders in view/), /api/pilots (the pilot per cell, from the heat manager), /api/cam (the sent picture's camera; POST sets it; /api/cam/events pushes each change), /api/out (rt_ndiview.py's output; POST sets it)
 No login: whoever reaches the port can start and stop the tracker. Keep it on the venue LAN / Tailscale."""
 import collections, glob, http.server, json, mimetypes, os, re, signal, subprocess, sys, threading, time, traceback, urllib.parse, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
 PORT, PUSH, ENG, CONF = int(E("PORT", 8080)), int(E("PUSH", 8765)), E("ENG", "eng_linux"), os.path.expanduser(E("CONF", "~/.ghostline-control.json"))
-CAM = os.path.expanduser(E("CAM", "~/.ghostline-cam.json"))     # the NDI picture's camera (/view/?ndi=1 reads it every half second)
+CAM = os.path.expanduser(E("CAM", "~/.ghostline-cam.json"))     # the sent picture's camera (/view/?ndi=1 gets it from /api/cam/events)
 OUTCONF = os.path.expanduser(E("OUTCONF", "~/.ghostline-out.json"))   # rt_ndiview.py reads it, and starts again when it changes
 VIEW = os.path.expanduser(E("VIEW", "~/.ghostline-view.json"))   # how the trails are drawn (delay, smoothing): changed any time, read by every page
 CELLS = ("tl", "tr", "bl", "br")                    # the grid's cells, row by row
@@ -314,14 +314,15 @@ def set_view(v):                                   # ms; the delay lets the smoo
 def cam():
     try: v = json.load(open(CAM))
     except Exception: v = {}
+    if not isinstance(v, dict): v = {}                 # valid JSON but not an object (hand-edited): /api/state must not break on it
     return dict(mode=v.get("mode", "orbit"), zoom=v.get("zoom", 1))
 
 cam_changed, cam_n = threading.Condition(), [0]    # /api/cam/events: each page waiting is told at once
 
-def set_cam(v):                                    # mode: orbit, top, or p<cell> to follow that cell's pilot (the tracker's output name)
+def set_cam(v):                                    # mode: orbit, top, or p<output name> to follow that tracker output's pilot
     if not isinstance(v, dict): raise ValueError("JSON の形がおかしい")
     c = dict(cam(), **{k: v[k] for k in ("mode", "zoom") if k in v})
-    if not (isinstance(c["mode"], str) and re.fullmatch(r"orbit|top|p[\w.-]{1,40}", c["mode"])): raise ValueError("カメラは orbit・top・p<マス>")
+    if not (isinstance(c["mode"], str) and re.fullmatch(r"orbit|top|p[\w.-]{1,40}", c["mode"])): raise ValueError("カメラは orbit・top・p<出力の名前>")
     if not (isinstance(c["zoom"], (int, float)) and not isinstance(c["zoom"], bool) and 0.4 <= c["zoom"] <= 3): raise ValueError("ズームは 0.4〜3")
     tmp = f"{CAM}.{threading.get_ident()}.tmp"
     with open(tmp, "w") as f: json.dump(c, f)
@@ -332,6 +333,7 @@ OUTS, SIZES = ("ndi", "srt", "ndi,srt", "off"), ((1280, 720), (1920, 1080))
 def out():
     try: v = json.load(open(OUTCONF))
     except Exception: v = {}
+    if not isinstance(v, dict): v = {}
     return dict(out=v.get("out", "ndi"), w=v.get("w", 1920), h=v.get("h", 1080), fps=v.get("fps", 60))
 
 def set_out(v):                                    # the sender's output: written whole, the sender starts again with it
@@ -340,6 +342,7 @@ def set_out(v):                                    # the sender's output: writte
     if c["out"] not in OUTS: raise ValueError("出力は ndi・srt・ndi,srt・off")
     if (c["w"], c["h"]) not in SIZES: raise ValueError("大きさは 1280x720 か 1920x1080")
     if c["fps"] not in (30, 60): raise ValueError("fps は 30 か 60")
+    if c == out() and os.path.exists(OUTCONF): return   # unchanged: a write would restart the sender for nothing
     tmp = f"{OUTCONF}.{threading.get_ident()}.tmp"
     with open(tmp, "w") as f: json.dump(c, f)
     os.replace(tmp, OUTCONF)
@@ -488,6 +491,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_file(f"{REC_DIR}/{name}", "video/mp4")
         elif u.path == "/view" or u.path.startswith("/view/"):   # the 3D page: the viewer's build (VITE_BASE=/view/) and its data folders, in view/
             rel = urllib.parse.unquote(u.path[6:])
+            if not rel and "data" in q:                  # a folder asked for: the query as it is (?ndi=1 and the like too)
+                self.send_response(302); self.send_header("Location", "/view/live.html?" + u.query); self.send_header("Content-Length", "0"); return self.end_headers()
             if not rel:                                  # the newest scene folder (view/<name>/index.json)
                 ix = sorted(glob.glob(f"{HERE}/view/*/index.json"), key=lambda f: os.stat(f).st_mtime if os.path.exists(f) else 0)
                 if not ix: return self.send(404, dict(error="view/ に index.json のあるフォルダが無い"))

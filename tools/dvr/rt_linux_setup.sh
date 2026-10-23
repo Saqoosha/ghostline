@@ -124,13 +124,15 @@ sudo systemctl daemon-reload; sudo systemctl enable --now ghostline-control.serv
 
 step "the 3D page out over NDI / SRT (rt_ndiview.py): headless Chrome on the GPU; the control page picks the output, size and rate"
 if ! command -v google-chrome >/dev/null; then
-  wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt-get install -y /tmp/chrome.deb
+  d=$(mktemp -d); wget -q -O "$d/chrome.deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt-get install -y "$d/chrome.deb"; rm -rf "$d"
 fi
 cp "$(dirname "$0")/rt_ndiview.py" ~/rt/
 sudo tee /etc/systemd/system/ghostline-ndiview.service > /dev/null <<UNIT
 [Unit]
 Description=ghostline: the control page's 3D page as an NDI source / SRT stream (rt_ndiview.py)
 After=network-online.target avahi-daemon.service ghostline-control.service
+# every change of output is a restart: systemd's default limit (5 starts in 10 s) would leave it stopped after a few quick changes
+StartLimitIntervalSec=0
 
 [Service]
 User=$USER

@@ -428,11 +428,11 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   | 配信の形（spirula の学習と同時で揺れる値） | CPU | CPU パッケージの増え |
   |---|---|---|
   | NDI 1080p 60 fps | 約 5 コア（Chrome 3、Python 1〜2：JPEG の展開と NDI の SpeedHQ 圧縮） | +50〜110 W |
-  | SRT 720p 30 fps | 約 1.4 コア（Chrome のページ 0.95、送り手 0.03） | +20〜35 W |
+  | SRT 720p 30 fps | 約 1.4 コア（大半は Chrome のページ、送り手は 0.03） | +20〜35 W |
 
   NDI|HX（H.264 の NDI）は NDI Advanced SDK（商用ライセンス）でしか送れないので使っていない。
   **OBS のメディアソースで SRT を受けると、既定の調べ込み（5 MB、6 Mbps で約 7 秒ぶん）をそのまま抱えて 6〜10 秒遅れる。** 「FFmpeg Options」に `fflags=nobuffer analyzeduration=1000000 probesize=1000000`、Network Buffering 0 MB、Reconnect Delay 1〜2 秒、ハードウェアデコードあり で 3〜4 秒。ここから先は OBS の中の溜めで、送り手の側は 0.55 秒。遅れを詰めたいなら OBS の NDI ソースか、ブラウザソース（`http://rt4090:8080/view/?ndi=1&fps=30`、描くのは運営の PC）。
-  送り手の ffmpeg に `-fflags nobuffer` を付けない（mjpeg をパイプで受ける入力ではほとんど何も通さず、OBS が黒くなった）。調べ込みは `-probesize 32 -analyzeduration 0` で消す（既定の 5 MB は JPEG で約 4 秒ぶんを抱える）。
+  送り手の ffmpeg に `-fflags nobuffer` を付けない（mjpeg をパイプで受ける入力ではほとんど何も通さず、OBS が黒くなった）。調べ込みは `-probesize 32 -analyzeduration 0` で消す（既定の 5 MB は 720p 30 fps の JPEG で約 4 秒ぶんを抱える）。
 
   | 準決勝、1080p NDI、4 マス、`SIGNAL=1`、Linux | 解けたフレーム | GPU＋CPU 平均 / ヒート中 / あいだ |
   |---|---|---|

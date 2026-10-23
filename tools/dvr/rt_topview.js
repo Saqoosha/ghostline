@@ -15,7 +15,7 @@ const TopView = (() => {
     if (!r || !r.ok) { courseKey = null; onError("地図を読めない: " + (r ? (await r.json().catch(() => ({}))).error || r.status : "サーバーに届かない")); return; }
     const c = await r.json(); if (key !== courseKey) return;
     onError("");
-    courseBox = c.box; $("top").setAttribute("viewBox", c.box.join(" ")); $("top").parentElement.style.aspectRatio = c.box[2] / c.box[3];
+    courseBox = c.box; $("top").setAttribute("viewBox", c.box.join(" ")); $("top").parentElement.style.aspectRatio = c.box[2] / c.box[3]; $("top").parentElement.style.setProperty("--ar", c.box[2] / c.box[3]);
     $("course").setAttribute("d", c.pts.map(p => `M${p[0]},${p[1]}h0`).join("")); fit();
     // under it, the scan seen from above: the server renders it once (a few seconds) and keeps it
     const img = $("aerial"); img.removeAttribute("href"); $("top").classList.remove("pic");
