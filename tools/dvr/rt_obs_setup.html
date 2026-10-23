@@ -31,7 +31,7 @@
 <main>
   <a class="back" href="/">← 操作ページ</a>
   <h1>OBS で 3D の絵を受ける</h1>
-  <p class="lead">スキャンの上にドローンの位置と軌跡を描いた 3D の絵を、この機械（会場の網では <b class="host">rt4090</b>）が NDI と SRT で送っている。受け方は 3 つ。下の URL の IP は、このページを開いたときの機械の住所で埋めてある。会場の網が変わったら、このページを開き直す。</p>
+  <p class="lead">スキャンの上にドローンの位置と軌跡を描いた 3D の絵を、この機械（会場のネットワークでは <b class="host">rt4090</b>）が NDI と SRT で送っている。受け方は 3 つ。下の URL の IP は、このページを開いたときの機械の住所で埋めてある。会場のネットワークが変わったら、このページを開き直す。</p>
 
   <h2>1. NDI（おすすめ）</h2>
   <p>Windows の OBS に NDI のプラグイン（DistroAV）と、NDI Runtime（DistroAV が入れるよう求める）が入っていること。</p>
@@ -40,7 +40,7 @@
     <li>Source name で <span class="v">… (ghostline 3D)</span> を選ぶ</li>
     <li>Bandwidth は Highest、Latency mode は Low</li>
   </ol>
-  <p class="note">遅れは数フレーム。網の上の何台からでも同時に受けられる。一覧に出ないとき（網が分かれている、Windows のファイアウォール）：NDI Access Manager →「Remote Sources」に <span class="v host">rt4090</span> を足して OBS を開き直す。初回に Windows が OBS の通信を許可するか聞いてきたら「許可」。</p>
+  <p class="note">遅れは数フレーム。同じネットワークの何台からでも同時に受けられる。一覧に出ないとき（ネットワークが分かれている、Windows のファイアウォール）：NDI Access Manager →「Remote Sources」に <span class="v host">rt4090</span> を足して OBS を開き直す。初回に Windows が OBS の通信を許可するか聞いてきたら「許可」。</p>
 
   <h2>2. SRT（プラグイン不要）</h2>
   <ol>
@@ -70,7 +70,7 @@
     <li><b>カメラは操作ページで切り替える</b>：「配信のカメラ」の 全体・真上・マスの名前（その人を追いかける）とズーム。押すとすぐ OBS の絵が変わる（約 0.5 秒）。</li>
     <li><b>受け手がいないあいだは描いていない</b>（電池のため）。つないでから約 1 秒で動き出し、最初の 1 秒は前の絵が出る。OBS のソースを非表示にしても受け続けるなら描き続ける。</li>
     <li><b>大きさと fps</b>は操作ページの「配信」で選ぶ（既定 1280×720・30 fps）。変えると送り手が 2〜3 秒止まって立ち上げ直すので、ヒートの合間に。</li>
-    <li>絵が出ないとき：操作ページの「配信」が「止める」になっていないか。NDI なら送り手の名前が一覧に出るか（同じ網か）。SRT なら別の PC が先につないでいないか。</li>
+    <li>絵が出ないとき：操作ページの「配信」が「止める」になっていないか。NDI なら送り手の名前が一覧に出るか（同じネットワークか）。SRT なら別の PC が先につないでいないか。</li>
   </ul>
 </main>
 <script>
@@ -78,10 +78,13 @@
   const fill = h => {
     for (const el of document.querySelectorAll(".host")) el.textContent = h;
     document.getElementById("srt").textContent = `srt://${h}:9000?mode=caller&latency=120000`;
-    document.getElementById("browser").textContent = `http://${h}:${location.port || 80}/view/?ndi=1&fps=30`;
+    document.getElementById("browser").textContent = `http://${h}:${location.port || 80}/view/?ndi=1&fps=${fps}`;
   };
+  let fps = 30;
   fill(location.hostname);
-  fetch("/api/addr").then(r => r.json()).then(a => { if (a.length) fill(a[0]); }).catch(() => {});
+  let host = location.hostname;
+  fetch("/api/out").then(r => r.json()).then(o => { fps = o.fps || 30; fill(host); }).catch(() => {});   // the browser source at the feed's own rate
+  fetch("/api/addr").then(r => r.json()).then(a => { if (a.length) { host = a[0]; fill(host); } }).catch(() => {});
 </script>
 </body>
 </html>

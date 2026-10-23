@@ -314,8 +314,11 @@ def set_view(v):                                   # ms; the delay lets the smoo
 def addrs():                                       # this box's IPv4 on the LAN, for the OBS page's URLs: not loopback, Tailscale (100.64/10) or docker
     try: out = subprocess.run(["ip", "-4", "-o", "addr", "show"], capture_output=True, text=True, timeout=3).stdout
     except Exception: return []
-    ips = [l.split()[3].split("/")[0] for l in out.splitlines() if len(l.split()) > 3 and not l.split()[1].startswith(("lo", "tailscale", "docker", "br-"))]
-    return [ip for ip in ips if not ip.startswith("127.")]
+    ips = [l.split()[3].split("/")[0] for l in out.splitlines() if len(l.split()) > 3 and not l.split()[1].startswith(("lo", "tailscale", "docker", "br-", "virbr"))]
+    ips = [ip for ip in ips if not ip.startswith(("127.", "169.254."))]
+    try: src = subprocess.run(["ip", "-4", "route", "get", "1.1.1.1"], capture_output=True, text=True, timeout=3).stdout.split(" src ")[1].split()[0]   # the default route's own address first
+    except Exception: src = None
+    return sorted(ips, key=lambda ip: ip != src)
 
 def cam():
     try: v = json.load(open(CAM))

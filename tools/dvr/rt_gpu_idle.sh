@@ -8,7 +8,7 @@
 # and one of the tries froze the page for 10 s, so the sender restarted and the feed dropped.
 WATTS=${WATTS:-15} SECS=${SECS:-20} RENDERING=${RENDERING:-/tmp/ghostline-ndiview.rendering}
 read_gpu() { IFS=', ' read -r ps w <<< "$(nvidia-smi --query-gpu=pstate,power.draw --format=csv,noheader,nounits 2>/dev/null)"; w=${w%.*}; }
-drawing() { [ -e "$RENDERING" ] && [ $(( $(date +%s) - $(stat -c %Y "$RENDERING") )) -lt 5 ]; }
+drawing() { local m; m=$(stat -c %Y "$RENDERING" 2>/dev/null) && [ $(( $(date +%s) - m )) -lt 5 ]; }
 high() { [ "$ps" = P8 ] && [[ $w =~ ^[0-9]+$ ]] && [ "$w" -ge "$WATTS" ] && ! drawing; }
 n=0; hold=60
 while sleep 5; do

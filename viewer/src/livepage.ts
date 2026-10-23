@@ -357,7 +357,8 @@ function connect() {
     const prev = live.byDone.length ? live.byDone[live.byDone.length - 1].done : -Infinity   // byDone is searched by done: keep it in order when the offset grows
     const a = { i: fi, done: Math.max(t - p.offset, prev), pos: m.pos, quat: m.quat, inl: m.inl, how: m.how, raw: { pos: m.pos, quat: m.quat }, src: m.i } as Stored
     live.byDone.push(a); p.byFrame.set(m.i, a); p.revise(m.win)
-    p.got.push(t); p.lastLat = m.lat ?? 0; p.lastInl = m.inl
+    p.got.push(t); while (p.got[0] < t - 2) p.got.shift()   // also here: with the page held (rt_ndiview.py) the draw loop does not trim it
+    p.lastLat = m.lat ?? 0; p.lastInl = m.inl
   }
 }
 // --- replay: the recording's own clock (the video's when there is one), every answer due at frame time + latency
