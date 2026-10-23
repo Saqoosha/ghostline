@@ -419,6 +419,23 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   答えの時刻は rt4090 の壁の時計のまま中継に渡る。会場の箱の時計がずれると、見る人の遅れと中継の backlog（80 秒）も同じだけずれる（2026-10-18 は timesyncd で +3.3 ms）。
   夜の作り直し（`night_heats.py`）は流し直しのフレーム番号に 120 フレーム（`--shift`）を足して録画に合わせる。
 
+  **3D のページを運営のスイッチャーへ配信する**（`rt_ndiview.py`、`ghostline-ndiview.service`、`rt_linux_setup.sh` が入れる、2026-10-23）：
+  ヘッドレスの Chrome が `/view/?ndi=1`（パネルと DVR の枠なし）を 4090 で描き、screencast の JPEG を NDI（名前「ghostline 3D」）か SRT（`srt://rt4090:9000`、NVENC の H.264、MPEG-TS、待ち受けは 1 台）で出す。
+  操作ページの「配信」で出力（NDI / SRT / 両方 / 止める）・大きさ（720p / 1080p）・fps（30 / 60）を選ぶ（`~/.ghostline-out.json`。変わると送り手が終わり、service が 1 秒後に新しい設定で立ち上げ直す。止めている間は Chrome を起こさない）。
+  「配信のカメラ」で全体・真上・マスの追いかけとズーム（`~/.ghostline-cam.json`）。ページは `/api/cam/events`（SSE）で押した瞬間に受ける。押してから SRT の絵が変わるまで 0.55 秒（カメラは 0.7 秒かけて滑る）。fps を下げるとページ自身がその間隔でしか描かない（`?fps=`）ので、GPU も splat の並べ替えも JPEG も減る。
+  配る：`scp tools/dvr/rt_ndiview.py tools/dvr/rt_control.* tools/dvr/rt_topview.js tools/dvr/rt_rec.py rt4090:~/rt/`、ページは Mac で `(cd viewer && VITE_BASE=/view/ npx vite build --outDir /tmp/view --emptyOutDir)` して `scp -r /tmp/view/{assets,live.html} rt4090:~/rt/view/`（`rt_linux_setup.sh` はビルドを配らない）。
+  録画係（`rt_rec.py`）は自分の配信を録らない（`REC_SKIP`、既定 `(ghostline 3D)`。外すと 16 Mbps で録り続ける）。
+  Chrome は `--use-angle=gl-egl` でないと GPU を使わない（既定は SwiftShader で 2 fps、Vulkan は GPU プロセスが落ちる）。X は要らない。
+
+  | 配信の形（spirula の学習と同時で揺れる値） | CPU | CPU パッケージの増え |
+  |---|---|---|
+  | NDI 1080p 60 fps | 約 5 コア（Chrome 3、Python 1〜2：JPEG の展開と NDI の SpeedHQ 圧縮） | +50〜110 W |
+  | SRT 720p 30 fps | 約 1.4 コア（大半は Chrome のページ、送り手は 0.03） | +20〜35 W |
+
+  NDI|HX（H.264 の NDI）は NDI Advanced SDK（商用ライセンス）でしか送れないので使っていない。
+  **OBS のメディアソースで SRT を受けると、既定の調べ込み（5 MB、6 Mbps で約 7 秒ぶん）をそのまま抱えて 6〜10 秒遅れる。** 「FFmpeg Options」に `fflags=nobuffer analyzeduration=1000000 probesize=1000000`、Network Buffering 0 MB、Reconnect Delay 1〜2 秒、ハードウェアデコードあり で 3〜4 秒。ここから先は OBS の中の溜めで、送り手の側は 0.55 秒。遅れを詰めたいなら OBS の NDI ソースか、ブラウザソース（`http://rt4090:8080/view/?ndi=1&fps=30`、描くのは運営の PC）。
+  送り手の ffmpeg に `-fflags nobuffer` を付けない（mjpeg をパイプで受ける入力ではほとんど何も通さず、OBS が黒くなった）。調べ込みは `-probesize 32 -analyzeduration 0` で消す（既定の 5 MB は 720p 30 fps の JPEG で約 4 秒ぶんを抱える）。
+
   | 準決勝、1080p NDI、4 マス、`SIGNAL=1`、Linux | 解けたフレーム | GPU＋CPU 平均 / ヒート中 / あいだ |
   |---|---|---|
   | 4090 機の中から送る | 13,956 | 136.5 / 180 / 55 W |

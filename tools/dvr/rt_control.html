@@ -44,6 +44,8 @@
   #err { color: var(--alarm); font: 400 12px var(--mono); min-height: 18px; }
   .grow { display: flex; align-items: center; gap: 14px; font: 400 11px var(--mono); letter-spacing: .06em; color: var(--dim); min-height: 22px; }
   .grow button { background: none; border: 1px solid var(--faint); border-radius: 3px; padding: 2px 8px; font: inherit; color: var(--ink); cursor: pointer; }
+  #camseg { display: flex; gap: 6px; } #camseg button.on { background: var(--ink); color: var(--paper); } .ndicam label { display: flex; align-items: center; gap: 8px; }
+  .ndicam select { border: 1px solid var(--faint); border-radius: 3px; padding: 2px 6px; font: inherit; color: var(--ink); background: none; cursor: pointer; }
   .grow button:hover { background: rgba(12, 15, 20, .05); } .grow button:disabled { opacity: .3; cursor: default; }
   .grow .bad { color: var(--alarm); }
 
@@ -57,7 +59,7 @@
 
 
   /* the main thing: the scan from above, each pilot's last 12 seconds on it in their colour and their name at the point where they are now */
-  .top { position: relative; aspect-ratio: 1.5; overflow: hidden; }   /* the box's own proportions once the course is known */
+  .top { position: relative; aspect-ratio: 1.5; overflow: hidden; width: min(100%, calc(50vh * var(--ar, 1.5))); margin-inline: auto; }   /* the box's own proportions once the course is known; at most half the window high, so the rest shows below */
   .top svg { display: block; width: 100%; height: 100%; }
   #course { fill: none; stroke: var(--faint); stroke-width: 2.4; stroke-linecap: round; vector-effect: non-scaling-stroke; }
   #top.pic #course { display: none; } #top.pic #trails { filter: drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 2px #fff); }   /* a white edge: the scan keeps its own colours */
@@ -171,6 +173,12 @@
       <label for="v-delay">遅らせる</label><input type="range" id="v-delay" min="0" max="1000" step="10" value="250"><output id="o-delay"></output></div></div>
   <div class="pilots" id="cells"></div>
   <div class="cap">線は直近 5 分、右端がいま · 映像の濃さ <button class="eye" id="eye" title="映像の濃さを切り替え"></button></div>
+  <div class="grow ndicam" title="rt_ndiview.py が送る 3D の絵。NDI の名前は「ghostline 3D」、SRT は srt://<この機械>:9000（OBS ならメディアソース、mpegts）。変えると送り手が数秒で立ち上げ直す">
+    <span>配信</span><select id="o-out"><option value="ndi">NDI</option><option value="srt">SRT</option><option value="ndi,srt">NDI + SRT</option><option value="off">止める</option></select>
+    <select id="o-size"><option value="1280x720">1280x720</option><option value="1920x1080">1920x1080</option></select>
+    <select id="o-fps"><option value="30">30 fps</option><option value="60">60 fps</option></select></div>
+  <div class="grow ndicam" title="配信する 3D の絵（rt_ndiview.py が /view/?ndi=1 を描く）のカメラ。押すとすぐ切り替わる（カメラは 0.7 秒かけて滑る）。マスの名前は追いかけ">
+    <span>配信のカメラ</span><span id="camseg"></span><label>ズーム <input type="range" id="c-zoom" min="0.4" max="3" step="0.05" value="1"></label></div>
 
   <div class="metrics">
     <div class="m"><b class="num" id="gw">–</b><u>W</u><span>GPU の電力</span><div class="trail"><svg id="sp-w" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-w" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-w)"/></svg><i class="head" id="hd-w"></i></div></div>
@@ -265,7 +273,33 @@ for (const k of ["smooth", "delay"]) {
   el.addEventListener("change", async () => { await post("/api/view", viewNow()); viewBusy = false; });
 }
 
+// the sent picture's camera: orbit, top, or follow a pilot (p<the tracker's output name>), and the zoom
+let camKey = "", zoomBusy = false;
+function drawCam(s) {
+  if (!s.cam) return;
+  const outs = Object.entries(s.cells).sort((a, b) => CELLS.findIndex(c => c[0] === a[1].cell) - CELLS.findIndex(c => c[0] === b[1].cell)).map(([n]) => n);
+  const key = s.cam.mode + "|" + outs.join(",");
+  if (key !== camKey) {
+    camKey = key;
+    const btn = (v, label) => { const b = document.createElement("button"); b.textContent = label; b.className = v === s.cam.mode ? "on" : ""; b.onclick = () => post("/api/cam", { mode: v }); return b; };
+    $("camseg").replaceChildren(btn("orbit", "全体"), btn("top", "真上"), ...outs.map(n => btn("p" + n, n)));
+  }
+  if (!zoomBusy) $("c-zoom").value = s.cam.zoom;
+}
+$("c-zoom").addEventListener("input", () => { zoomBusy = true; });
+// what the sender sends: NDI, SRT, both or nothing, and its size and rate (the sender starts again with them)
+function drawOut(s) {
+  if (!s.out || ["o-out", "o-size", "o-fps"].includes(document.activeElement && document.activeElement.id)) return;
+  $("o-out").value = s.out.out; $("o-size").value = `${s.out.w}x${s.out.h}`; $("o-fps").value = String(s.out.fps);
+}
+for (const k of ["o-out", "o-size", "o-fps"]) $(k).addEventListener("change", async () => {
+  const [w, h] = $("o-size").value.split("x").map(Number);
+  await post("/api/out", { out: $("o-out").value, w, h, fps: +$("o-fps").value }); $(k).blur();
+});
+$("c-zoom").addEventListener("change", async () => { await post("/api/cam", { zoom: +$("c-zoom").value }); zoomBusy = false; });
+
 function render(s) {
+  drawCam(s); drawOut(s);
   if (s.view && !viewBusy) { $("v-smooth").value = s.view.smooth; $("v-delay").value = s.view.delay; showView(s.view); }
   if (viewBusy) delete s.view;
   if (!filled) { fillForm(s); filled = true; }

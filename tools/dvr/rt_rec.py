@@ -5,11 +5,12 @@ battery; only while it is recorded is its full stream received too, and the fram
 file is a fragmented mp4 and stays one (playable up to the last second if the box loses power; not remuxed at the venue,
 which would copy every file once more - for a browser that seeks it, later: ffmpeg -i x.mp4 -c copy -movflags +faststart y.mp4). The first ~0.5 s of a stretch is lost: the full stream connects after the picture is seen.
 env: REC (1; 0 = off), REC_DIR (rec/ beside this file), REC_FPS (0 = the source's own rate, the Event VRX's 60; 30 thins it),
-     REC_RATE (16M: about 7 GB an hour), REC_HOLD (5 s), REC_ENC (h264_nvenc; libx264 without the GPU)"""
+     REC_RATE (16M: about 7 GB an hour), REC_HOLD (5 s), REC_ENC (h264_nvenc; libx264 without the GPU),
+     REC_SKIP (sources whose name ends so are not recorded: "(ghostline 3D)", rt_ndiview.py's own picture)"""
 import glob, hashlib, json, os, re, subprocess, threading, time, traceback
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
 REC, REC_DIR, REC_FPS, REC_HOLD, REC_ENC = int(E("REC", 1)), os.path.expanduser(E("REC_DIR", HERE + "/rec")), float(E("REC_FPS", 0)), float(E("REC_HOLD", 5)), E("REC_ENC", "h264_nvenc")
-REC_RATE = E("REC_RATE", "16M")
+REC_RATE, REC_SKIP = E("REC_RATE", "16M"), E("REC_SKIP", "(ghostline 3D)")
 STOPPING = threading.Event()                        # set by stop_all: a picture still on screen must not start a new file
 FILE = re.compile(r"[A-Za-z0-9_.-]+\.mp4")          # what /rec/<file> may serve
 
@@ -123,7 +124,7 @@ class Recorders:
         while True:
             try:
                 for n in self.finder.get_source_names():
-                    if n not in self.watch: self.watch[n] = Watcher(self.finder, n); print(f"rec: watching {n}", flush=True)
+                    if n not in self.watch and not (REC_SKIP and n.endswith(REC_SKIP)): self.watch[n] = Watcher(self.finder, n); print(f"rec: watching {n}", flush=True)
             except Exception: traceback.print_exc()
             time.sleep(3)
     def stop_all(self):                             # the service stops: cut every file and wait for it to be closed
