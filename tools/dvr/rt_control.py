@@ -7,6 +7,8 @@ Beside all that, every NDI source is recorded while any cell of its grid shows a
 usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080, the top view alone at /obs
 env: PORT (8080), PUSH (8765: the tracker's answers, also what viewer/live.html reads), ENG (eng_linux),
      REC, REC_* (rt_rec.py), CONF (~/.ghostline-control.json: the last start, shown again when the page opens), VIEW (~/.ghostline-view.json: the trails' delay and smoothing),
+     CAM (~/.ghostline-cam.json: the camera of the 3D page that rt_ndiview.py sends),
+     OUTCONF (~/.ghostline-out.json: what rt_ndiview.py sends - NDI, SRT, both or nothing - and at what size and rate),
      PILOTS_URL (unset: no names; the venue heat manager's current_pilots, e.g. http://192.168.3.20:8001/current_pilots at FDF),
      RELAY_BASE, RELAY_EVENT (both set and ~/.config/ghostline/key there: the answers go out to the audience pages,
      RELAY_BASE/RELAY_EVENT/, through rt_relay.py; it reads PUSH whether or not a tracker runs, and keeps heats in live/relay/)
@@ -14,11 +16,13 @@ Between heats (all cells without a picture for GROW_QUIET s) it grows the map wi
 GROW_WINDOW s (rt_map_grow.py: the day's light, docs/realtime-architecture.html 12) and the tracker swaps it in without stopping;
 the page can grow now or go back to the scan alone. Needs "描いて照合" (RENDER): the new keyframes are matched beside the render.
 routes beside the page: /api/state, /rec (recordings), /obs (top view for OBS), /view/ (the 3D live page, viewer/live.html built with VITE_BASE=/view/,
-     and its data folders in view/), /api/pilots (the pilot per cell, from the heat manager)
+     and its data folders in view/), /api/pilots (the pilot per cell, from the heat manager), /api/cam (the sent picture's camera; POST sets it; /api/cam/events pushes each change), /api/out (rt_ndiview.py's output; POST sets it), /obs-setup (how to receive it in OBS), /api/addr (this box's LAN addresses)
 No login: whoever reaches the port can start and stop the tracker. Keep it on the venue LAN / Tailscale."""
 import collections, glob, http.server, json, mimetypes, os, re, signal, subprocess, sys, threading, time, traceback, urllib.parse, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
 PORT, PUSH, ENG, CONF = int(E("PORT", 8080)), int(E("PUSH", 8765)), E("ENG", "eng_linux"), os.path.expanduser(E("CONF", "~/.ghostline-control.json"))
+CAM = os.path.expanduser(E("CAM", "~/.ghostline-cam.json"))     # the sent picture's camera (/view/?ndi=1 gets it from /api/cam/events)
+OUTCONF = os.path.expanduser(E("OUTCONF", "~/.ghostline-out.json"))   # rt_ndiview.py reads it, and starts again when it changes
 VIEW = os.path.expanduser(E("VIEW", "~/.ghostline-view.json"))   # how the trails are drawn (delay, smoothing): changed any time, read by every page
 CELLS = ("tl", "tr", "bl", "br")                    # the grid's cells, row by row
 # rt_track.py's knobs the page may set in "extra". Not any variable: the page has no login, and LD_PRELOAD is a variable too
@@ -92,12 +96,12 @@ def course(name, line=""):
 
 def track(name):
     """a race.json's course line (make_race.py: the anchor pilot's laps averaged, 1,600 points along a lap, about 25 cm apart on the FDF course; the page closes it) seen from above, and its
-    start / finish gate as the segment across it"""
+    start / finish gate, and its other gates (track.json "gates"), as the segments across them"""
     if name not in options()["tracks"]: raise ValueError("コースの線が見つからない")
     r = json.load(open(f"{HERE}/{name}")); t = r.get("track") or []; g = r.get("gate")
     pts = [[round(p[0], 2), round(p[2], 2)] for p in t]
-    gate = [[round(g["centre"][0] + k * g["half_width"] * g["width_dir"][0], 2), round(g["centre"][2] + k * g["half_width"] * g["width_dir"][2], 2)] for k in (-1, 1)] if g else None
-    return dict(pts=pts, gate=gate)
+    seg = lambda g: [[round(g["centre"][0] + k * g["half_width"] * g["width_dir"][0], 2), round(g["centre"][2] + k * g["half_width"] * g["width_dir"][2], 2)] for k in (-1, 1)]
+    return dict(pts=pts, gate=seg(g) if g else None, gates=[seg(x) for x in r.get("gates") or []])   # gates: the course's other gates (the 3D page's splits)
 
 rendering, failed = set(), {}                    # failed: file -> when; tried again after 2 minutes (a render during a heat may hit a full GPU)
 def topview(name, scene, line=""):
@@ -307,6 +311,53 @@ def set_view(v):                                   # ms; the delay lets the smoo
     with open(tmp, "w") as f: json.dump(dict(delay=round(d), smooth=round(m)), f)
     os.replace(tmp, VIEW)                # whole: /api/state reads it on other threads
 
+def addrs():                                       # this box's IPv4 on the LAN, for the OBS page's URLs: not loopback, Tailscale (100.64/10) or docker
+    try: out = subprocess.run(["ip", "-4", "-o", "addr", "show"], capture_output=True, text=True, timeout=3).stdout
+    except Exception: return []
+    ips = [l.split()[3].split("/")[0] for l in out.splitlines() if len(l.split()) > 3 and not l.split()[1].startswith(("lo", "tailscale", "docker", "br-", "virbr"))]
+    ips = [ip for ip in ips if not ip.startswith(("127.", "169.254."))]
+    try: src = subprocess.run(["ip", "-4", "route", "get", "1.1.1.1"], capture_output=True, text=True, timeout=3).stdout.split(" src ")[1].split()[0]   # the default route's own address first
+    except Exception: src = None
+    return sorted(ips, key=lambda ip: ip != src)
+
+def cam():
+    try: v = json.load(open(CAM))
+    except Exception: v = {}
+    if not isinstance(v, dict): v = {}                 # valid JSON but not an object (hand-edited): /api/state must not break on it
+    return dict(mode=v.get("mode", "orbit"), zoom=v.get("zoom", 1))
+
+cam_changed, cam_n = threading.Condition(), [0]    # /api/cam/events: each page waiting is told at once
+
+def set_cam(v):                                    # mode: orbit, top, or p<output name> to follow that tracker output's pilot
+    if not isinstance(v, dict): raise ValueError("JSON の形がおかしい")
+    c = dict(cam(), **{k: v[k] for k in ("mode", "zoom") if k in v})
+    if not (isinstance(c["mode"], str) and re.fullmatch(r"orbit|top|p[\w.-]{1,40}", c["mode"])): raise ValueError("カメラは orbit・top・p<出力の名前>")
+    if not (isinstance(c["zoom"], (int, float)) and not isinstance(c["zoom"], bool) and 0.4 <= c["zoom"] <= 3): raise ValueError("ズームは 0.4〜3")
+    tmp = f"{CAM}.{threading.get_ident()}.tmp"
+    with open(tmp, "w") as f: json.dump(c, f)
+    os.replace(tmp, CAM)
+    with cam_changed: cam_n[0] += 1; cam_changed.notify_all()
+
+OUTS, SIZES = ("ndi", "srt", "ndi,srt", "off"), ((1280, 720), (1920, 1080))
+def out():
+    try: v = json.load(open(OUTCONF))
+    except Exception: v = {}
+    if not isinstance(v, dict): v = {}
+    return dict(out=v.get("out", "ndi"), w=v.get("w", 1920), h=v.get("h", 1080), fps=v.get("fps", 60))
+
+def set_out(v):                                    # the sender's output: written whole, the sender starts again with it
+    if not isinstance(v, dict): raise ValueError("JSON の形がおかしい")
+    c = dict(out(), **{k: v[k] for k in ("out", "w", "h", "fps") if k in v})
+    if c["out"] not in OUTS: raise ValueError("出力は ndi・srt・ndi,srt・off")
+    if (c["w"], c["h"]) not in SIZES: raise ValueError("大きさは 1280x720 か 1920x1080")
+    if c["fps"] not in (30, 60): raise ValueError("fps は 30 か 60")
+    try:
+        if json.load(open(OUTCONF)) == c: return       # unchanged: a write would restart the sender for nothing
+    except Exception: pass                             # missing or broken: written
+    tmp = f"{OUTCONF}.{threading.get_ident()}.tmp"
+    with open(tmp, "w") as f: json.dump(c, f)
+    os.replace(tmp, OUTCONF)
+
 def watch(p):                                       # the tracker's output: the log, and the lines that say how it is doing
     # every run's whole output is kept too (live/tracker-<start>.log): the page shows only the last lines, and a run that went
     # wrong is understood from its lens decisions and summary afterwards. A failing write (a full disk) only stops the file:
@@ -359,8 +410,8 @@ def stop():
         if p is None: raise ValueError("動いていない")
         S["phase"] = "stopping"
     p.send_signal(signal.SIGTERM)                   # the tracker writes its summary and files on TERM
-    def wait():
-        try: p.wait(40)
+    def wait():                                     # 40 s was not enough for a 2-hour run's files (70 MB a cell): JDL R7 2026-10-24 lost three cells' twice
+        try: p.wait(300)
         except subprocess.TimeoutExpired: p.kill()
     threading.Thread(target=wait, daemon=True).start()
 
@@ -371,6 +422,21 @@ def poll_gpu():
                                                     capture_output=True, text=True, timeout=5).stdout.strip().split(", ")
             gpu.update(w=float(w), pstate=ps, mem=int(mem), temp=int(temp), util=int(util))
         except Exception: gpu.clear()
+        time.sleep(1)
+
+RAPL = "/sys/class/powercap/intel-rapl:0"         # the CPU package's energy counter: root only by default (CVE-2020-8694), the service's ExecStartPre opens it to its user's group
+cpu = {}
+def poll_cpu():                                    # W over each second from the counter's µJ (it wraps at max_energy_range_uj)
+    prev, said = None, None
+    while True:
+        try:
+            top, uj, t = int(open(RAPL + "/max_energy_range_uj").read()), int(open(RAPL + "/energy_uj").read()), time.monotonic()
+            if prev: cpu["w"] = round((uj - prev[0]) % top / 1e6 / (t - prev[1]), 1)
+            prev, said = (uj, t), None; cpu.pop("err", None)
+        except Exception as e:                     # the reason goes to the page; the log says it once per kind of failure
+            why = "読めない（ExecStartPre の chgrp / chmod）" if isinstance(e, PermissionError) else "RAPL が無い" if isinstance(e, FileNotFoundError) else type(e).__name__
+            cpu["err"] = why; cpu.pop("w", None); prev = None   # in this order: a reader on another thread never sees neither
+            if said != why: print(f"CPU power: {e} ({why})", flush=True); said = why
         time.sleep(1)
 
 def latency(now):
@@ -384,7 +450,7 @@ def sample():
         time.sleep(1); now = time.time()
         with lock:
             on = S["phase"] != "stopped"
-            hist.append(dict(w=gpu.get("w"), temp=gpu.get("temp"), lat=latency(now) if on else None,
+            hist.append(dict(w=gpu.get("w"), cw=cpu.get("w"), temp=gpu.get("temp"), lat=latency(now) if on else None,
                              cells={c["cell"]: round(sum(1 for t, ok, _ in c["rows"] if ok and t > now - 1), 1) for c in S["cells"].values()} if on else {}))
 
 def state():
@@ -399,8 +465,8 @@ def state():
             try: conf = json.load(open(CONF))
             except Exception: conf = None
         return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], lat=latency(now) if S["phase"] != "stopped" else None, ndi=S["ndi"], input=S["input"],
-                    config=conf, view=view(), grow=dict(phase=G["phase"], error=G["error"], last=G["last"] and dict(G["last"], age=round(now - G["last"]["t"]), swapped=G["using"] == G["last"]["map"])), cells=cells, rec=recorders.recording(), relay=relay.status() if relay else relay_off and dict(ok=False, age=None, event=E("RELAY_EVENT"), err=relay_off, pending=0), log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
-                    hist=dict(n=HIST, w=[h["w"] for h in hist], temp=[h["temp"] for h in hist], lat=[h["lat"] for h in hist],
+                    config=conf, view=view(), cam=cam(), out=out(), grow=dict(phase=G["phase"], error=G["error"], last=G["last"] and dict(G["last"], age=round(now - G["last"]["t"]), swapped=G["using"] == G["last"]["map"])), cells=cells, rec=recorders.recording(), relay=relay.status() if relay else relay_off and dict(ok=False, age=None, event=E("RELAY_EVENT"), err=relay_off, pending=0), log=list(S["log"])[-80:], gpu=dict(gpu), cpu=dict(cpu), options=options(), push=PUSH,
+                    hist=dict(n=HIST, w=[h["w"] for h in hist], cw=[h["cw"] for h in hist], temp=[h["temp"] for h in hist], lat=[h["lat"] for h in hist],
                               cells={c: [h["cells"].get(c) for h in hist] for c in CELLS}))
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -423,12 +489,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
             try:
                 while left > 0 and (chunk := f.read(min(left, 1 << 20))): self.wfile.write(chunk); left -= len(chunk)
             except (BrokenPipeError, ConnectionResetError, TimeoutError): pass   # the browser seeks by dropping one range and asking for another
+    def cam_events(self):                           # server-sent events: the camera now, then each change as it is made (a comment every 5 s keeps it open)
+        self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.send_header("Cache-Control", "no-store"); self.end_headers()
+        seen = None
+        try:
+            while True:
+                with cam_changed: cam_changed.wait_for(lambda: cam_n[0] != seen, 5)
+                if cam_n[0] != seen: seen = cam_n[0]; self.wfile.write(f"data: {json.dumps(cam())}\n\n".encode())
+                else: self.wfile.write(b": ping\n\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, TimeoutError): pass
     def do_GET(self):
         u = urllib.parse.urlsplit(self.path); q = dict(urllib.parse.parse_qsl(u.query))
         if u.path == "/": self.send(200, open(HERE + "/rt_control.html", "rb").read(), "text/html")
         elif u.path == "/obs": self.send(200, open(HERE + "/rt_obs.html", "rb").read(), "text/html")   # the top view alone, for an OBS browser source
         elif u.path == "/rt_topview.js": self.send(200, open(HERE + "/rt_topview.js", "rb").read(), "text/javascript")
         elif u.path == "/api/state": self.send(200, state())
+        elif u.path == "/obs-setup": self.send(200, open(HERE + "/rt_obs_setup.html", "rb").read(), "text/html")   # for the venue's OBS operator
+        elif u.path == "/api/addr": self.send(200, addrs())
+        elif u.path == "/api/cam": self.send(200, cam())
+        elif u.path == "/api/cam/events": self.cam_events()
+        elif u.path == "/api/out": self.send(200, out())
         elif u.path == "/api/pilots": self.send(200, pilots())   # the 3D page's name tags
         elif u.path == "/rec": self.send(200, open(HERE + "/rt_rec.html", "rb").read(), "text/html")   # the recordings
         elif u.path == "/api/rec": self.send(200, recorders.state())
@@ -438,10 +519,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_file(f"{REC_DIR}/{name}", "video/mp4")
         elif u.path == "/view" or u.path.startswith("/view/"):   # the 3D page: the viewer's build (VITE_BASE=/view/) and its data folders, in view/
             rel = urllib.parse.unquote(u.path[6:])
+            if not rel and "data" in q:                  # a folder asked for: the query as it is (?ndi=1 and the like too)
+                self.send_response(302); self.send_header("Location", "/view/live.html?" + u.query); self.send_header("Content-Length", "0"); return self.end_headers()
             if not rel:                                  # the newest scene folder (view/<name>/index.json)
                 ix = sorted(glob.glob(f"{HERE}/view/*/index.json"), key=lambda f: os.stat(f).st_mtime if os.path.exists(f) else 0)
                 if not ix: return self.send(404, dict(error="view/ に index.json のあるフォルダが無い"))
-                self.send_response(302); self.send_header("Location", "/view/live.html?data=" + urllib.parse.quote(os.path.basename(os.path.dirname(ix[-1]))))
+                self.send_response(302); self.send_header("Location", "/view/live.html?data=" + urllib.parse.quote(os.path.basename(os.path.dirname(ix[-1]))) + (u.query and "&" + u.query))   # ?ndi=1 and the like carried over
                 self.send_header("Content-Length", "0"); return self.end_headers()
             if "\0" in rel: return self.send(404, dict(error="not found"))
             path = os.path.realpath(f"{HERE}/view/{rel}")   # symlinks out of view/ are refused too
@@ -475,6 +558,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif self.path == "/api/grow": grow("手動")
             elif self.path == "/api/grow/reset": reset_map()
             elif self.path == "/api/view": set_view(body)
+            elif self.path == "/api/cam": set_cam(body)
+            elif self.path == "/api/out": set_out(body)
             elif self.path == "/api/rec/delete": recorders.delete(body.get("file"))
             else: return self.send(404, dict(error="not found"))
             self.send(200, dict(ok=True))
@@ -492,6 +577,6 @@ def on_term(*_):                                   # systemctl stop: the tracker
         except Exception: pass
     recorders.stop_all(); os._exit(0)
 signal.signal(signal.SIGTERM, on_term)
-threading.Thread(target=poll_gpu, daemon=True).start(); threading.Thread(target=sample, daemon=True).start(); threading.Thread(target=between_heats, daemon=True).start()
+threading.Thread(target=poll_gpu, daemon=True).start(); threading.Thread(target=poll_cpu, daemon=True).start(); threading.Thread(target=sample, daemon=True).start(); threading.Thread(target=between_heats, daemon=True).start()
 print(f"control page on :{PORT}", flush=True)
 http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

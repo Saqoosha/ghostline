@@ -44,9 +44,9 @@ test('Timeline.between includes one that arrived late', () => {
   const tl = new Timeline(); tl.push([a(1000), a(3000)]); expect(tl.between(0, 2500).length).toBe(1)
   tl.push([a(2400)]); expect(tl.between(0, 2500).map(m => m.t)).toEqual([1000, 2400])
 })
-test('Timeline keeps 120 s of answers', () => {
-  const tl = new Timeline(); tl.push([a(0), a(100_000), a(130_000)])
-  expect(tl.between(-1, 200_000).map(m => m.t)).toEqual([100_000, 130_000])
+test('Timeline keeps 170 s of answers', () => {
+  const tl = new Timeline(); tl.push([a(0), a(10_000), a(175_000)])
+  expect(tl.between(-1, 200_000).map(m => m.t)).toEqual([10_000, 175_000])
 })
 test('an ended heat stays ended when its start arrives again afterwards (review C1)', () => {
   const tl = new Timeline(); tl.push([h('A', 0, {}, 0), h('A', 0, {}, 100_000), e('A', 105_000), h('A', 0, {}, 110_000), h('A', 0, {}, 120_000)])

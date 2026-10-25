@@ -8,7 +8,7 @@
   /* ghost: how alive a thing is shows in how dark it is drawn - a reading that stopped fades, a history line dissolves into the past.
      line: no boxes and no fills, hairlines and thin type. Colour says who: each quarter of the grid has its own, the tracker's own
      values share one. Only fonts the device already has: the venue may have no internet. */
-  :root { --paper: #f3f4f6; --ink: #0c0f14; --dim: rgba(12, 15, 20, .58); --faint: rgba(12, 15, 20, .2); --hair: rgba(12, 15, 20, .82); --spirit: #5b4bff; --alarm: #d1301f; --tl: #ff2e63; --tr: #f59e0b; --bl: #12b76a; --br: #2f6bff;
+  :root { --paper: #f3f4f6; --ink: #0c0f14; --dim: rgba(12, 15, 20, .58); --faint: rgba(12, 15, 20, .2); --hair: rgba(12, 15, 20, .82); --spirit: #5b4bff; --alarm: #d1301f; --tl: #e8a800; --tr: #22a849; --bl: #2f7bf0; --br: #f0701e;
           --sans: "Helvetica Neue", -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--paper); color: var(--ink); font: 400 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
@@ -38,12 +38,17 @@
   #go-l { margin-right: -.3em; }
   /* the recordings: a link, with a red dot and the count while any source is being recorded */
   #view3d { flex: none; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); text-decoration: none; } #view3d:hover { color: var(--ink); }
+  #obsdoc { flex: none; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); text-decoration: none; } #obsdoc:hover { color: var(--ink); }
   #rec { flex: none; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); text-decoration: none; white-space: nowrap; }
   #relay { flex: none; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--spirit); white-space: nowrap; } #relay.off { color: var(--dim); }
   #rec:hover { color: var(--ink); } #rec.on { color: var(--alarm); } #rec.on::before { content: "● "; animation: breathe 2.4s ease-in-out infinite; }
   #err { color: var(--alarm); font: 400 12px var(--mono); min-height: 18px; }
   .grow { display: flex; align-items: center; gap: 14px; font: 400 11px var(--mono); letter-spacing: .06em; color: var(--dim); min-height: 22px; }
   .grow button { background: none; border: 1px solid var(--faint); border-radius: 3px; padding: 2px 8px; font: inherit; color: var(--ink); cursor: pointer; }
+  .cast { display: grid; gap: 12px; margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--faint); }   /* the 3D feed: its own block between the cells and the metrics */
+  .cast .grow > span:first-child { min-width: 170px; }   /* with the gap, the controls start where .spec's values do */ .cast .grow { gap: 10px; } .cast label { margin-left: 8px; }
+  #camseg { display: flex; gap: 6px; } #camseg button.on { background: var(--ink); color: var(--paper); } .ndicam label { display: flex; align-items: center; gap: 8px; }
+  .ndicam select { border: 1px solid var(--faint); border-radius: 3px; padding: 2px 6px; font: inherit; color: var(--ink); background: none; cursor: pointer; }
   .grow button:hover { background: rgba(12, 15, 20, .05); } .grow button:disabled { opacity: .3; cursor: default; }
   .grow .bad { color: var(--alarm); }
 
@@ -57,7 +62,7 @@
 
 
   /* the main thing: the scan from above, each pilot's last 12 seconds on it in their colour and their name at the point where they are now */
-  .top { position: relative; aspect-ratio: 1.5; overflow: hidden; }   /* the box's own proportions once the course is known */
+  .top { position: relative; aspect-ratio: 1.5; overflow: hidden; width: min(100%, calc(50vh * var(--ar, 1.5))); margin-inline: auto; }   /* the box's own proportions once the course is known; at most half the window high, so the rest shows below */
   .top svg { display: block; width: 100%; height: 100%; }
   #course { fill: none; stroke: var(--faint); stroke-width: 2.4; stroke-linecap: round; vector-effect: non-scaling-stroke; }
   #top.pic #course { display: none; } #top.pic #trails { filter: drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 2px #fff); }   /* a white edge: the scan keeps its own colours */
@@ -111,7 +116,7 @@
   body:not(.running) .eye { filter: grayscale(1) opacity(.55); }
 
   /* the tracker's own values, small: the pilots come first */
-  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 34px; margin-top: 30px; }
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 34px; margin-top: 30px; }
   .m { position: relative; height: 96px; }
   .m .num { font-size: 40px; line-height: 1; }
   .m u { text-decoration: none; font: 300 13px var(--sans); color: var(--dim); margin-left: 5px; letter-spacing: .08em; }
@@ -140,10 +145,11 @@
         -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 70%); mask-image: linear-gradient(to bottom, transparent 0, #000 70%); }
 
   @media (max-width: 640px) {
+    .cast .grow { flex-wrap: wrap; row-gap: 6px; } .cast .grow > span:first-child { min-width: 0; flex-basis: 100%; }
     main { padding: 20px 16px 48px; } .mark { font-size: 17px; letter-spacing: .34em; gap: 10px; } .ctl { gap: 12px; margin-top: 14px; } #up { display: none; }
     .pilots { grid-template-columns: 1fr 1fr; } .q { height: 126px; padding: 10px 10px 0; } .q:nth-child(3) { border-left: 0; } .q:nth-child(-n+2) { border-bottom: 1px solid var(--faint); }
     .val .num { font-size: 44px; } .hd input[type=text] { font-size: 14px; letter-spacing: .12em; } .q .trail { left: 10px; right: 10px; } .tag { font-size: 10px; padding-left: 8px; }
-    .metrics { gap: 14px; } .m { height: 84px; } .m .num { font-size: 32px; } .m u { font-size: 11px; margin-left: 3px; } .m > span { font-size: 10px; letter-spacing: .04em; }
+    .metrics { gap: 14px; grid-template-columns: 1fr 1fr; } .m { height: 84px; } .m .num { font-size: 32px; } .m u { font-size: 11px; margin-left: 3px; } .m > span { font-size: 10px; letter-spacing: .04em; }
     .spec { grid-template-columns: 1fr; } .spec > label { border-bottom: 0; padding-bottom: 0; } .spec > div:first-of-type { border-top: 0; } .spec > div { padding-top: 3px; }
   }
 </style>
@@ -157,6 +163,7 @@
     <div id="src"><b id="ndi">–</b><span id="ndi-sub"></span></div>
     <a id="view3d" href="/view/" target="_blank" title="シーンを 3D で見る（tracker の答えも描く）">3D</a>
     <a id="rec" href="/rec" title="NDI の録画の一覧">録画</a>
+    <a id="obsdoc" href="/obs-setup" target="_blank" title="運営の OBS で 3D の配信を受ける手順">OBS</a>
     <span id="relay" hidden title="観客向けページへの送信（rt_relay.py）"></span>
     <button id="go"><span id="go-l">開始</span></button>
   </div>
@@ -171,9 +178,18 @@
       <label for="v-delay">遅らせる</label><input type="range" id="v-delay" min="0" max="1000" step="10" value="250"><output id="o-delay"></output></div></div>
   <div class="pilots" id="cells"></div>
   <div class="cap">線は直近 5 分、右端がいま · 映像の濃さ <button class="eye" id="eye" title="映像の濃さを切り替え"></button></div>
+  <div class="cast">
+  <div class="grow ndicam" title="rt_ndiview.py が送る 3D の絵。NDI の名前は「ghostline 3D」、SRT は srt://<この機械>:9000（OBS ならメディアソース、mpegts）。変えると送り手が数秒で立ち上げ直す">
+    <span>配信</span><select id="o-out"><option value="ndi">NDI</option><option value="srt">SRT</option><option value="ndi,srt">NDI + SRT</option><option value="off">止める</option></select>
+    <select id="o-size"><option value="1280x720">1280x720</option><option value="1920x1080">1920x1080</option></select>
+    <select id="o-fps"><option value="30">30 fps</option><option value="60">60 fps</option></select></div>
+  <div class="grow ndicam" title="配信する 3D の絵（rt_ndiview.py が /view/?ndi=1 を描く）のカメラ。押すとすぐ切り替わる（カメラは 0.7 秒かけて滑る）。マスの名前は追いかけ">
+    <span>配信のカメラ</span><span id="camseg"></span><label>ズーム <input type="range" id="c-zoom" min="0.4" max="3" step="0.05" value="1"></label></div>
+  </div>
 
   <div class="metrics">
     <div class="m"><b class="num" id="gw">–</b><u>W</u><span>GPU の電力</span><div class="trail"><svg id="sp-w" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-w" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-w)"/></svg><i class="head" id="hd-w"></i></div></div>
+    <div class="m"><b class="num" id="cw">–</b><u>W</u><span id="cp">CPU の電力</span><div class="trail"><svg id="sp-cw" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-cw" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-cw)"/></svg><i class="head" id="hd-cw"></i></div></div>
     <div class="m"><b class="num" id="gt">–</b><u>℃</u><span id="gp">GPU の温度</span><div class="trail"><svg id="sp-temp" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-temp" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-temp)"/></svg><i class="head" id="hd-temp"></i></div></div>
     <div class="m"><b class="num" id="cyc">–</b><u>ms</u><span>映像が届いてから位置が出るまで</span><div class="trail"><svg id="sp-cycle" viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g-cycle" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><path stroke="url(#g-cycle)"/></svg><i class="head" id="hd-cycle"></i></div></div>
   </div>
@@ -265,7 +281,33 @@ for (const k of ["smooth", "delay"]) {
   el.addEventListener("change", async () => { await post("/api/view", viewNow()); viewBusy = false; });
 }
 
+// the sent picture's camera: orbit, top, or follow a pilot (p<the tracker's output name>), and the zoom
+let camKey = "", zoomBusy = false;
+function drawCam(s) {
+  if (!s.cam) return;
+  const outs = Object.entries(s.cells).sort((a, b) => CELLS.findIndex(c => c[0] === a[1].cell) - CELLS.findIndex(c => c[0] === b[1].cell)).map(([n]) => n);
+  const key = s.cam.mode + "|" + outs.join(",");
+  if (key !== camKey) {
+    camKey = key;
+    const btn = (v, label) => { const b = document.createElement("button"); b.textContent = label; b.className = v === s.cam.mode ? "on" : ""; b.onclick = () => post("/api/cam", { mode: v }); return b; };
+    $("camseg").replaceChildren(btn("orbit", "全体"), btn("top", "真上"), ...outs.map(n => btn("p" + n, n)));
+  }
+  if (!zoomBusy) $("c-zoom").value = s.cam.zoom;
+}
+$("c-zoom").addEventListener("input", () => { zoomBusy = true; });
+// what the sender sends: NDI, SRT, both or nothing, and its size and rate (the sender starts again with them)
+function drawOut(s) {
+  if (!s.out || ["o-out", "o-size", "o-fps"].includes(document.activeElement && document.activeElement.id)) return;
+  $("o-out").value = s.out.out; $("o-size").value = `${s.out.w}x${s.out.h}`; $("o-fps").value = String(s.out.fps);
+}
+for (const k of ["o-out", "o-size", "o-fps"]) $(k).addEventListener("change", async () => {
+  const [w, h] = $("o-size").value.split("x").map(Number);
+  await post("/api/out", { out: $("o-out").value, w, h, fps: +$("o-fps").value }); $(k).blur();
+});
+$("c-zoom").addEventListener("change", async () => { await post("/api/cam", { zoom: +$("c-zoom").value }); zoomBusy = false; });
+
 function render(s) {
+  drawCam(s); drawOut(s);
   if (s.view && !viewBusy) { $("v-smooth").value = s.view.smooth; $("v-delay").value = s.view.delay; showView(s.view); }
   if (viewBusy) delete s.view;
   if (!filled) { fillForm(s); filled = true; }
@@ -278,6 +320,7 @@ function render(s) {
   $("go-l").textContent = stopped ? "開始" : "停止"; $("go").className = stopped ? "" : "stop"; $("go").disabled = s.phase === "stopping";
   for (const el of document.querySelectorAll("#form input, #form select, .q .hd input")) el.disabled = !stopped;
   num("gw", s.gpu.w != null ? s.gpu.w.toFixed(0) : "–");
+  num("cw", s.cpu && s.cpu.w != null ? s.cpu.w.toFixed(0) : "–"); $("cp").textContent = "CPU の電力" + (s.cpu && s.cpu.err ? ` · ${s.cpu.err}` : "");
   num("gt", s.gpu.temp != null ? String(s.gpu.temp) : "–");
   $("gp").textContent = "GPU の温度" + (s.gpu.pstate ? ` · ${s.gpu.pstate === "P8" ? "待機" : "動作中"}` : "");   // P8 is the idle state, P0-P2 working
   num("cyc", s.lat != null ? s.lat.toFixed(0) : "–");
@@ -301,7 +344,7 @@ function render(s) {
   }
   pvName = (stopped ? $("source").value : (s.config && s.config.source) || "").trim();
   TopView.update(s, ...(stopped ? [$("map").value, $("scene").value, $("trackfile").value] : [s.config && s.config.map, (s.config && s.config.scene) || "", (s.config && s.config.track) || ""]));
-  const h = s.hist; spark("w", h.w, h.n, 0, 150); spark("temp", h.temp, h.n, 25, 60); spark("cycle", h.lat, h.n, 0, 40);
+  const h = s.hist; spark("w", h.w, h.n, 0, 150); spark("cw", h.cw || [], h.n, 0, 120); spark("temp", h.temp, h.n, 25, 60); spark("cycle", h.lat, h.n, 0, 40);
   for (const [cell] of CELLS) spark(cell, h.cells[cell], h.n, 0, 30);
   const log = $("log"); log.textContent = s.log.join("\n"); if (logAtEnd) log.scrollTop = log.scrollHeight;
   phase = s.phase;

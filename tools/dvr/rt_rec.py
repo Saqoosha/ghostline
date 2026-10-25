@@ -10,6 +10,7 @@ import glob, hashlib, json, os, re, subprocess, threading, time, traceback
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
 REC, REC_DIR, REC_FPS, REC_HOLD, REC_ENC = int(E("REC", 1)), os.path.expanduser(E("REC_DIR", HERE + "/rec")), float(E("REC_FPS", 0)), float(E("REC_HOLD", 5)), E("REC_ENC", "h264_nvenc")
 REC_RATE = E("REC_RATE", "16M")
+REC_MATCH = re.compile(E("REC_MATCH", ""))          # only the sources whose name this matches (a venue's other feeds: PGM, SDI ...); empty = all
 STOPPING = threading.Event()                        # set by stop_all: a picture still on screen must not start a new file
 FILE = re.compile(r"[A-Za-z0-9_.-]+\.mp4")          # what /rec/<file> may serve
 
@@ -123,7 +124,7 @@ class Recorders:
         while True:
             try:
                 for n in self.finder.get_source_names():
-                    if n not in self.watch: self.watch[n] = Watcher(self.finder, n); print(f"rec: watching {n}", flush=True)
+                    if n not in self.watch and REC_MATCH.search(n): self.watch[n] = Watcher(self.finder, n); print(f"rec: watching {n}", flush=True)
             except Exception: traceback.print_exc()
             time.sleep(3)
     def stop_all(self):                             # the service stops: cut every file and wait for it to be closed

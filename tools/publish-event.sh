@@ -48,7 +48,7 @@ case "$WHAT" in
     say "build the pages"
     ( cd "$ROOT/viewer" && VITE_BASE="/$EV/" bun run build )
     PAGE="$TMP/page"; mkdir -p "$PAGE/scene"
-    cp "$ROOT/viewer/dist/event.html" "$PAGE/index.html"; cp "$ROOT/viewer/dist/watch.html" "$ROOT/viewer/dist/heat.html" "$PAGE/"
+    cp "$ROOT/viewer/dist/event.html" "$PAGE/index.html"; cp "$ROOT/viewer/dist/watch.html" "$ROOT/viewer/dist/heat.html" "$ROOT/viewer/dist/compare.html" "$PAGE/"
     cp -R "$ROOT/viewer/dist/assets" "$PAGE/"
     python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j.update({"title": sys.argv[3]} if sys.argv[3] else {}); json.dump(j, open(sys.argv[2], "w"))' "$SCENE/index.json" "$PAGE/index.json" "$TITLE"
     SC="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["scene"])' "$SCENE/index.json")"

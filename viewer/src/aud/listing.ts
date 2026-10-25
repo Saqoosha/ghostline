@@ -2,7 +2,9 @@
 // that ended on the venue but not yet on the broadcast they watch is still LIVE, and a heat the broadcast has not started
 // is not there at all.
 export type HeatEntry = { id: string; start: number; end: number | null; heat: string | null; cls: string | null; pilots: string[] }
-export type HeatIndex = { event: string; title: string; live: HeatEntry | null; heats: HeatEntry[] }
+// closed: the day is over (no live page, the list oldest first); sessions: the day's rounds (practice 1, qualifying 2...),
+// each from its start to the next one's, as headings over the list
+export type HeatIndex = { event: string; title: string; live: HeatEntry | null; heats: HeatEntry[]; closed?: boolean; sessions?: { name: string; from: number }[] }
 
 export function visibleIndex(ix: HeatIndex, serverNow: number, delayMs: number): { live: HeatEntry | null; done: HeatEntry[] } {
   const at = serverNow - delayMs
