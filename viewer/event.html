@@ -19,23 +19,23 @@
       h2 { margin: 40px 0 8px; font: 400 11px var(--mono); letter-spacing: .2em; color: var(--dim); }
       ol { list-style: none; margin: 0; padding: 0; }
       #now[hidden] { display: none; }
-      .tools { margin: -16px 0 20px; font: 400 11px var(--mono); letter-spacing: .14em; } .tools a { color: var(--dim); text-decoration: none; } .tools a:hover { color: var(--ink); }
-      li a { display: grid; grid-template-columns: 70px 170px 1fr; gap: 18px; align-items: baseline; padding: 11px 4px; border-bottom: 1px solid var(--faint); text-decoration: none; color: var(--ink); }
+      .now.cmp { margin-top: 12px; border-top: 1px solid var(--faint); }
+      li a { display: grid; grid-template-columns: 70px 250px 1fr; gap: 18px; align-items: baseline; padding: 11px 4px; border-bottom: 1px solid var(--faint); text-decoration: none; color: var(--ink); }
       li a:hover { background: rgba(12, 15, 20, .04); }
       li .t { font: 400 12px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
-      li b { font: 400 13px var(--sans); letter-spacing: .08em; }
+      li b { font: 400 13px var(--sans); letter-spacing: .08em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       li .who { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       #empty, #fail { color: var(--dim); padding: 12px 4px; } #fail { color: var(--alarm); }
       footer { margin-top: 48px; font-size: 11px; color: var(--dim); }
-      @media (max-width: 720px) { .now { grid-template-columns: auto 1fr; } .now .who, .now .go { grid-column: 1 / -1; } li a { grid-template-columns: 56px 1fr; } li .who { grid-column: 2; } }
+      @media (max-width: 720px) { .now { grid-template-columns: auto 1fr; } .now .who, .now .go { grid-column: 1 / -1; } li a { grid-template-columns: 56px 1fr; } li .who { grid-column: 2; } li b { white-space: normal; } }
     </style>
   </head>
   <body>
     <main>
       <header><a class="mark" href="/"><span>ghost</span><i></i><span>line</span></a></header>
       <h1 id="title"></h1>
-      <p class="tools"><a href="compare.html">飛行を比べる →</a></p>
       <div id="now"></div>
+      <a class="now cmp" href="compare.html"><span class="live">COMPARE</span><b>飛行を比べる</b><span class="who">ヒートや選手をまたいで、スタートのゲートの通過にそろえて再生</span><span class="go">比べる →</span></a>
       <div id="list"></div>
       <div id="empty" hidden>まだ<wbr>終わった<wbr>ヒートは<wbr>ありません</div>
       <div id="fail" hidden>ヒートの一覧を<wbr>読み込めませんでした<wbr>（10 秒ごとに<wbr>読み直します）</div>

@@ -60,6 +60,9 @@ async function load() {
   $('ver').textContent = rp.version === 'night' ? 'DVR 付き' : '速報'
   $('ver').title = rp.version === 'night' ? '録画から作り直した線と、各機の DVR 映像' : '会場でその場に出した位置（夜に DVR 付きの版に置き換わる）'
   $<HTMLInputElement>('seek').max = String(rp.dur)
+  // this heat's pilots on the compare page (compare.ts ?f=<heat id>~<name>, up to four), to set against other heats there
+  const cq = new URLSearchParams(); for (const p of rp.pilots.slice(0, 4)) cq.append('f', `${ID}~${p.name}`)
+  $<HTMLAnchorElement>('cmp').href = 'compare.html?' + cq.toString()
   begin()
   const dir = `${BASE}heats/${ID}/`
   $('dvr').hidden = !rp.pilots.some(p => p.video)
