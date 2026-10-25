@@ -24,15 +24,15 @@
       <span class="live" id="live">NO HEAT</span>
       <span class="what" id="load"></span>
       <span class="grow"></span>
-      <span class="delay" title="配信に合わせて表示を遅らせる（名前・ヒートの切り替えも同じだけ遅れる）">DELAY
-        <button class="btn" id="dminus" aria-label="0.5 秒短く">−</button><output id="dv"></output><button class="btn" id="dplus" aria-label="0.5 秒長く">＋</button>
+      <span class="delay" title="配信に合わせて表示を遅らせる（名前・ヒートの切り替えも同じだけ遅れる）" data-en-title="Delay the view to match the broadcast (names and heat changes are delayed too)">DELAY
+        <button class="btn" id="dminus" aria-label="0.5 秒短く" data-en-aria="0.5 s shorter">−</button><output id="dv"></output><button class="btn" id="dplus" aria-label="0.5 秒長く" data-en-aria="0.5 s longer">＋</button>
         <span class="seg" id="dp"></span></span>
       <span class="seg" id="cams"></span>
     </header>
     <div id="laps"><canvas id="lapc"></canvas></div>
-    <div class="note" id="note">接続中…</div>
+    <div class="note" id="note" data-en="Connecting…">接続中…</div>
     <footer class="bar foot">
-      <span>位置は<wbr>各機の DVR 映像から<wbr>推定したもので、<wbr>公式の記録では<wbr>ありません。</span>
+      <span data-en="Positions are estimated from each drone's DVR video and are not official results.">位置は<wbr>各機の DVR 映像から<wbr>推定したもので、<wbr>公式の記録では<wbr>ありません。</span>
       <span class="grow"></span>
       <a id="prev" hidden></a>
     </footer>

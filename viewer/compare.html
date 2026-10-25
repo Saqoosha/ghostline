@@ -44,15 +44,15 @@
     <header class="bar top">
       <a id="home" class="mark" href="./"><span>ghost</span><i></i><span>line</span></a>
       <span class="what" id="title"></span>
-      <span class="what">飛行を比べる</span>
+      <span class="what" data-en="Compare flights">飛行を比べる</span>
       <span class="grow"></span>
-      <button class="btn" id="picktoggle">飛行を選ぶ</button>
+      <button class="btn" id="picktoggle" data-en="Pick flights">飛行を選ぶ</button>
       <span class="seg" id="cams"></span>
     </header>
     <aside id="dvr" hidden></aside>
     <aside id="pick"><div id="chosen"></div><div id="heats"></div></aside>
     <div id="laps"><canvas id="lapc"></canvas></div>
-    <div class="note" id="note">読み込み中…</div>
+    <div class="note" id="note" data-en="Loading…">読み込み中…</div>
     <div class="bar time">
       <button class="btn" id="play">PLAY</button>
       <input id="seek" type="range" min="0" max="1" step="0.01" value="0" />
@@ -60,9 +60,9 @@
       <span class="seg" id="speed"></span>
     </div>
     <footer class="bar foot">
-      <span>選んだ飛行を、<wbr>それぞれの<wbr>スタートのゲートの<wbr>通過にそろえて<wbr>再生する。<wbr>位置は各機の DVR 映像から<wbr>推定したもので、<wbr>公式の記録では<wbr>ありません。</span>
+      <span data-en="The picked flights replay side by side, each from its pass through the start gate. Positions are estimated from each drone's DVR video and are not official results.">選んだ飛行を、<wbr>それぞれの<wbr>スタートのゲートの<wbr>通過にそろえて<wbr>再生する。<wbr>位置は各機の DVR 映像から<wbr>推定したもので、<wbr>公式の記録では<wbr>ありません。</span>
       <span class="grow"></span>
-      <a href="./">ヒートの一覧 →</a>
+      <a href="./" data-en="All heats →">ヒートの一覧 →</a>
     </footer>
     <script type="module" src="/src/compare.ts"></script>
   </body>

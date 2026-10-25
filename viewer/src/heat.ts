@@ -4,12 +4,16 @@
 // once its end has reached the viewer's broadcast.
 //   ?h=<heat id>  ?e=<event> (default: the folder the page is published in)
 import './aud/look.css'
+import { applyStatic, L, langToggle, words } from './aud/i18n'
 import { clock, heatName } from './aud/listing'
 import { resortWhenIdle } from './aud/racekit'
 import { fromLive, fromNight, type Replay } from './aud/record'
 import { drawLaps, lapRows, timeAt, type LapRow } from './aud/laptimeline'
 import { advance, drawProgress, makeCourse, newProg, progressOf, RACE_LAPS, type Course } from './aud/progress'
 import { createStage, hqButton, SLOTS, type Mode, type PilotState } from './aud/stage'
+
+applyStatic()
+document.querySelector('header')!.append(langToggle())
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const QS = new URLSearchParams(location.search)
@@ -23,9 +27,9 @@ const note = (s: string) => { $('note').textContent = s; $('note').hidden = !s }
 $<HTMLAnchorElement>('home').href = BASE + (QS.has('e') ? `?e=${EVENT}` : '')
 
 // the scan first: its progress over the scene, and the replay starts once both it and the heat's record are in
-const loading = (f: number) => note(`3D を​読み込み中 ${Number.isFinite(f) ? Math.min(99, Math.floor(f * 100)) + '%' : '…'}`)
+const loading = (f: number) => note(`${L('3D を​読み込み中', 'Loading 3D')} ${Number.isFinite(f) ? Math.min(99, Math.floor(f * 100)) + '%' : '…'}`)
 loading(0)
-stage.loadScene(loading).then(ix => { if (ix.title) $('title').textContent = ix.title; sceneReady = true; note(rp ? '' : '読み込み中…'); begin() }).catch(e => { console.error(e); note('スキャンを​読めなかった') })
+stage.loadScene(loading).then(ix => { if (ix.title) $('title').textContent = words(ix.title); sceneReady = true; note(rp ? '' : L('読み込み中…', 'Loading…')); begin() }).catch(e => { console.error(e); note(L('スキャンを​読めなかった', 'Could not load the scan')) })
 // ?t=<s>: the replay starts there (the LINK button below copies one)
 const T0 = Number(QS.get('t')) || 0
 // without ?t: 2 s before the first lift-off, GO as on the venue page's timeline (a pilot's last frame on the launch pads before its
@@ -51,14 +55,14 @@ fetch(BASE + 'track.json').then(r => r.ok ? r.json() : null).then(j => { stage.s
 
 const get = (f: string) => fetch(`${BASE}heats/${ID}/${f}`, { cache: 'no-cache' }).then(r => r.ok ? r.json() : null)
 async function load() {
-  if (!ID) { note('ヒートが​指定されていない'); return }
+  if (!ID) { note(L('ヒートが​指定されていない', 'No heat given')); return }
   const night = await get('race.json').catch(() => null)
   rp = night ? fromNight(night) : await get('live.json').then(j => j && fromLive(j)).catch(() => null)
-  if (!rp) { note('この​ヒートの記録が​見つからない'); return }
+  if (!rp) { note(L('この​ヒートの記録が​見つからない', "This heat's record was not found")); return }
   if (sceneReady) note('')
-  $('heat').textContent = heatName({ heat: rp.heat, cls: rp.cls, start: rp.start }) + (rp.heat ? ` · ${clock(rp.start)}` : '')   // without a number the name is the time
-  $('ver').textContent = rp.version === 'night' ? 'DVR 付き' : '速報'
-  $('ver').title = rp.version === 'night' ? '録画から作り直した線と、各機の DVR 映像' : '会場でその場に出した位置（夜に DVR 付きの版に置き換わる）'
+  $('heat').textContent = words(heatName({ heat: rp.heat, cls: rp.cls, start: rp.start })) + (rp.heat ? ` · ${clock(rp.start)}` : '')   // without a number the name is the time
+  $('ver').textContent = rp.version === 'night' ? L('DVR 付き', 'With DVR') : L('速報', 'Live version')
+  $('ver').title = rp.version === 'night' ? L('録画から作り直した線と、各機の DVR 映像', "Paths rebuilt from the recordings, with each drone's DVR video") : L('会場でその場に出した位置（夜に DVR 付きの版に置き換わる）', 'Positions as shown at the venue (replaced by the DVR version at night)')
   $<HTMLInputElement>('seek').max = String(rp.dur)
   // this heat's pilots on the compare page (compare.ts ?f=<heat id>~<name>, up to four), to set against other heats there
   const cq = new URLSearchParams(); for (const p of rp.pilots.slice(0, 4)) cq.append('f', `${ID}~${p.name}`)
@@ -114,7 +118,7 @@ $('link').onclick = () => {                                 // this heat at this
   const q = new URLSearchParams(location.search); q.set('t', t.toFixed(1)); const url = `${location.origin}${location.pathname}?${q}`
   history.replaceState(null, '', `?${q}`)
   const done = (s: string) => { $('link').textContent = s; setTimeout(() => { $('link').textContent = 'LINK' }, 1500) }
-  (navigator.clipboard?.writeText(url) ?? Promise.reject()).then(() => done('COPIED'), () => done('URL に入れた'))
+  (navigator.clipboard?.writeText(url) ?? Promise.reject()).then(() => done('COPIED'), () => done(L('URL に入れた', 'In the URL')))
 }
 const videos = () => Array.from(document.querySelectorAll<HTMLVideoElement>('#dvr video'))
 // the clips follow the timeline (t = 0 is the clip's start). While they play, the first one running is the clock (frame()

@@ -2,6 +2,7 @@
 // pilot, and the camera - Orbit, Top, Follow one pilot. Drawn as livepage.ts draws them (that page is the venue's; this one
 // leaves out its Free camera, BA switch and sliders). A pilot's colour is their cell's place in the grid (--tl ... --br, look.css).
 import * as pc from 'playcanvas'
+import { L } from './i18n'
 import { loadHQ, pickScan, saveHQ, sceneBlob } from './scan'
 
 export type Slot = 'tl' | 'tr' | 'bl' | 'br'
@@ -29,7 +30,7 @@ function emptyMesh(m: pc.Mesh) { m.setPositions([0, 0, 0, 0, 0, 0, 0, 0, 0]); m.
 const SHOT = new URLSearchParams(typeof location === 'undefined' ? '' : location.search)   // (no location in the tests)
 // the header's HQ toggle (the full scan in place of the lite one): redraw the buttons now, done once the new scan is in
 export const hqButton = (stage: Stage, redraw: () => void, done: () => void) => Object.assign(document.createElement('button'), {
-  textContent: 'HQ', title: '高画質のスキャン（300 万 splat、45 MB）', className: stage.hq ? 'on' : '',
+  textContent: 'HQ', title: L('高画質のスキャン（300 万 splat、45 MB）', 'High-quality scan (3M splats, 45 MB)'), className: stage.hq ? 'on' : '',
   onclick: () => { stage.setHQ(!stage.hq).then(done, e => console.error('scan', e)); redraw() } })
 export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   const app = new pc.Application(canvas, { mouse: new pc.Mouse(canvas), touch: new pc.TouchDevice(canvas), graphicsDeviceOptions: { antialias: !PHONE } })   // MSAA: the trail fades by alpha-to-coverage, as mgp.ts - not on a phone, where 4x the splats' fill dropped the frame rate

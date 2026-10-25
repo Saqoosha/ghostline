@@ -3,7 +3,11 @@
 // has reached their broadcast, and its replay is listed only from then.
 import './aud/look.css'
 import { loadDelay } from './aud/delay'
+import { applyStatic, L, langToggle, words } from './aud/i18n'
 import { clock, heatName, visibleIndex, type HeatEntry, type HeatIndex } from './aud/listing'
+
+applyStatic()
+document.querySelector('header')!.append(langToggle())
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const QS = new URLSearchParams(location.search)
@@ -18,21 +22,22 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLEl
 function render() {
   const delay = loadDelay(EVENT)
   if (!ix) return
-  $('title').textContent = ix.title || EVENT
-  document.title = `${ix.title || EVENT} · ghostline`
+  const title = words(ix.title) || EVENT
+  $('title').textContent = title
+  document.title = `${title} · ghostline`
   const v = visibleIndex(ix, Date.now() + skew, delay * 1000)
   $('now').hidden = !!ix.closed
   $('now').replaceChildren(v.live
-    ? el('a', { className: 'now on', href: 'watch.html' + (keep ? '?' + keep : '') }, el('span', { className: 'live on' }, 'LIVE'), el('b', {}, heatName(v.live)), el('span', { className: 'who' }, who(v.live)), el('span', { className: 'go' }, '見る →'))
-    : el('a', { className: 'now', href: 'watch.html' + (keep ? '?' + keep : '') }, el('span', { className: 'live' }, 'NO HEAT'), el('b', {}, 'いま\u200b飛んでいる\u200bヒートは\u200bありません'), el('span', { className: 'go' }, 'ライブのページ →')))
+    ? el('a', { className: 'now on', href: 'watch.html' + (keep ? '?' + keep : '') }, el('span', { className: 'live on' }, 'LIVE'), el('b', {}, words(heatName(v.live))), el('span', { className: 'who' }, who(v.live)), el('span', { className: 'go' }, L('見る →', 'Watch →')))
+    : el('a', { className: 'now', href: 'watch.html' + (keep ? '?' + keep : '') }, el('span', { className: 'live' }, 'NO HEAT'), el('b', {}, L('いま\u200b飛んでいる\u200bヒートは\u200bありません', 'No heat is flying now')), el('span', { className: 'go' }, L('ライブのページ →', 'Live page →'))))
   const row = (h: HeatEntry) => el('li', {}, el('a', { href: `heat.html?h=${encodeURIComponent(h.id)}${keep ? '&' + keep : ''}` },
-    el('span', { className: 't' }, clock(h.start)), el('b', {}, h.heat ? heatName(h) : 'HEAT'), el('span', { className: 'who' }, who(h))))
+    el('span', { className: 't' }, clock(h.start)), el('b', {}, h.heat ? words(heatName(h)) : 'HEAT'), el('span', { className: 'who' }, who(h))))
   const heats = ix.closed ? [...v.done].reverse() : v.done, ss = [...(ix.sessions ?? [])].sort((a, b) => a.from - b.from)
   const of = (h: HeatEntry) => ss.filter(s => s.from <= h.start).pop()?.name ?? ''   // the round it is in: the last one begun by its start
   const parts: Node[] = []; let cur: string | null = null
   for (const h of heats) {
     const s = ss.length ? of(h) : null
-    if (s !== cur || !parts.length) { cur = s; parts.push(el('h2', {}, s || 'HEATS'), el('ol', { className: 'list' })) }
+    if (s !== cur || !parts.length) { cur = s; parts.push(el('h2', {}, words(s) || 'HEATS'), el('ol', { className: 'list' })) }
     parts[parts.length - 1].appendChild(row(h))
   }
   $('list').replaceChildren(...parts)

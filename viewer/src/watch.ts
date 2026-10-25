@@ -8,9 +8,13 @@
 import './aud/look.css'
 import { LiveDraw, SIGMA, type Answer } from './live'
 import { clampDelay, DELAY, loadDelay, saveDelay, ServerClock, Timeline, type HMsg, type Msg } from './aud/delay'
+import { applyStatic, L, langToggle, words } from './aud/i18n'
 import { clock, heatName, visibleIndex, type HeatIndex } from './aud/listing'
 import { advance, decode, drawProgress, makeCourse, newProg, type Course, type Prog } from './aud/progress'
 import { createStage, hqButton, SLOTS, type Mode, type PilotState } from './aud/stage'
+
+applyStatic()
+document.querySelector('header')!.append(langToggle())
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const QS = new URLSearchParams(location.search)
@@ -34,7 +38,7 @@ const note = (s: string) => { $('note').textContent = s; $('note').hidden = !s }
 
 // --- the scene, the course line, the day's title and flags
 let sceneReady = false                                     // the scan's progress in the header until it is in
-stage.loadScene(f => { $('load').textContent = `3D ${Number.isFinite(f) ? Math.min(99, Math.floor(f * 100)) + '%' : '…'}` }).then(ix => { sceneReady = true; $('load').textContent = ''; if (ix.title) $('title').textContent = ix.title }).catch(e => { console.error(e); note('スキャンを​読めなかった') })
+stage.loadScene(f => { $('load').textContent = `3D ${Number.isFinite(f) ? Math.min(99, Math.floor(f * 100)) + '%' : '…'}` }).then(ix => { sceneReady = true; $('load').textContent = ''; if (ix.title) $('title').textContent = words(ix.title) }).catch(e => { console.error(e); note(L('スキャンを​読めなかった', 'Could not load the scan')) })
 // a failed read keeps what was there (only a 404 means there is no line yet)
 let line: Course | null = null                               // the line as the progress bars measure it (aud/progress.ts)
 const course = () => fetch(BASE + 'track.json', { cache: 'no-cache' }).then(r => r.status === 404 ? (stage.setCourse(null), line = null) : r.ok ? r.json().then(j => { stage.setCourse(j?.track ?? null); line = makeCourse(j) }) : null)
@@ -106,7 +110,7 @@ $('lapc').onclick = e => { const s = progShown[Math.floor((e.offsetY - 3) / 26)]
 function frame() {
   requestAnimationFrame(frame)
   const nowMs = performance.now(), dt = Math.min(0.1, (nowMs - (lastFrame || nowMs)) / 1000); lastFrame = nowMs
-  if (!clk.ready()) { note(connected ? '' : '接続中…'); return }
+  if (!clk.ready()) { note(connected ? '' : L('接続中…', 'Connecting…')); return }
   const view = clk.now(Date.now()) - delay * 1000
   const h = tl.heatAt(view)
   if (h?.id !== shown?.id) begin(h); else if (h) shown = h          // the same heat, perhaps renamed by now
@@ -124,9 +128,9 @@ function frame() {
     lag += (want - lag) * Math.min(1, dt / 3)
   }
   // the header: the day, the heat, LIVE
-  $('heat').textContent = shown ? heatName({ heat: shown.heat, cls: shown.cls, start: shown.t }) : ''
+  $('heat').textContent = shown ? words(heatName({ heat: shown.heat, cls: shown.cls, start: shown.t })) : ''
   $('live').classList.toggle('on', !!shown); $('live').textContent = shown ? 'LIVE' : 'NO HEAT'
-  note(!connected ? '接続中…' : shown ? '' : 'いま\u200b飛んでいる\u200bヒートは\u200bありません')
+  note(!connected ? L('接続中…', 'Connecting…') : shown ? '' : L('いま\u200b飛んでいる\u200bヒートは\u200bありません', 'No heat is flying now'))
   const ts = (view - t0) / 1000
   // joining mid-heat: the laps so far, counted once over the answers the relay sent on connecting (its last 120 s: a
   // 90 s run or a race's 4 laps from the start), so a late viewer does not see everyone back on lap 1
@@ -155,7 +159,7 @@ function frame() {
   if (line) drawProgress($<HTMLCanvasElement>('lapc'), line!, pr.map(s => ({ cell: s, name: nameOf(s), color: css('--' + (SLOTS[order.indexOf(s)] ?? 'tl')) || '#5b4bff', prog: progs.get(s)! })), ts - lag, shown?.cls ?? null)
   // the newest heat this viewer has seen end: the replay link (not before the broadcast shows its end)
   const last = index ? visibleIndex(index, clk.now(Date.now()), delay * 1000).done[0] : null
-  $('prev').hidden = !last; if (last) { const a = $<HTMLAnchorElement>('prev'); a.href = `heat.html?h=${encodeURIComponent(last.id)}${QS.has('e') ? '&e=' + EVENT : ''}`; a.textContent = `前のヒート ${heatName(last)}${last.heat ? `（${clock(last.start)}）` : ''}を見返す →` }
+  $('prev').hidden = !last; if (last) { const a = $<HTMLAnchorElement>('prev'); a.href = `heat.html?h=${encodeURIComponent(last.id)}${QS.has('e') ? '&e=' + EVENT : ''}`; a.textContent = `${L('前のヒート', 'Previous heat')} ${words(heatName(last))}${last.heat ? `（${clock(last.start)}）` : ''}${L('を見返す →', ' →')}` }
 }
 requestAnimationFrame(frame)
 $<HTMLAnchorElement>('home').href = BASE + (QS.has('e') ? `?e=${EVENT}` : '')

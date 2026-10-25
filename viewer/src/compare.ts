@@ -4,11 +4,15 @@
 // counts), and replayed together over the scan with the progress band - places by the distance run since the holeshot.
 //   ?f=<heat id>~<name>   a flight (repeat, up to 4)   ?e=<event> (default: the folder the page is published in)
 import './aud/look.css'
+import { applyStatic, L, langToggle, words } from './aud/i18n'
 import { clock, heatName, type HeatEntry, type HeatIndex } from './aud/listing'
 import { advance, drawProgress, makeCourse, newProg, progressOf, RACE_LAPS, type Course } from './aud/progress'
 import { resortWhenIdle } from './aud/racekit'
 import { fromLive, fromNight, type Replay } from './aud/record'
 import { createStage, hqButton, SLOTS, type Mode } from './aud/stage'
+
+applyStatic()
+document.querySelector('header')!.append(langToggle())
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const QS = new URLSearchParams(location.search)
@@ -28,9 +32,9 @@ let t = 0, playing = false, speed = 1, dur = 0, resorted = false
 // ALL: each flight's whole line, from PRE s before its holeshot to its end (thin and pale), under its sphere and trail; this browser remembers
 let all = (() => { try { return localStorage.getItem('ghostline-compare-all') === '1' } catch { return false } })()
 
-const loading = (f: number) => note(`3D を​読み込み中 ${Number.isFinite(f) ? Math.min(99, Math.floor(f * 100)) + '%' : '…'}`)
+const loading = (f: number) => note(`${L('3D を​読み込み中', 'Loading 3D')} ${Number.isFinite(f) ? Math.min(99, Math.floor(f * 100)) + '%' : '…'}`)
 loading(0)
-stage.loadScene(loading).then(r => { if (r.title) $('title').textContent = r.title; sceneReady = true; refresh() }).catch(e => { console.error(e); note('スキャンを​読めなかった') })
+stage.loadScene(loading).then(r => { if (r.title) $('title').textContent = words(r.title); sceneReady = true; refresh() }).catch(e => { console.error(e); note(L('スキャンを​読めなかった', 'Could not load the scan')) })
 const course = fetch(BASE + 'track.json').then(r => r.ok ? r.json() : null).then(j => { stage.setCourse(j?.track ?? null); line = makeCourse(j) }).catch(() => {})
 fetch(BASE + 'heats.json', { cache: 'no-cache' }).then(r => r.ok ? r.json() : null).then(j => { ix = j; drawPicker() }).catch(e => console.warn('heats.json', e))
 
@@ -47,13 +51,13 @@ const record = (id: string) => {
 }
 async function loadFlight(key: string): Promise<Flight | string> {
   const [id, name] = key.split('~'); const rp = await record(id); await course
-  if (!rp || !line) return `${name}：記録が​見つからない`
-  const p = rp.pilots.find(x => x.name === name); if (!p) return `${name}：この​ヒートに​いない`
+  if (!rp || !line) return `${name}${L('：記録が​見つからない', ': record not found')}`
+  const p = rp.pilots.find(x => x.name === name); if (!p) return `${name}${L('：この​ヒートに​いない', ': not in this heat')}`
   const g = newProg(), arc: (number | null)[] = [], lap: number[] = []
   p.pos.forEach((q, k) => { if (q) advance(line!, g, q, k / rp.fps); arc.push(g.arc); lap.push(g.lap) })
   const off = rp.official?.cells[p.stream]?.holeshot, hs = off ? (off - rp.start) / 1000 : g.hs
-  if (hs === null || hs === undefined) return `${name}：スタートの​ゲートを​通っていない`
-  const race = /決勝/.test(rp.cls ?? '')
+  if (hs === null || hs === undefined) return `${name}${L('：スタートの​ゲートを​通っていない', ': never passed the start gate')}`
+  const race = /決勝/.test(rp.cls ?? '')   // raw Japanese cls: do not translate before the test
   return { key, id, name, label: name, cls: rp.cls, race, fps: rp.fps, pos: p.pos, arc, lap, hs, fin: null, video: p.video ? `${BASE}heats/${id}/${p.video}` : null }
 }
 
@@ -67,23 +71,23 @@ async function refresh() {
   stage.clear(); dur = Math.max(0, ...flights.map(f => f.pos.length / f.fps - f.hs + PRE))
   $<HTMLInputElement>('seek').max = String(dur); t = Math.min(t, dur); drawPicker(); drawDvr()
   if (!sceneReady) return
-  note(bad.length ? bad.join('　') : flights.length ? '' : '左の​一覧から​比べる​飛行を​選ぶ（4 つまで）')
+  note(bad.length ? bad.join('　') : flights.length ? '' : L('左の​一覧から​比べる​飛行を​選ぶ（4 つまで）', 'Pick up to 4 flights from the list on the left'))
   if (flights.length && !playing && t === 0) setPlaying(true)
 }
 refresh()
-const heatOf = (id: string) => { const h = ix?.heats.find(x => x.id === id); return h ? heatName(h) : id }
+const heatOf = (id: string) => { const h = ix?.heats.find(x => x.id === id); return h ? words(heatName(h)) : id }
 
 // --- the picker: the day's heats by round, a button per pilot
 function drawPicker() {
-  $('chosen').textContent = keys.length ? `${keys.length} / ${MAX} 選んだ` : `比べる​飛行を​選ぶ（${MAX} つまで）`
+  $('chosen').textContent = keys.length ? L(`${keys.length} / ${MAX} 選んだ`, `${keys.length} / ${MAX} picked`) : L(`比べる​飛行を​選ぶ（${MAX} つまで）`, `Pick up to ${MAX} flights to compare`)
   $('chosen').classList.toggle('full', keys.length >= MAX)
   if (!ix) return
   const ss = [...(ix.sessions ?? [])].sort((a, b) => a.from - b.from), of = (h: HeatEntry) => ss.filter(s => s.from <= h.start).pop()?.name ?? ''
   const heats = [...ix.heats].filter(h => h.end !== null).sort((a, b) => a.start - b.start), out: HTMLElement[] = []; let cur: string | null = null
   for (const h of heats) {
-    const s = of(h); if (s !== cur) { cur = s; out.push(Object.assign(document.createElement('h3'), { textContent: s || 'HEATS' })) }
+    const s = of(h); if (s !== cur) { cur = s; out.push(Object.assign(document.createElement('h3'), { textContent: words(s) || 'HEATS' })) }
     const box = document.createElement('div'); box.className = 'heat'
-    box.append(Object.assign(document.createElement('b'), { textContent: `${clock(h.start)}　${h.heat ? heatName(h) : ''}` }))
+    box.append(Object.assign(document.createElement('b'), { textContent: `${clock(h.start)}　${h.heat ? words(heatName(h)) : ''}` }))
     for (const name of h.pilots.filter(Boolean)) {
       const key = `${h.id}~${name}`, k = keys.indexOf(key), b = Object.assign(document.createElement('button'), { textContent: name, className: k >= 0 ? 'on' : '' })
       if (k >= 0) b.style.setProperty('--c', `var(--${SLOTS[k]})`)
@@ -137,7 +141,7 @@ function drawCams() {
   const k = stage.mode[0] === 'p' ? flights.findIndex(f => `p${f.key}` === stage.mode) : -1
   $('cams').replaceChildren(btn('orbit', 'ORBIT'), btn('top', 'TOP'),
     Object.assign(document.createElement('button'), { textContent: 'FOLLOW', className: k >= 0 ? 'on' : '', onclick: () => { if (flights.length) stage.setMode(`p${flights[(k + 1) % flights.length].key}`) } }),
-    Object.assign(document.createElement('button'), { textContent: 'ALL', title: '飛行の軌跡を全部', className: all ? 'on' : '', onclick: () => { all = !all; try { localStorage.setItem('ghostline-compare-all', all ? '1' : '0') } catch { /* private window */ } drawCams() } }),
+    Object.assign(document.createElement('button'), { textContent: 'ALL', title: L('飛行の軌跡を全部', 'Whole flight paths'), className: all ? 'on' : '', onclick: () => { all = !all; try { localStorage.setItem('ghostline-compare-all', all ? '1' : '0') } catch { /* private window */ } drawCams() } }),
     hqButton(stage, drawCams, () => note('')))
 }
 stage.onMode = () => { drawCams(); setTimeout(() => { resorted = false }, 800) }; drawCams()

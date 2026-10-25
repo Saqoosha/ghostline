@@ -42,23 +42,23 @@
       <span class="what" id="heat"></span>
       <span class="ver" id="ver"></span>
       <span class="grow"></span>
-      <a class="btn" id="cmp" href="compare.html" title="このヒートの選手を比べるページで開く">比べる</a>
+      <a class="btn" id="cmp" href="compare.html" title="このヒートの選手を比べるページで開く" data-en="Compare" data-en-title="Open this heat's pilots on the compare page">比べる</a>
       <span class="seg" id="cams"></span>
     </header>
     <aside id="dvr" hidden></aside>
     <div id="laps"><canvas id="lapc"></canvas></div>
-    <div class="note" id="note">読み込み中…</div>
+    <div class="note" id="note" data-en="Loading…">読み込み中…</div>
     <div class="bar time">
       <button class="btn" id="play">PLAY</button>
       <input id="seek" type="range" min="0" max="1" step="0.01" value="0" />
       <span id="clock"></span>
       <span class="seg" id="speed"></span>
-      <button class="btn" id="link" title="いまの時刻から始まるリンクをコピー">LINK</button>
+      <button class="btn" id="link" title="いまの時刻から始まるリンクをコピー" data-en-title="Copy a link that starts at this moment">LINK</button>
     </div>
     <footer class="bar foot">
-      <span>位置は<wbr>各機の DVR 映像から<wbr>推定したもので、<wbr>公式の記録では<wbr>ありません。</span>
+      <span data-en="Positions are estimated from each drone's DVR video and are not official results.">位置は<wbr>各機の DVR 映像から<wbr>推定したもので、<wbr>公式の記録では<wbr>ありません。</span>
       <span class="grow"></span>
-      <a href="./">ヒートの一覧 →</a>
+      <a href="./" data-en="All heats →">ヒートの一覧 →</a>
     </footer>
     <script type="module" src="/src/heat.ts"></script>
   </body>

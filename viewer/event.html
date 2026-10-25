@@ -35,11 +35,11 @@
       <header><a class="mark" href="/"><span>ghost</span><i></i><span>line</span></a></header>
       <h1 id="title"></h1>
       <div id="now"></div>
-      <a class="now cmp" href="compare.html"><span class="live">COMPARE</span><b>飛行を比べる</b><span class="who">ヒートや選手をまたいで、スタートのゲートの通過にそろえて再生</span><span class="go">比べる →</span></a>
+      <a class="now cmp" href="compare.html"><span class="live">COMPARE</span><b data-en="Compare flights">飛行を比べる</b><span class="who" data-en="Any pilots from any heats, replayed side by side from the start gate">ヒートや選手をまたいで、スタートのゲートの通過にそろえて再生</span><span class="go" data-en="Compare →">比べる →</span></a>
       <div id="list"></div>
-      <div id="empty" hidden>まだ<wbr>終わった<wbr>ヒートは<wbr>ありません</div>
-      <div id="fail" hidden>ヒートの一覧を<wbr>読み込めませんでした<wbr>（10 秒ごとに<wbr>読み直します）</div>
-      <footer>位置は<wbr>各機の DVR 映像から<wbr>推定したもので、<wbr>公式の記録では<wbr>ありません。</footer>
+      <div id="empty" hidden data-en="No heat has finished yet">まだ<wbr>終わった<wbr>ヒートは<wbr>ありません</div>
+      <div id="fail" hidden data-en="Could not load the heat list (retrying every 10 s)">ヒートの一覧を<wbr>読み込めませんでした<wbr>（10 秒ごとに<wbr>読み直します）</div>
+      <footer data-en="Positions are estimated from each drone's DVR video and are not official results.">位置は<wbr>各機の DVR 映像から<wbr>推定したもので、<wbr>公式の記録では<wbr>ありません。</footer>
     </main>
     <script type="module" src="/src/event.ts"></script>
   </body>
