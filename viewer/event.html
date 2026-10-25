@@ -7,7 +7,7 @@
     <title>ghostline</title>
     <style>
       main { max-width: 880px; margin: 0 auto; padding: 32px 24px 64px; }
-      header { display: flex; align-items: center; gap: 20px; }
+      header { display: flex; align-items: baseline; gap: 20px; }
       header .grow { flex: 1; }
       h1 { margin: 40px 0 28px; font: 200 30px/1.2 var(--sans); letter-spacing: .06em; }
       .now { display: grid; grid-template-columns: 110px auto 1fr auto; align-items: baseline; gap: 18px; padding: 22px 4px; border-top: 1.5px solid var(--hair); border-bottom: 1px solid var(--faint); text-decoration: none; color: var(--ink); }
@@ -32,7 +32,7 @@
   </head>
   <body>
     <main>
-      <header><a class="mark" href="/"><span>ghost</span><i></i><span>line</span></a></header>
+      <header><a class="mark" href="/"><span>ghost</span><i></i><span>line</span></a><span class="grow"></span></header>
       <h1 id="title"></h1>
       <div id="now"></div>
       <a class="now cmp" href="compare.html"><span class="live">COMPARE</span><b data-en="Compare flights">飛行を比べる</b><span class="who" data-en="Any pilots from any heats, replayed side by side from the start gate">ヒートや選手をまたいで、スタートのゲートの通過にそろえて再生</span><span class="go" data-en="Compare →">比べる →</span></a>
