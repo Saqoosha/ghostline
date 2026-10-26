@@ -103,6 +103,15 @@ class RelayTest(unittest.TestCase):
         else: r["how"] = "none"
         self.r.on_row(r, now)
 
+    def test_passes_after_the_first_read_go_out(self):   # the decoder's backlog at the start is not sent; each new pass once
+        ps = [dict(n=1, tx=7, t=1000, hits=20), dict(n=2, tx=8, t=2000, hits=5)]
+        self.r.on_passings(ps); self.r.flush(T0)
+        self.r.on_passings(ps + [dict(n=3, tx=7, t=3000, hits=30)]); self.r.flush(T0 + 0.1)
+        self.r.on_passings(ps[1:] + [dict(n=3, tx=7, t=3000, hits=30)]); self.r.flush(T0 + 0.2)
+        got = [m for _, b, _ in self.sent for m in json.loads(b)["msgs"] if m["k"] == "p"]
+        self.assertEqual(got, [dict(k="p", t=3000, n=3, tx=7, hits=30)])
+        self.assertEqual(self.r.passes_sent, 1)
+
     def test_post_failure_drops(self):
         def boom(*a): raise OSError("uplink down")
         self.r.post = boom
@@ -287,7 +296,7 @@ class RelayTest(unittest.TestCase):
         self.assertEqual([m["at"] for m in hs], [round(T0 * 1000), round((T0 + 4) * 1000)]); self.assertEqual(hs[1]["t"], round(T0 * 1000))
 
     def test_status_before_any_send(self):
-        self.assertEqual(self.r.status(), dict(ok=False, age=None, event="staging-test", err=None, pending=0, dvr=0, dvr_failed=0))
+        self.assertEqual(self.r.status(), dict(ok=False, age=None, event="staging-test", err=None, pending=0, dvr=0, dvr_failed=0, passes=None, pass_err=None))
 
     def test_status_after_send(self):
         self.row(T0, 1); self.r.flush(T0 + 0.6)

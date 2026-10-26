@@ -3,7 +3,7 @@
 the cells, start (the frame size and rate are read off the source). While the tracker runs it reads its output (signal on / off per cell), its PUSH stream
 (frames processed and solved per cell, the positions for the page's top view) and the GPU's power from nvidia-smi. The page also
 shows the source's picture: its low-bandwidth stream, two JPEGs a second, received only while a page asks for it.
-Beside all that, every NDI source is recorded while any cell of its grid shows a picture (rt_rec.py), tracker or not; /rec lists the files.
+Beside all that, every NDI source is recorded while any cell of its grid shows a picture (rt_rec.py, a child process started again when it ends), tracker or not; /rec lists the files.
 usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080, the top view alone at /obs
 env: PORT (8080), PUSH (8765: the tracker's answers, also what viewer/live.html reads), ENG (eng_linux),
      REC, REC_* (rt_rec.py), CONF (~/.ghostline-control.json: the last start, shown again when the page opens), VIEW (~/.ghostline-view.json: the trails' delay and smoothing),
@@ -69,8 +69,8 @@ class Preview:
             except Exception as e: print("preview:", e, flush=True); time.sleep(2)
             finally: rx.disconnect(); self.jpg = None
 preview = Preview()
-from rt_rec import Recorders, FILE, REC, REC_DIR, REC_ENC
-recorders = Recorders(finder)
+from rt_rec import RecProc, FILE, REC, REC_DIR, REC_ENC
+recorders = RecProc(finder is not None)              # a process of its own (rt_rec.py): an NDI receiver that crashes or freezes takes only it down
 
 courses = {}
 def course(name, line=""):
@@ -158,7 +158,8 @@ if E("RELAY_BASE") or E("RELAY_EVENT"):
     try:
         if not (E("RELAY_BASE") and E("RELAY_EVENT")): raise ValueError("RELAY_BASE と RELAY_EVENT の両方が要る")
         relay = Relay(f"http://127.0.0.1:{PUSH}/", E("RELAY_BASE"), E("RELAY_EVENT"), read_key(), pilots=lambda: pilots(), out_dir=HERE + "/live/relay", order=cell_order,
-                      rec_dir=REC_DIR if REC else None, nvenc=REC_ENC == "h264_nvenc").start_threads()   # rec_dir: each heat's DVR, right after it
+                      rec_dir=REC_DIR if REC else None, nvenc=REC_ENC == "h264_nvenc",   # rec_dir: each heat's DVR, right after it
+                      passings=E("PASSINGS", "http://127.0.0.1:8766/passings") or None).start_threads()   # the decoder's passes (rt_mylaps.py); PASSINGS= turns it off
     except (OSError, ValueError) as e: relay_off = f"送信しない: {e}"; print("relay off:", e, flush=True)
 
 def options():

@@ -28,10 +28,15 @@ const PITCH_TALL = -38
 function emptyMesh(m: pc.Mesh) { m.setPositions([0, 0, 0, 0, 0, 0, 0, 0, 0]); m.setNormals([0, 1, 0, 0, 1, 0, 0, 1, 0]); m.setColors(new Array(12).fill(0)); m.setIndices([0, 1, 2]); m.update(pc.PRIMITIVE_TRIANGLES) }
 
 const SHOT = new URLSearchParams(typeof location === 'undefined' ? '' : location.search)   // (no location in the tests)
-// the header's HQ toggle (the full scan in place of the lite one): redraw the buttons now, done once the new scan is in
-export const hqButton = (stage: Stage, redraw: () => void, done: () => void) => Object.assign(document.createElement('button'), {
-  textContent: 'HQ', title: L('高画質のスキャン（300 万 splat、45 MB）', 'High-quality scan (3M splats, 45 MB)'), className: stage.hq ? 'on' : '',
-  onclick: () => { stage.setHQ(!stage.hq).then(done, e => console.error('scan', e)); redraw() } })
+// the header's scan quality, apart from the cameras so it does not read as a fourth: LITE (0.8M splats) or HQ (the full 3M, 45 MB),
+// the chosen one underlined. Redraw the buttons now, done once the new scan is in
+export const hqButton = (stage: Stage, redraw: () => void, done: () => void) => {
+  const q = (hq: boolean, label: string, title: string) => Object.assign(document.createElement('button'), { textContent: label, title, className: stage.hq === hq ? 'on' : '',
+    onclick: () => { if (stage.hq !== hq) { stage.setHQ(hq).then(done, e => console.error('scan', e)); redraw() } } })
+  const box = Object.assign(document.createElement('span'), { className: 'quality', title: L('スキャンの画質', 'Scan quality') })
+  box.append(q(false, 'LITE', L('軽いスキャン（80 万 splat、12 MB）', 'Light scan (0.8M splats, 12 MB)')), q(true, 'HQ', L('高画質のスキャン（300 万 splat、45 MB）', 'High-quality scan (3M splats, 45 MB)')))
+  return box
+}
 export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   const app = new pc.Application(canvas, { mouse: new pc.Mouse(canvas), touch: new pc.TouchDevice(canvas), graphicsDeviceOptions: { antialias: !PHONE } })   // MSAA: the trail fades by alpha-to-coverage, as mgp.ts - not on a phone, where 4x the splats' fill dropped the frame rate
   // the canvas is as large as the page's CSS makes it (the whole window, or the part over the live page's progress band)

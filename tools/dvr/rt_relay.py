@@ -16,7 +16,8 @@ and keeps each heat's answers on disk, uploading them when the heat ends.
   its start and end to <out>/heats-<YYYYMMDD>.jsonl (the night rebuild reads them), and an upload that failed leaves
   <id>.json.pending, tried again every 30 s and when the relay starts.
 usage: python rt_relay.py --push http://127.0.0.1:8765 --base https://ghostline.saqoo.sh --event <day> [--pilots URL] [--out live/relay]
-   the key: ~/.config/ghostline/key (RELAY_KEY of the Worker). rt_control.py starts one itself (RELAY_BASE, RELAY_EVENT)."""
+   [--passings http://127.0.0.1:8766/passings]  the decoder's passes (rt_mylaps.py) go out with the answers, for the pages' laps
+   the key: ~/.config/ghostline/key (RELAY_KEY of the Worker). rt_control.py starts one itself (RELAY_BASE, RELAY_EVENT, PASSINGS)."""
 import argparse, datetime, glob, gzip, json, math, os, re, threading, time, urllib.error, urllib.request
 
 JST = datetime.timezone(datetime.timedelta(hours=9))
@@ -80,7 +81,7 @@ class Heats:
 
 
 class Relay:
-    def __init__(self, push_url, base_url, event, key, pilots=None, out_dir="live/relay", post=None, order=ORDER, rec_dir=None, nvenc=False):
+    def __init__(self, push_url, base_url, event, key, pilots=None, out_dir="live/relay", post=None, order=ORDER, rec_dir=None, nvenc=False, passings=None):
         if not EVENT.fullmatch(event or ""): raise ValueError(f"not an event name: {event!r}")
         self.push_url, self.base, self.event, self.key, self.pilots, self.out = push_url, base_url.rstrip("/"), event, key, pilots, out_dir
         self.post = post or self._post
@@ -91,6 +92,7 @@ class Relay:
         self.last_h = self.last_save = self.last_retry = self.last_names = 0.0
         self.sent_at = self.tried = None
         self.push_err = self.upload_err = self.bg_err = self.dvr_err = None   # kept apart: a good push must not hide a failing upload
+        self.passings, self.passes_seen, self.passes_sent, self.pass_err = passings, None, 0, None   # passings: rt_mylaps.py's URL; passes_seen None until the first read
         self.rec_dir, self.nvenc, self.dvr_tried, self.dvr_note = rec_dir, nvenc, {}, None   # dvr_tried: marker -> (tries, last, why)   # rec_dir: the venue's recordings (rt_rec.py), for the heats' DVR
 
     def _order(self, fallback):                      # a fresh box has no config yet (rt_control.py's cell_order raises)
@@ -111,11 +113,26 @@ class Relay:
         try: self.post("push", json.dumps(dict(sent=ms(now), msgs=msgs), separators=(",", ":")).encode(), {}); self.sent_at, self.push_err = now, None; return True
         except Exception as e: self.push_err = why(e); return False   # dropped: the next batch goes on
 
+    # --- the decoder's passes (rt_mylaps.py), for the pages' laps: {k: 'p', t, n, tx, hits}, t on this box's clock as the answers'
+    def on_passings(self, ps):                       # the passes there at the first read are older than any viewer's backlog: not sent
+        new = [p for p in ps if self.passes_seen is not None and p["n"] not in self.passes_seen]
+        self.passes_seen = {p["n"] for p in ps}     # the decoder's last 15 minutes: a pass never comes back once it has left
+        if not new: return
+        with self.lock: self.queue += [dict(k="p", t=p["t"], n=p["n"], tx=p["tx"], hits=p.get("hits")) for p in new]
+        self.passes_sent += len(new)
+
+    def pass_loop(self):                             # a venue with no decoder only shows pass_err on the page; the answers go on
+        while True:
+            try: self.on_passings(json.loads(urllib.request.urlopen(self.passings, timeout=2).read())["passings"]); self.pass_err = None
+            except Exception as e: self.pass_err = why(e)
+            time.sleep(1)
+
     def status(self, now=None):                      # for the control page: ok while posts go through (an empty one goes every 5 s)
         age = None if self.sent_at is None else (now or time.time()) - self.sent_at
         return dict(ok=age is not None and age < 15 and self.push_err is None, age=age, event=self.event,
                     err=self.push_err or self.upload_err or self.bg_err or self.dvr_err, pending=len(glob.glob(f"{self.out}/*/*.json.pending")),
-                    dvr=len(glob.glob(f"{self.out}/*/*.dvr")), dvr_failed=len(glob.glob(f"{self.out}/{day(now or time.time())}/*.dvr.failed")))   # today's
+                    dvr=len(glob.glob(f"{self.out}/*/*.dvr")), dvr_failed=len(glob.glob(f"{self.out}/{day(now or time.time())}/*.dvr.failed")),   # today's
+                    passes=self.passes_sent if self.passings else None, pass_err=self.pass_err)
 
     # --- rows in
     def on_row(self, r, now):
@@ -320,7 +337,7 @@ class Relay:
             time.sleep(1)
 
     def start_threads(self):
-        for f in (self.read, self.loop, self.slow) + ((self.dvr_loop,) if self.rec_dir else ()): threading.Thread(target=f, daemon=True).start()
+        for f in (self.read, self.loop, self.slow) + ((self.dvr_loop,) if self.rec_dir else ()) + ((self.pass_loop,) if self.passings else ()): threading.Thread(target=f, daemon=True).start()
         return self
 
 
@@ -339,9 +356,10 @@ def read_key(path="~/.config/ghostline/key"):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("--push", default="http://127.0.0.1:8765/"); ap.add_argument("--base", required=True)
     ap.add_argument("--event", required=True); ap.add_argument("--pilots"); ap.add_argument("--out", default="live/relay"); ap.add_argument("--key", default="~/.config/ghostline/key")
+    ap.add_argument("--passings")
     a = ap.parse_args()
     get = (lambda: json.loads(urllib.request.urlopen(a.pilots, timeout=1).read(65536))) if a.pilots else None
-    r = Relay(a.push, a.base, a.event, read_key(a.key), pilots=get, out_dir=a.out).start_threads()
+    r = Relay(a.push, a.base, a.event, read_key(a.key), pilots=get, out_dir=a.out, passings=a.passings).start_threads()
     print(f"relay: {a.push} -> {a.base}/{a.event}/", flush=True)
     while True:
         time.sleep(10); st = r.status(); print(f"relay: sent {st['age']:.1f} s ago" if st["age"] is not None else "relay: nothing sent yet", f"pending {st['pending']}" if st["pending"] else "", ("- " + st["err"]) if st["err"] else "", flush=True)

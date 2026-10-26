@@ -35,6 +35,8 @@ body.stage { overflow: hidden; }
 .seg button, .btn { background: none; border: 0; padding: 4px 7px; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); cursor: pointer; border-bottom: 1px solid transparent; }
 .seg button:hover, .btn:hover { color: var(--ink); }
 .seg button.on { color: var(--ink); border-bottom-color: var(--ink); }
+.seg .quality { display: inline-flex; margin-left: 14px; padding-left: 14px; border-left: 1px solid var(--faint); }   /* the scan's quality, set apart from the cameras */
+a.btn { text-decoration: none; border-bottom-color: var(--faint); } a.btn:hover { border-bottom-color: var(--ink); }   /* a link: the chosen button's line, faint (a text underline sat higher) */
 .delay { display: flex; align-items: center; gap: 4px; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); white-space: nowrap; }
 .delay output { display: inline-block; min-width: 46px; text-align: center; color: var(--ink); font-variant-numeric: tabular-nums; }
 
