@@ -63,6 +63,8 @@ case "$WHAT" in
     [ -s "$PAGE/scene/$SC-lite.sog" ] || { echo "no $SC-lite.sog: phones would get no scan" >&2; exit 1; }
     python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["lite"]=sys.argv[2]; json.dump(j, open(sys.argv[1], "w"))' "$PAGE/index.json" "$SC-lite"
     for f in sky.jpg track.json countries.json; do [ -e "$SCENE/$f" ] && cp -L "$SCENE/$f" "$PAGE/$f"; done
+    # the sky (a scan trained without it, tools/x6/jdl-r7-sky.sh): stage.ts draws it as the skybox when index.json names it
+    [ -e "$PAGE/sky.jpg" ] && python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["sky"]="sky.jpg"; json.dump(j, open(sys.argv[1], "w"))' "$PAGE/index.json"
     # the heat list belongs to the relay once the day starts: an empty one goes up only where there is none
     # (--ignore-existing: a failed listing must not read as "none" and overwrite the day's heats)
     mkdir -p "$TMP/list"

@@ -3,13 +3,15 @@ day's pictures, and the pose it solved), lifted to 3D with the scan's depth rend
 rt_map.py as keyframes marked real. The geometry stays the scan's; the look is the day's light. rt_track.py RKF=1 matches them.
   rt_map_grow.py base.npz scene.ply out.npz kfdir [kfdir ...]
 env: NEAR (1.0 m, as rt_map.py), STEP (1.0 m) / ROT (20 deg): a frame is dropped when a newer real one is this close in both,
-     SINCE (s, 0 = all): only the frames written in the last SINCE seconds - the heats just before match the light, older ones hurt"""
+     SINCE (s, 0 = all): only the frames written in the last SINCE seconds - the heats just before match the light, older ones hurt,
+     MAX (keyframes, 0 = no cap): the grown map is cut to this many, the scan's keyframes all kept and the newest real frames
+     first - the tracker holds the map on the GPU, and at JDL R7 a 10,000-keyframe map left no room to grow it again"""
 import glob, os, sys, time, numpy as np, torch
 from plyfile import PlyData
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from frustum import rasterize_culled
 from scipy.spatial.transform import Rotation as Rot
 dev = "cuda"; E = lambda k, d: float(os.environ.get(k, d)); NEAR, STEP, ROT = E("NEAR", 1.0), E("STEP", 1.0), E("ROT", 20)
-base, ply, out = sys.argv[1:4]; SINCE = E("SINCE", 0)
+base, ply, out = sys.argv[1:4]; SINCE, MAX = E("SINCE", 0), int(E("MAX", 0))
 files = sorted((f for d in sys.argv[4:] for f in glob.glob(f"{d}/*.npz")), key=os.path.getmtime, reverse=True)   # newest first: they win the thinning
 if SINCE: files = [f for f in files if time.time() - os.path.getmtime(f) < SINCE]
 m = dict(np.load(base)); TOPK = m["kp"].shape[1]; RW, RH = [int(v) for v in m["size"]]; K = m["K"]
@@ -42,8 +44,17 @@ for k in kept:
     KP.append(np.pad(uv, ((0, pad), (0, 0)))); DS.append(np.pad(desc, ((0, pad), (0, 0)))); X3.append(np.pad(X, ((0, pad), (0, 0))))
 if not NK: sys.exit("no frame to add")
 cat = lambda a, b, t: np.concatenate([a, np.array(b, t)])
-with open(out + ".part", "wb") as fh: np.savez(fh, pos=cat(m["pos"], PS, np.float32), quat=cat(m["quat"], Q, np.float32), K=K, size=m["size"], n=cat(m["n"], NK, m["n"].dtype),
-         kp=cat(m["kp"], KP, np.float32), desc=cat(m["desc"], DS, np.float16), X=cat(m["X"], X3, np.float32), g=cat(m["g"], GD, np.float32),
-         real=np.concatenate([m["real"], np.ones(len(NK), np.uint8)]))
+g = dict(pos=cat(m["pos"], PS, np.float32), quat=cat(m["quat"], Q, np.float32), n=cat(m["n"], NK, m["n"].dtype), kp=cat(m["kp"], KP, np.float32),
+         desc=cat(m["desc"], DS, np.float16), X=cat(m["X"], X3, np.float32), g=cat(m["g"], GD, np.float32), real=np.concatenate([m["real"], np.ones(len(NK), np.uint8)]))
+dropped = 0
+if MAX and len(g["pos"]) > MAX:
+    nb, scan = len(m["pos"]), np.flatnonzero(g["real"] == 0)
+    if len(scan) > MAX: sys.exit(f"MAX {MAX} is under the scan's own {len(scan)} keyframes")
+    # newest first: this run's (written newest first), then the base's real ones, its later rows the newer
+    order = np.r_[np.arange(nb, len(g["pos"])), np.flatnonzero(m["real"] != 0)[::-1]]
+    keep = np.sort(np.r_[scan, order[:MAX - len(scan)]]); dropped = len(g["pos"]) - len(keep)
+    g = {k: a[keep] for k, a in g.items()}
+with open(out + ".part", "wb") as fh: np.savez(fh, K=K, size=m["size"], **g)
 os.replace(out + ".part", out)                      # whole or not at all: a killed run leaves no map behind
-print(f"GROW-DONE {len(m['pos'])} + {len(NK)} real keyframes, median {int(np.median(NK))} points with depth, {time.time() - t0:.0f} s", flush=True)
+print(f"GROW-DONE {len(m['pos'])} + {len(NK)} real keyframes" + (f", {dropped} oldest real dropped for MAX {MAX}" if dropped else "") +
+      f", median {int(np.median(NK))} points with depth, {time.time() - t0:.0f} s", flush=True)

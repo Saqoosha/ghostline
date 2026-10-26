@@ -31,7 +31,8 @@ env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s w
      PNP (poselib; magsac = OpenCV's USAC_MAGSAC, below),
      RENDER (0; 1 = while tracking, match a render of SCENE (.ply) at the prediction instead of keyframes, rt_render.py), RNEAR (1.0 m near plane),
      RFALL (1: also match keyframes right after a failed try); RCLIP / ROPA / RBATCH / REDGE: see rt_render.py,
-     KFOUT / KF_MIN / KF_STEP / KF_ROT / KF_WINDOW / RKF / MAPWATCH (the day's frames grown into the map between heats, below)"""
+     KFOUT / KF_MIN / KF_STEP / KF_ROT / KF_WINDOW / RKF / MAPWATCH (the day's frames grown into the map between heats, below),
+     MEMLOG (0; 1 = the GPU memory in the log after each load, at a map swap and every minute)"""
 import os
 # One BLAS thread. numpy's matrices here are small (the BA's system is about 150 x 150), and OpenBLAS otherwise starts a
 # thread per core for them: on a 32-core machine that took the tracker from 54 to 33 Hz with BA on, the solve itself 0.2 ms.
@@ -123,13 +124,19 @@ if PUSH:
 FRESH, KQ, BLEND, TRAIL_L, TRAIL_W = E("FRESH", 0.1), E("KQ", 1e4), E("BLEND", 0.025), E("TRAIL_L", 0.2), E("TRAIL_W", 0.25)
 T = lambda a: torch.tensor(a, dtype=torch.float32, device=dev)
 def sync(): torch.cuda.synchronize() if dev == "cuda" else torch.mps.synchronize() if dev == "mps" else None
+MEMLOG = int(E("MEMLOG", 0))                        # 1: the GPU memory after each load, at a map swap and every minute (what holds the 24 GB)
+def mem(tag):
+    if MEMLOG and dev == "cuda": print(f"mem {tag}: allocated {torch.cuda.memory_allocated() / 2**30:.2f} GB, reserved {torch.cuda.memory_reserved() / 2**30:.2f} GB, "
+                                       f"peak {torch.cuda.max_memory_allocated() / 2**30:.2f} GB", flush=True)
 maps, sources = {}, {}
-def load_map(path):
+def load_map(path, gpu=True):                       # gpu=False: read only; to_gpu() puts it on the device (a swap, in the loop)
     with np.load(path) as m:
         mk = MAPK or m["kp"].shape[1]               # XFeat returns the strongest first, so the first MAPK are the best
-        return dict(K=m["K"], size=[int(x) for x in m["size"]], n=np.minimum(m["n"], mk), kp=T(m["kp"][:, :mk]), desc=torch.tensor(m["desc"][:, :mk], device=dev), X=m["X"][:, :mk],
-                    pos=m["pos"], fwd=Rot.from_quat(m["quat"]).as_matrix()[:, :, 2], g=T(m["g"]),
-                    real=m["real"].astype(bool) if "real" in m.files else np.zeros(len(m["pos"]), bool))
+        m = dict(K=m["K"], size=[int(x) for x in m["size"]], n=np.minimum(m["n"], mk), kp=m["kp"][:, :mk].astype(np.float32), desc=m["desc"][:, :mk], X=m["X"][:, :mk],
+                 pos=m["pos"], fwd=Rot.from_quat(m["quat"]).as_matrix()[:, :, 2], g=m["g"].astype(np.float32),
+                 real=m["real"].astype(bool) if "real" in m.files else np.zeros(len(m["pos"]), bool))
+    return to_gpu(m) if gpu else m
+def to_gpu(m): return dict(m, kp=T(m["kp"]), desc=torch.tensor(m["desc"], device=dev), g=T(m["g"]))
 import threading, subprocess
 # SIGNAL=1 (live): a cell whose receiver shows no picture - its flat no-signal screen or analog snow (rt_signal.py) - sends no
 # frames to the tracker, and with every cell quiet the loop only waits. On an EventVRX recording the cells had a picture 47% of
@@ -313,6 +320,7 @@ class Stream:
         return [int(k) for k in np.argsort(score)[:n or NKF] if np.isfinite(score[k])]
 streams = [Stream(s) for s in sys.argv[1:]]; RW, RH = streams[0].m["size"]
 assert all(s.m["size"] == [RW, RH] for s in streams), "all maps must share the render size"
+mem(f"maps ({len(maps)})")
 # ---- models
 xfeat = XFeat(top_k=TOPK)
 from modules.lighterglue import LighterGlue; LighterGlue.default_conf_xfeat["mp"] = False   # autocast fp16: d05 solved 1,630 -> 761 frames, not faster
@@ -333,12 +341,15 @@ if os.environ.get("XFEAT"):
     from rt_trt import Trt; xf = Trt(os.environ["XFEAT"])
 if dev != "cuda":                                   # both pick cuda-or-cpu themselves
     xfeat.dev = lg.dev = torch.device(dev); xfeat.net.to(dev); lg.net.to(dev)
+mem("XFeat, LighterGlue")
 dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14").to(dev).eval()
+mem("DINOv2")
 scene = None
 if RENDER:
     assert dev == "cuda" and SCENE, "RENDER needs cuda and SCENE=<the map's .ply>"
     from rt_render import Scene; scene = Scene(SCENE, RW, RH, RNEAR, TOPK, detect)
     scene.views([(Rot.identity(), np.zeros(3))] * len(streams), [s.K for s in streams])   # the first render compiles kernels: not on a tracked frame
+    mem("scene")
 MEAN, STD = T([0.485, 0.456, 0.406])[None, :, None, None], T([0.229, 0.224, 0.225])[None, :, None, None]
 SIZE = T([[RW, RH]])
 def features(batch):                                # [(stream, frame)] -> per frame (keypoints, descriptors[, mask]), and the tensor
@@ -599,19 +610,28 @@ def mapwatch():
         except OSError: continue
         if not want or want == cur: continue
         try:
-            m = load_map(want); cur = want
+            m = load_map(want, gpu=False); cur = want   # read here, onto the GPU in the loop: never three maps there at once
             if m["size"] != [RW, RH] or not np.allclose(m["K"], streams[0].K): print(f"map {want}: not the running map's camera, kept the old one", flush=True); continue
             with swap_lock: swap.append((want, m))
         except Exception as e: print(f"map {want}: {type(e).__name__}: {e}", flush=True); cur = want   # tried once; a new name tries again
 if MAPWATCH: threading.Thread(target=mapwatch, daemon=True).start()
+mem.last = 0.0
 def loop():
   global clock, pending
   while True:
       t0, clock0 = time.perf_counter(), clock
+      if MEMLOG and t0 - mem.last > 60: mem.last = t0; mem("running")
       if swap:                                        # between cycles: the matches in flight already hold their points, not map indices
           with swap_lock: path, m = swap[-1]; swap.clear()   # only the newest: an older one left behind would swap back
+          # the new map onto the GPU, then the old one let go - the start's one in maps too, which was kept for good (with the
+          # running one and the one loading, three maps of 3.4 GB at 13k keyframes). Two only for the moment of the swap: the
+          # streams are read by other threads, so they never point at no map
+          m = to_gpu(m)
           for s in streams: s.m, s.map_npz = m, path
+          maps.clear(); maps[path] = m
+          if dev == "cuda": torch.cuda.empty_cache()
           print(f"map {path}: {len(m['pos'])} keyframes, {int(m['real'].sum())} real", flush=True)
+          mem(f"map swap ({len(maps)} cached)")
       futs = [pool.submit(solve, pending, b) for b in range(len(pending["batch"]))] if pending else None
       batch, live = pick(clock)
       if not batch and not futs:

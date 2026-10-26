@@ -31,6 +31,7 @@ KNOBS = set("NKF MIN_INL LOST RELOC_TOPK RELOC_MIN TOPK MAPK BATCH FRESH PIPE BA
 lock = threading.Lock(); gpu = {}
 HIST = 300; hist = collections.deque(maxlen=HIST)   # one sample a second, for the page's sparklines: it shows the last 5 minutes whenever it is opened
 KF_DIR, MAP_PTR = "live/kf", "live/map.txt"         # the frames the tracker keeps, and the file that names the map it should use (MAPWATCH)
+GROW_MAX = int(E("GROW_MAX", 0))                    # keyframes a grown map is cut to (rt_map_grow.py MAX; 0 = no cap): the tracker holds it on the GPU
 GROW_WINDOW, GROW_QUIET = int(E("GROW_WINDOW", 1800)), int(E("GROW_QUIET", 30))   # s: only the heats just before (older light hurt); a heat is over after this long without a picture
 GROW_KF = int(E("GROW_KF", 300))                    # s: a place gets a fresh frame once its last is this old; the grow keeps the newest per place
 G = dict(phase="idle", last=None, error=None, heat=False, quiet=None, using=None)   # growing the map between heats; using: the map the tracker says it swapped to
@@ -261,7 +262,7 @@ def run_grow(c, reason, run):                       # run: the start it belongs 
         for f in glob.glob(f"{HERE}/{KF_DIR}/*.npz") + glob.glob(f"{HERE}/live/*.part") + glob.glob(f"{HERE}/{KF_DIR}/*.part"):   # ~280 KB each, thousands a day; never used past the window (2x: a margin); .part: a killed write
             if t0 - os.path.getmtime(f) > 2 * GROW_WINDOW: os.remove(f)
         r = subprocess.run([sys.executable, "-u", "rt_map_grow.py", c["map"], c["scene"], out, KF_DIR], cwd=HERE, capture_output=True, text=True, timeout=600,
-                           env=dict(os.environ, SINCE=str(GROW_WINDOW), PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}"))
+                           env=dict(os.environ, SINCE=str(GROW_WINDOW), MAX=str(GROW_MAX), PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}"))
         m = re.search(r"GROW-DONE \d+ \+ (\d+) real", r.stdout)
         if not m:
             tail = (r.stdout + r.stderr).strip().splitlines()

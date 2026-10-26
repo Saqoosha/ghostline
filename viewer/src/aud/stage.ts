@@ -4,6 +4,7 @@
 import * as pc from 'playcanvas'
 import { L } from './i18n'
 import { loadHQ, pickScan, saveHQ, sceneBlob } from './scan'
+import { bakeSky } from '../sky'
 
 export type Slot = 'tl' | 'tr' | 'bl' | 'br'
 export const SLOTS: Slot[] = ['tl', 'tr', 'bl', 'br']
@@ -221,6 +222,13 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
       }); a.on('error', bad); app.assets.load(a)
     })
   }
+  // the day's sky (index.json "sky", tools/x6/jdl-r7-sky.sh): a scan trained with the sky masked out ends in the clear colour
+  // above the trees, so the photographs' own sky goes round it as a skybox, baked into a cubemap once (sky.ts, as the viewer)
+  const loadSky = (url: string) => {
+    const img = new Image(); img.crossOrigin = 'anonymous'
+    img.onload = () => { app.scene.skyboxMip = 0; app.scene.skybox = bakeSky(app.graphicsDevice, img) }
+    img.onerror = () => console.error('sky failed:', url); img.src = url
+  }
   const json = (u: string) => fetch(u).then(r => { if (!r.ok) throw new Error(`${u}: ${r.status}`); return r.json() })
   const stage: Stage = {
     app, mode: 'orbit', onMode: () => {},
@@ -229,6 +237,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
       ix = await json(base + 'index.json'); prog = progress
       // the orbit's middle: the course line's when it is in (whichever of the two files arrives last), else index.json's
       if (ix.orbit?.target && !course.length) { home.target.set(ix.orbit.target[0], ix.orbit.target[1], ix.orbit.target[2]); home.dist = ix.orbit.dist ?? home.dist; orb.init = false }
+      if (ix.sky && !SHOT.get('nosky')) loadSky(base + ix.sky)   // beside the scan, not waited for
       await showScan(scanName())
       return { title: ix.title }
     },
