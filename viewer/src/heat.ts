@@ -7,7 +7,7 @@ import './aud/look.css'
 import { applyStatic, L, langToggle, words } from './aud/i18n'
 import { clock, heatName } from './aud/listing'
 import { resortWhenIdle } from './aud/racekit'
-import { fromLive, fromNight, type Replay } from './aud/record'
+import { fromLive, fromNight, heldFrom, type Replay } from './aud/record'
 import { drawLaps, lapRows, timeAt, type LapRow } from './aud/laptimeline'
 import { advance, drawProgress, makeCourse, newProg, progressOf, RACE_LAPS, type Course } from './aud/progress'
 import { createStage, hqButton, SLOTS, type Mode, type PilotState } from './aud/stage'
@@ -20,7 +20,7 @@ const QS = new URLSearchParams(location.search)
 const BASE = import.meta.env.BASE_URL
 const EVENT = (QS.get('e') ?? BASE.split('/')[1] ?? '').replace(/[^a-z0-9-]/g, '')
 const ID = (QS.get('h') ?? '').replace(/[^\w-]/g, '')
-const TRAIL = 3, SYNC = 0.2                                  // seconds of trail; how far a clip may drift before it is moved
+const TRAIL = 3, SYNC = 0.2, HOLD = 5                        // seconds of trail; how far a clip may drift before it is moved; a lost pilot held this long
 const stage = createStage($<HTMLCanvasElement>('c'), BASE)
 let rp: Replay | null = null, t = 0, playing = false, sceneReady = false, started = false, speed = 1, laps: LapRow[] = []
 const note = (s: string) => { $('note').textContent = s; $('note').hidden = !s }
@@ -166,9 +166,12 @@ function frame(now: number) {
   // the dot between frame k and the next by the time, not held at k: held, it moved in 30 Hz steps on a 60-120 Hz screen
   const between = (a: number[], b: number[] | null) => b ? a.map((v, i) => v + (b[i] - v) * u) : a
   for (const p of rp.pilots) {
-    const sp = stage.pilot(p.stream, p.slot), at = p.pos[k]
-    if (!at) { sp.hide(); continue }
-    const name = p.name === p.stream ? '' : p.name
+    const sp = stage.pilot(p.stream, p.slot), at = p.pos[k], name = p.name === p.stream ? '' : p.name
+    if (!at) {                                                // a gap in the answers: held where last seen, in its colour, up to HOLD s
+      const j = heldFrom(p.pos, k, HOLD * rp.fps)
+      if (j < 0) { sp.hide(); continue }
+      sp.show(p.pos[j]!, p.pos.slice(Math.max(0, j - TRAIL * rp.fps), j + 1), 'flying', { name, flag: '', note: '' }); continue
+    }
     const head = between(at, p.pos[k + 1] ?? null)
     sp.show(head, [...p.pos.slice(Math.max(0, k - TRAIL * rp.fps), k + 1), head], 'flying', { name, flag: '', note: '' })
   }

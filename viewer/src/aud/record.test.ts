@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { fromLive, fromNight, type HeatRecord } from './record'
+import { fromLive, fromNight, heldFrom, type HeatRecord } from './record'
 
 const START = 1_792_211_516_000
 const rows = (from: number, to: number, f: (s: number) => number[]) => { const out: number[][] = []; for (let s = from; s <= to + 1e-9; s += 1 / 30) out.push([Math.round(START + s * 1000), ...f(s), 0, 0, 0, 1, 200]); return out }
@@ -28,4 +28,12 @@ test('fromNight reads race.json as it is', () => {
 test('fromLive smooths with the shared Gaussian mean', () => {
   const r = fromLive(rec({ R2: rows(0, 3, s => [s, 1 + (Math.round(s * 30) % 2 ? 0.5 : -0.5), 0]) }))   // a zigzag of ±0.5 m frame to frame
   for (const k of [30, 45, 60]) expect(Math.abs(r.pilots[0].pos[k]![1] - 1)).toBeLessThan(0.05)
+})
+
+test('heldFrom: the last frame with a position within the hold', () => {
+  const pos = [[0, 0, 0], [1, 0, 0], null, null, null, [5, 0, 0]]
+  expect(heldFrom(pos, 1, 3)).toBe(1)
+  expect(heldFrom(pos, 3, 3)).toBe(1)
+  expect(heldFrom(pos, 4, 2)).toBe(-1)
+  expect(heldFrom(pos, 9, 10)).toBe(5)
 })

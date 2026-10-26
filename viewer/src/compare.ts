@@ -8,7 +8,7 @@ import { applyStatic, L, langToggle, words } from './aud/i18n'
 import { clock, heatName, type HeatEntry, type HeatIndex } from './aud/listing'
 import { advance, drawProgress, makeCourse, newProg, progressOf, RACE_LAPS, type Course } from './aud/progress'
 import { resortWhenIdle } from './aud/racekit'
-import { fromLive, fromNight, type Replay } from './aud/record'
+import { fromLive, fromNight, heldFrom, type Replay } from './aud/record'
 import { createStage, hqButton, SLOTS, type Mode } from './aud/stage'
 
 applyStatic()
@@ -19,7 +19,7 @@ const QS = new URLSearchParams(location.search)
 const BASE = import.meta.env.BASE_URL
 const EVENT = (QS.get('e') ?? BASE.split('/')[1] ?? '').replace(/[^a-z0-9-]/g, '')
 const css = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim()
-const MAX = 4, PRE = 3, TRAIL = 3                        // flights at once; seconds shown before the holeshot; seconds of trail
+const MAX = 4, PRE = 3, TRAIL = 3, HOLD = 5              // flights at once; seconds shown before the holeshot; seconds of trail; a lost flight held this long
 const note = (s: string) => { $('note').textContent = s; $('note').hidden = !s }
 const stage = createStage($<HTMLCanvasElement>('c'), BASE)
 $<HTMLAnchorElement>('home').href = BASE + (QS.has('e') ? `?e=${EVENT}` : '')
@@ -169,7 +169,10 @@ function frame(now: number) {
     if (here) {
       const head = next ? here.map((v, j) => v + (next[j] - v) * u) : here
       sp.show(head, [...f.pos.slice(Math.max(0, k - TRAIL * f.fps), Math.max(0, k + 1)), head], 'flying', { name: f.label, flag: '', note: '' })
-    } else sp.hide()
+    } else {                                                  // a gap: held where last seen, in its colour, up to HOLD s (as the replay page)
+      const j = k >= 0 ? heldFrom(f.pos, k, HOLD * f.fps) : -1
+      if (j >= 0) sp.show(f.pos[j]!, f.pos.slice(Math.max(0, j - TRAIL * f.fps), j + 1), 'flying', { name: f.label, flag: '', note: '' }); else sp.hide()
+    }
     const kk = Math.max(0, Math.min(f.lap.length - 1, k))
     if (f.fin === null && line && f.lap[kk] > 0 && progressOf(line, { arc: f.arc[kk], lap: f.lap[kk], hs: null, done: null }) >= laps) f.fin = t
     return { cell: '', name: f.label, color: css('--' + SLOTS[i]) || '#5b4bff', prog: { arc: k >= 0 ? f.arc[kk] : null, lap: k >= 0 ? f.lap[kk] : 0, hs: t >= PRE ? PRE : null, done: f.fin !== null && f.fin <= t ? f.fin : null } }
