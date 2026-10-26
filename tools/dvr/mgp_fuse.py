@@ -50,7 +50,7 @@ def align(model, relay, heats):
     return s, R, t
 
 
-race_json = lambda hid: f"/home/saqoosha/rt/night1025/out/{hid}/race.json"
+race_json = lambda hid: next((f for f in (f"/home/saqoosha/rt/night1025/out/{hid}/race.json", f"/home/saqoosha/rt/night1025/out_yt/{hid}/race.json") if os.path.exists(f)), "")   # the quarterfinals: cut from the broadcast
 
 
 def drop_jumps(rows, win=400, far=3.0):              # a localized pose off the straight line through its neighbours in time (a drone does

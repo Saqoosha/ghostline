@@ -44,3 +44,11 @@ export function smoothFrames(pos: (number[] | null)[], fps: number): (number[] |
   const ans: Answer[] = []; pos.forEach((p, i) => { if (p) ans.push({ i, done: 0, pos: p, quat: [0, 0, 0, 1], inl: 0, how: '' }) })
   return pos.map((p, i) => p && (gauss(ans, i, SIGMA * fps, RUN_GAP * fps) ?? p))
 }
+
+// the frame a lost pilot is held at: the last one with a position within max frames before k (-1: none). The night rebuild
+// fills gaps up to 0.3 s only and the day's answers cover 40-70% of a flight, so a dot that vanished at every gap made the
+// race hard to follow (JDL R7 10/25); held where it was last seen, in its colour, it stays on screen through the gap
+export function heldFrom(pos: (number[] | null)[], k: number, max: number): number {
+  for (let j = Math.min(k, pos.length - 1); j >= 0 && k - j <= max; j--) if (pos[j]) return j
+  return -1
+}
