@@ -91,7 +91,7 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   `receive()` で 1 枚ずつ取る形はライブラリが全部受けているのに 3 分の 1 を取りこぼした。Linux は avahi-daemon が動いていないと送り手が見つからない。
   `GRID=1920x1080` でマスは 960×540（`0:0:960:540` など）。送り手の試験用は `tools/dvr/ndi_send.py`（録画を 1080p 30 fps の NDI で流す）。
   **会場ではブラウザから操作する：`http://rt4090:8080`**（`tools/dvr/rt_control.py`＋`rt_control.html`、`ghostline-control.service` で常駐、`rt_linux_setup.sh` が入れる）。
-  見えている NDI の送り手と地図（全マス共通）を選び、マスごとに使うか・名前を決めて開始 / 停止する（画面の大きさと fps は開始のとき送り手から読む）。動いているあいだはマスごとの信号・処理した枚数と位置が出た回数（毎秒）・一致点（inlier）、GPU の電力と状態（P8 を「待機」、それ以外を「動作中」と出す）、映像が届いてから位置が出るまでの時間（直近 1 秒の中央値。tracker の「ms each」は合間の待ちを含むので使わない）、ログが 1 秒ごとに出る。電力・温度・処理時間・マスごとの位置が出た回数は直近 5 分の線も出る（履歴はサーバーが持つので、後から開いても見える）。
+  見えている NDI の送り手と地図（全マス共通）を選び、マスごとに使うか・名前を決めて開始 / 停止する（画面の大きさと fps は開始のとき送り手から読む）。動いているあいだはマスごとの信号・処理した枚数と位置が出た回数（毎秒）・一致点（inlier）、GPU の電力と状態（P8 を「待機」、それ以外を「動作中」と出す）、CPU パッケージの電力（RAPL の `energy_uj` を毎秒読む。root だけが読めるファイル（CVE-2020-8694 の対策）なので、service の `ExecStartPre` で操作ページのユーザーのグループにだけ開ける（`chgrp`＋`0440`。失敗しても起動はして、ページのラベルに理由が出る）。turbostat の PkgWatt と 2 W 以内で合う）、映像が届いてから位置が出るまでの時間（直近 1 秒の中央値。tracker の「ms each」は合間の待ちを含むので使わない）、ログが 1 秒ごとに出る。電力・温度・処理時間・マスごとの位置が出た回数は直近 5 分の線も出る（履歴はサーバーが持つので、後から開いても見える）。
   置き場所は rt4090 の `~/rt`（`tools/dvr/` の中身を `scp`）。`rt_control.py` を変えたら `sudo systemctl restart ghostline-control`（tracker ごと止まる）、ページの HTML と `rt_topview.js` は毎回ディスクから読むので再読み込みだけ。起動するのは `SIGNAL=1 PUSH=8765`＋TensorRT のエンジン、チェックで `RENDER=1 RCLIP=2 SCENE=…` と屋外の束調整。出力は `~/rt/live/<名前>.jsonl` など、前回の設定は `~/.ghostline-control.json`。ログインは無い（会場の LAN / Tailscale の中で使う）ので、追加の設定に書けるのは tracker の変数だけ（`rt_control.py` の `KNOBS`）。届いた映像は各マスの後ろに薄く出る（送り手の低帯域の映像を 1 秒に 2 枚、ページが開いているあいだだけ受ける。輪で濃さを切り替え）。上から見た図は、シーンを真上から平行投影で 1 回描いた絵（`rt_topview.py`、2.6 秒、`live/topview-*.jpg` に残る。範囲は地図のキーフレームの位置の 99% ＋ 4 m）に、各マスの直近 12 秒の軌跡と名前を重ねる。ページの主役はこの図で、軌跡はブラウザが tracker の `PUSH`（8765）を直接読んで描く（届かなければ 1 秒ごとの状態で描く）。点の時刻は届いた時刻ではなくフレーム番号（`i / fps`）で、届いた時刻の最も早いものに合わせる（処理の 30〜40 ms の揺れで点の間隔が乱れ、軌跡がカクついた）。図の右下の「なめらかさ」と「遅らせる」で軌跡の描き方を決める（既定 80 ms・250 ms、`~/.ghostline-view.json`、動作中でも変えられ、OBS のページにも効く）。なめらかさは前後の答えを時間でガウス平均する σ、遅らせると先頭を前後の答えの間で内挿して毎フレーム描く。準決勝の答え 2.6 万件で、1 フレームごとの揺れ p90 は σ 0 / 50 / 80〜100 / 150 ms で 0.75 / 0.13 / 0.09 / 0.07 m、答えからずれる量 p50 は 0 / 0.08 / 0.2 / 0.46 m。100 ms を超えると角を削るだけ。遅れは 2.5σ＋約 40 ms 要る（短いと平均に先の答えが入らず先頭が引きずられる）。250 ms で内挿できない途切れは 0.2%。**OBS に出すなら `http://rt4090:8080/obs`**：この図だけのページ。ブラウザソースを比率を保ったまま埋め、はみ出す端は切る。線と名前は 1080p 向けに太く大きい。`?trail=秒`（既定 12）、`?course=1` でキーフレームの点も。設定の「コースの線」に `race.json`（`make_race.py` の `track`、`~/rt/tracks/`）を選ぶと、コースの線（25 cm おきの点を Catmull-Rom の曲線で、薄い点線）とスタート / ゴールのゲートが両ページに重なり、図の範囲は大きさを変えずにコースの線の中心へ動く。描く部分は `rt_topview.js` を 2 つのページで共有。サーバーの負荷は 1 コアの約 4%、tracker の処理 1 回は 11.4 ms のまま。
 
   **観客向けページへの送信**（`rt_relay.py`、ghostline.saqoo.sh/<大会>/）：`scp tools/dvr/rt_relay.py tools/dvr/rt_control.* rt4090:~/rt/`、
@@ -99,6 +99,26 @@ d05 1 本（`RENDER=1`）は GPU 120 W・CPU 104 → 54 W。無負荷は GPU 22 
   再起動は tracker が止まっているときだけ（子の tracker も止まる）。操作ページの上の帯に「送信中」「未送信 N 秒」が出る。ヒートの答えは `live/relay/<日付>/<ヒート>.json`、区切りは `live/relay/heats-<日付>.jsonl`。
   答えの時刻は rt4090 の壁の時計のまま中継に渡る。会場の箱の時計がずれると、見る人の遅れと中継の backlog（80 秒）も同じだけずれる（2026-10-18 は timesyncd で +3.3 ms）。
   夜の作り直し（`night_heats.py`）は流し直しのフレーム番号に 120 フレーム（`--shift`）を足して録画に合わせる。
+
+  **3D のページを運営のスイッチャーへ配信する**（`rt_ndiview.py`、`ghostline-ndiview.service`、`rt_linux_setup.sh` が入れる、2026-10-23）：
+  ヘッドレスの Chrome が `/view/?ndi=1`（パネルと DVR の枠なし）を 4090 で描き、screencast の JPEG を NDI（名前「ghostline 3D」）か SRT（`srt://rt4090:9000`、NVENC の H.264、MPEG-TS、待ち受けは 1 台）で出す。
+  操作ページの「配信」で出力（NDI / SRT / 両方 / 止める）・大きさ（720p / 1080p）・fps（30 / 60）を選ぶ（`~/.ghostline-out.json`。変わると送り手が終わり、service が 1 秒後に新しい設定で立ち上げ直す。止めている間は Chrome を起こさない）。
+  「配信のカメラ」で全体・真上・マスの追いかけとズーム（`~/.ghostline-cam.json`）。ページは `/api/cam/events`（SSE）で押した瞬間に受ける。押してから SRT の絵が変わるまで 0.55 秒（カメラは 0.7 秒かけて滑る）。fps を下げるとページ自身がその間隔でしか描かない（`?fps=`）ので、GPU も splat の並べ替えも JPEG も減る。
+  配る：`scp tools/dvr/rt_ndiview.py tools/dvr/rt_control.* tools/dvr/rt_topview.js tools/dvr/rt_rec.py rt4090:~/rt/`、ページは Mac で `(cd viewer && VITE_BASE=/view/ npx vite build --outDir /tmp/view --emptyOutDir)` して `scp -r /tmp/view/{assets,live.html} rt4090:~/rt/view/`（`rt_linux_setup.sh` はビルドを配らない）。
+  録画係（`rt_rec.py`）は自分の配信を録らない（`REC_SKIP`、既定 `(ghostline 3D)`。外すと 16 Mbps で録り続ける）。
+  Chrome は `--use-angle=gl-egl` でないと GPU を使わない（既定は SwiftShader で 2 fps、Vulkan は GPU プロセスが落ちる）。X は要らない。
+
+  | 配信の形（spirula の学習と同時で揺れる値） | CPU | CPU パッケージの増え |
+  |---|---|---|
+  | NDI 1080p 60 fps | 約 5 コア（Chrome 3、Python 1〜2：JPEG の展開と NDI の SpeedHQ 圧縮） | +50〜110 W |
+  | SRT 720p 30 fps | 約 1.4 コア（大半は Chrome のページ、送り手は 0.03） | +20〜35 W |
+
+  運営の OBS の受け方は `http://rt4090:8080/obs-setup`（操作ページの「OBS」。NDI・SRT・ブラウザソースの設定を、開いたときの会場の IP で書く）。
+  **受け手がいるときだけ描く**：NDI の受け手（`get_num_connections`）も SRT の相手（ffmpeg の「Output #0」の行。相手がつないだときに初めて出る）も無い状態が 5 秒続くと、ページの rAF を止め（`window.ghostlineHold`）、screencast も止める。最後の 1 枚は 0.5 秒ごとに送り続ける。来れば約 1 秒で描き始める。止めている間は GPU 10〜11 W・CPU 約 10 W で、「止める」と同じ。描いている間は `/tmp/ghostline-ndiview.rendering` を毎秒更新し、`rt_gpu_idle.sh` はこれが 5 秒以内なら打たない（描画中の Chrome は P8・約 20 W で、見張りが打つと効かずに倍々で打ち続け、そのうちの 1 回で描画が 10 秒止まって送り手が立ち上げ直した）。`Page.setWebLifecycleState` の frozen は使わない（active に戻してもページが hidden のままで、二度と描かない）。
+  JDL 2026 R7（2026-10-24）の軽いシーン（80 万 splat SH1）で描いているときの増え（待機 GPU 11 W・CPU 10 W から）：SRT 720p30 は GPU +8・CPU +11 W、NDI 720p30 は +9・+21 W、NDI 1080p60 は +26・+65 W。
+  NDI|HX（H.264 の NDI）は NDI Advanced SDK（商用ライセンス）でしか送れないので使っていない。
+  **OBS のメディアソースで SRT を受けると、既定の調べ込み（5 MB、6 Mbps で約 7 秒ぶん）をそのまま抱えて 6〜10 秒遅れる。** 「FFmpeg Options」に `fflags=nobuffer analyzeduration=1000000 probesize=1000000`、Network Buffering 0 MB、Reconnect Delay 1〜2 秒、ハードウェアデコードあり で 3〜4 秒。ここから先は OBS の中の溜めで、送り手の側は 0.55 秒。遅れを詰めたいなら OBS の NDI ソースか、ブラウザソース（`http://rt4090:8080/view/?ndi=1&fps=30`、描くのは運営の PC）。
+  送り手の ffmpeg に `-fflags nobuffer` を付けない（mjpeg をパイプで受ける入力ではほとんど何も通さず、OBS が黒くなった）。調べ込みは `-probesize 32 -analyzeduration 0` で消す（既定の 5 MB は 720p 30 fps の JPEG で約 4 秒ぶんを抱える）。
 
   | 準決勝、1080p NDI、4 マス、`SIGNAL=1`、Linux | 解けたフレーム | GPU＋CPU 平均 / ヒート中 / あいだ |
   |---|---|---|
