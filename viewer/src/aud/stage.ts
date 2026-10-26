@@ -2,15 +2,18 @@
 // pilot, and the camera - Orbit, Top, Follow one pilot. Drawn as livepage.ts draws them (that page is the venue's; this one
 // leaves out its Free camera, BA switch and sliders). A pilot's colour is their cell's place in the grid (--tl ... --br, look.css).
 import * as pc from 'playcanvas'
+import { L } from './i18n'
+import { loadHQ, pickScan, saveHQ, sceneBlob } from './scan'
 
 export type Slot = 'tl' | 'tr' | 'bl' | 'br'
 export const SLOTS: Slot[] = ['tl', 'tr', 'bl', 'br']
 export type Mode = 'orbit' | 'top' | `p${string}`
 export type PilotState = 'flying' | 'lost' | 'nopic'
-export interface StagePilot { stream: string; slot: Slot; color: string; pos: pc.Vec3 | null
+// line: a flight's whole line only (compare.ts): thin and light all along, no sphere and no name tag
+export interface StagePilot { stream: string; slot: Slot; color: string; pos: pc.Vec3 | null; line: boolean
   show(pos: number[], trail: (number[] | null)[], state: PilotState, label: { name: string; flag: string; note: string }): void; hide(): void }
 export interface Stage { app: pc.Application; mode: Mode; onMode: (m: Mode) => void
-  loadScene(): Promise<{ title?: string }>; setCourse(track: number[][] | null): void; pilot(stream: string, slot: Slot): StagePilot
+  loadScene(progress?: (f: number) => void): Promise<{ title?: string }>; hq: boolean; setHQ(on: boolean): Promise<void>; setCourse(track: number[][] | null): void; pilot(stream: string, slot: Slot): StagePilot
   setMode(m: Mode): void; clear(): void }
 
 const css = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim()
@@ -19,18 +22,25 @@ const TRAIL_PX = 5, LINE_W = 0.12, LINE_DASH = 1.0, LINE_GAP = 0.7, LINE_A = 0.2
 const cLost = new pc.Color(0.55, 0.57, 0.6)
 // a phone gets the light scan (index.json "lite", tools/publish-event.sh) unless ?q=full; a tall screen looks down more steeply,
 // or the orbit, backing off to hold the course across the narrow width, ends up inside the trees round it
-const PHONE = new URLSearchParams(location.search).get('q') !== 'full' && matchMedia('(pointer: coarse) and (max-width: 1000px) and (max-height: 1000px)').matches   // not a tablet
+const PHONE = typeof location !== 'undefined' && new URLSearchParams(location.search).get('q') !== 'full' && matchMedia('(pointer: coarse) and (max-width: 1000px) and (max-height: 1000px)').matches   // not a tablet
 const PITCH_TALL = -38
 
 function emptyMesh(m: pc.Mesh) { m.setPositions([0, 0, 0, 0, 0, 0, 0, 0, 0]); m.setNormals([0, 1, 0, 0, 1, 0, 0, 1, 0]); m.setColors(new Array(12).fill(0)); m.setIndices([0, 1, 2]); m.update(pc.PRIMITIVE_TRIANGLES) }
 
+const SHOT = new URLSearchParams(typeof location === 'undefined' ? '' : location.search)   // (no location in the tests)
+// the header's HQ toggle (the full scan in place of the lite one): redraw the buttons now, done once the new scan is in
+export const hqButton = (stage: Stage, redraw: () => void, done: () => void) => Object.assign(document.createElement('button'), {
+  textContent: 'HQ', title: L('高画質のスキャン（300 万 splat、45 MB）', 'High-quality scan (3M splats, 45 MB)'), className: stage.hq ? 'on' : '',
+  onclick: () => { stage.setHQ(!stage.hq).then(done, e => console.error('scan', e)); redraw() } })
 export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
-  const app = new pc.Application(canvas, { mouse: new pc.Mouse(canvas), touch: new pc.TouchDevice(canvas), graphicsDeviceOptions: { antialias: false } })
-  app.setCanvasFillMode(pc.FILLMODE_FILL_WINDOW); app.setCanvasResolution(pc.RESOLUTION_AUTO)
-  window.addEventListener('resize', () => app.resizeCanvas())
+  const app = new pc.Application(canvas, { mouse: new pc.Mouse(canvas), touch: new pc.TouchDevice(canvas), graphicsDeviceOptions: { antialias: !PHONE } })   // MSAA: the trail fades by alpha-to-coverage, as mgp.ts - not on a phone, where 4x the splats' fill dropped the frame rate
+  // the canvas is as large as the page's CSS makes it (the whole window, or the part over the live page's progress band)
+  app.setCanvasFillMode(pc.FILLMODE_NONE); app.setCanvasResolution(pc.RESOLUTION_AUTO)
+  // (resizeCanvas writes the size into the canvas's style: cleared again, or the first size would stick over the CSS)
+  new ResizeObserver(() => { app.resizeCanvas(canvas.clientWidth, canvas.clientHeight); canvas.style.width = canvas.style.height = '' }).observe(canvas)
   // the bottom bars' heights as --foot and --time (look.css stacks the timeline and the pilots over them; the footer wraps on a phone)
-  const bars = new ResizeObserver(() => { for (const [v, q] of [['--foot', '.bar.foot'], ['--time', '.bar.time']]) document.documentElement.style.setProperty(v, `${document.querySelector(q)?.getBoundingClientRect().height ?? 0}px`) })
-  for (const q of ['.bar.foot', '.bar.time']) { const e = document.querySelector(q); if (e) bars.observe(e) }
+  const bars = new ResizeObserver(() => { for (const [v, q] of [['--head', '.bar.top'], ['--foot', '.bar.foot'], ['--time', '.bar.time']]) document.documentElement.style.setProperty(v, `${document.querySelector(q)?.getBoundingClientRect().height ?? 0}px`) })
+  for (const q of ['.bar.top', '.bar.foot', '.bar.time']) { const e = document.querySelector(q); if (e) bars.observe(e) }
   const cam = new pc.Entity('cam'); cam.addComponent('camera', { clearColor: hex(css('--paper') || '#f3f4f6'), fov: 60, nearClip: 0.1, farClip: 600 }); app.root.addChild(cam)
 
   // --- camera (as livepage.ts): orbit turns slowly round the course's middle, as near as holds the course and everyone up;
@@ -87,11 +97,11 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   }
 
   // --- the trail (as livepage.ts): an opaque, depth-writing band facing the camera, before the splats, thinning to its old
-  // end and dithered out; broken where a frame has no position
+  // end by alpha-to-coverage (as mgp.ts; a phone, without MSAA, by a blue-noise dither moved every frame); broken where a frame has no position
   const trailMat = new pc.StandardMaterial()
   { const m = trailMat; m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.cull = pc.CULLFACE_NONE; m.emissiveVertexColor = true; m.emissive = new pc.Color(1, 1, 1)
-    m.blendType = pc.BLEND_NONE; m.depthWrite = true; m.depthTest = true; m.opacityVertexColor = true; m.opacityVertexColorChannel = 'a'; m.opacityDither = pc.DITHER_BLUENOISE; m.update() }
-  function drawTrail(mesh: pc.Mesh, pts: (number[] | null)[], c: pc.Color, eye: pc.Vec3, pxWorld: number) {
+    m.blendType = pc.BLEND_NONE; m.depthWrite = true; m.depthTest = true; m.opacityVertexColor = true; m.opacityVertexColorChannel = 'a'; if (PHONE) m.opacityDither = pc.DITHER_BLUENOISE; else m.alphaToCoverage = true; m.update() }
+  function drawTrail(mesh: pc.Mesh, pts: (number[] | null)[], c: pc.Color, eye: pc.Vec3, pxWorld: number, full = false) {
     const pos: number[] = [], col: number[] = [], nrm: number[] = [], idx: number[] = [], n = pts.length
     const tan = new pc.Vec3(), vw = new pc.Vec3(), side = new pc.Vec3(), a = new pc.Vec3(), b = new pc.Vec3(), q = new pc.Vec3(); let run = 0
     for (let k = 0; k < n; k++) {
@@ -99,7 +109,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
       const pa = pts[k - 1] ?? p, pb = pts[k + 1] ?? p
       q.set(p[0], p[1], p[2]); a.set(pa[0], pa[1], pa[2]); b.set(pb[0], pb[1], pb[2])
       tan.sub2(a, b); if (tan.lengthSq() < 1e-12) tan.set(1, 0, 0); tan.normalize(); vw.sub2(eye, q)
-      const al = k / Math.max(1, n - 1), w = (1 + (TRAIL_PX - 1) * al) / 2 * pxWorld * vw.length()
+      const al = full ? 0.25 : k / Math.max(1, n - 1), w = (1 + (TRAIL_PX - 1) * al) / 2 * pxWorld * vw.length()
       side.cross(tan, vw.normalize()); if (side.lengthSq() < 1e-12) side.set(0, 1, 0); side.normalize().mulScalar(w)
       pos.push(q.x + side.x, q.y + side.y, q.z + side.z, q.x - side.x, q.y - side.y, q.z - side.z); col.push(c.r, c.g, c.b, al, c.r, c.g, c.b, al); nrm.push(0, 1, 0, 0, 1, 0)
       if (run) { const i = pos.length / 3 - 2; idx.push(i - 2, i - 1, i, i - 1, i + 1, i) }
@@ -129,8 +139,8 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
 
   // --- a pilot: sphere, trail and tag; drawn each frame from what the page last showed
   class Pilot implements StagePilot {
-    color: string; col: pc.Color; pos: pc.Vec3 | null = null; state: PilotState = 'nopic'; fwd = new pc.Vec3(0, 0, -1); prev: pc.Vec3 | null = null
-    mat = new pc.StandardMaterial(); dot = new pc.Entity('dot'); trail: pc.Mesh; trailE = new pc.Entity('trail'); pts: (number[] | null)[] = []; tag = document.createElement('div'); label = ''
+    line = false; color: string; col: pc.Color; pos: pc.Vec3 | null = null; state: PilotState = 'nopic'; fwd = new pc.Vec3(0, 0, -1); prev: pc.Vec3 | null = null
+    mat = new pc.StandardMaterial(); dot = new pc.Entity('dot'); trail: pc.Mesh; trailE = new pc.Entity('trail'); pts: (number[] | null)[] = []; tag = document.createElement('div'); label = ''; sx = 0; sy = 0; order = 0; lift = 0
     constructor(public stream: string, public slot: Slot) {
       this.color = css('--' + slot) || '#5b4bff'; this.col = hex(this.color)
       const m = this.mat; m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.emissive = this.col; m.update()
@@ -147,45 +157,79 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
       const key = [state, label.flag, label.name, label.note].join('|')
       if (key === this.label) return; this.label = key                 // the material and the tag only when they change
       this.mat.emissive = state === 'flying' ? this.col : cLost; this.mat.update()
-      const b = document.createElement('b'); b.textContent = this.stream
+      const b = document.createElement('b'); b.textContent = label.name ? '' : this.stream   // the audience knows pilots by name: the cell only when there is none
       const who = Object.assign(document.createElement('span'), { textContent: (label.flag + ' ' + label.name).trim() })
       const note = Object.assign(document.createElement('small'), { textContent: label.note })
       this.tag.classList.toggle('lost', state !== 'flying'); this.tag.replaceChildren(b, ...(label.name ? [who] : []), ...(label.note ? [note] : []))
     }
     destroy() { this.dot.destroy(); this.trailE.destroy(); this.tag.remove() }
     hide() { this.pos = null; this.state = 'nopic'; this.pts = []; this.prev = null; this.dot.enabled = false; this.tag.hidden = true; emptyMesh(this.trail) }
-    draw(eye: pc.Vec3, pxWorld: number) {
-      if (!this.pos) return
-      drawTrail(this.trail, this.pts, this.state === 'flying' ? this.col : cLost, eye, pxWorld)
+    draw(eye: pc.Vec3, pxWorld: number): boolean {               // true: its tag is on screen, at sx, sy
+      if (!this.pos) return false
+      drawTrail(this.trail, this.pts, this.state === 'flying' ? this.col : cLost, eye, pxWorld, this.line)
+      if (this.line) { this.dot.enabled = false; this.tag.hidden = true; return false }
       const s = cam.camera!.worldToScreen(this.pos, new pc.Vec3()), behind = cam.forward.dot(this.pos.clone().sub(eye)) < 0
-      this.tag.hidden = behind; this.tag.style.left = s.x + 'px'; this.tag.style.top = s.y + 'px'
+      this.sx = s.x + at.left; this.sy = s.y + at.top                   // the canvas's own place on the page (below the header)
+      this.tag.hidden = behind; this.tag.style.left = this.sx + 'px'; return !behind
     }
   }
 
-  let t = 0
+  let t = 0, at = canvas.getBoundingClientRect()
   app.on('update', (dt: number) => {
-    t += dt; cameraAt(t, dt)
+    if (!SHOT.has('still')) t += dt   // ?still: the orbit stays at its first angle (screenshots from one view)
+    cameraAt(t, dt)
     if (blendT < BLEND) { blendT = Math.min(BLEND, blendT + dt); const u = blendT / BLEND, k = u * u * (3 - 2 * u)
       cam.setPosition(new pc.Vec3().lerp(blendFrom.pos, cam.getPosition(), k)); cam.setRotation(new pc.Quat().slerp(blendFrom.rot, cam.getRotation(), k)) }
     const eye = cam.getPosition(), pxWorld = 2 * Math.tan(30 * Math.PI / 180) / Math.max(1, canvas.clientHeight)
-    drawLine(eye); trailMat.setParameter('blueNoiseJitter', [Math.random(), Math.random(), Math.random(), Math.random()])
-    for (const p of pilots.values()) p.draw(eye, pxWorld)
+    drawLine(eye); if (PHONE) trailMat.setParameter('blueNoiseJitter', [Math.random(), Math.random(), Math.random(), Math.random()])
+    // name tags that would overlap are stacked upwards, as the venue's 3D page's (livepage.ts): the lowest on screen stays
+    // over its sphere, each other one goes up past the tags it would cover and glides there; two within 30 px of each
+    // other keep last frame's order, so pilots at about the same height do not trade places every few frames
+    at = canvas.getBoundingClientRect()
+    const on = [...pilots.values()].filter(p => p.draw(eye, pxWorld))
+    on.sort((a, b) => Math.abs(a.sy - b.sy) < 30 ? a.order - b.order : b.sy - a.sy); on.forEach((p, i) => { p.order = i })
+    const boxes: number[][] = []
+    for (const p of on) {
+      const w = p.tag.offsetWidth, h = p.tag.offsetHeight + 2, x0 = p.sx - w / 2, x1 = p.sx + w / 2
+      let y = p.sy
+      for (let moved = true; moved;) { moved = false; for (const r of boxes) if (x0 < r[1] && x1 > r[0] && y > r[2] - h && y < r[2] + h) { y = r[2] - h; moved = true } }
+      boxes.push([x0, x1, y]); p.lift += (p.sy - y - p.lift) * (1 - Math.exp(-dt / 0.15))
+      p.tag.style.top = p.sy - p.lift + 'px'
+    }
   })
   app.start()
 
+  // the scan shown: one entity, replaced once the next one is in (the old one stays on screen meanwhile)
+  let ix: any = null, prog: ((f: number) => void) | undefined, shown: { name: string; e: pc.Entity } | null = null, want = ''
+  const scanName = () => pickScan(ix, stage.hq)
+  async function showScan(name: string) {
+    if (shown?.name === name) return; want = name
+    const url = URL.createObjectURL(await sceneBlob(`${base}scene/${name}.sog`, prog))
+    await new Promise<void>((ok, bad) => {
+      const a = new pc.Asset(name, 'gsplat', { url, filename: `${name}.sog` }); app.assets.add(a)
+      a.on('load', () => {
+        URL.revokeObjectURL(url)
+        if (want !== name) { app.assets.remove(a); a.unload(); ok(); return }      // switched again while this one came
+        const e = new pc.Entity('scene'); e.addComponent('gsplat', { asset: a }); app.root.addChild(e)
+        if (shown) { const old = shown.e.gsplat?.asset; shown.e.destroy(); const oa = typeof old === 'number' ? app.assets.get(old) : old; if (oa) { app.assets.remove(oa); oa.unload() } }
+        shown = { name, e }; ok()
+      }); a.on('error', bad); app.assets.load(a)
+    })
+  }
   const json = (u: string) => fetch(u).then(r => { if (!r.ok) throw new Error(`${u}: ${r.status}`); return r.json() })
   const stage: Stage = {
     app, mode: 'orbit', onMode: () => {},
-    async loadScene() {
-      const ix = await json(base + 'index.json')
-      if (ix.orbit?.target) { home.target.set(ix.orbit.target[0], ix.orbit.target[1], ix.orbit.target[2]); home.dist = ix.orbit.dist ?? home.dist; orb.init = false }
-      const name = ix.lite && PHONE ? ix.lite : ix.scene
-      await new Promise<void>((ok, bad) => {
-        const a = new pc.Asset(name, 'gsplat', { url: `${base}scene/${name}.sog` }); app.assets.add(a)
-        a.on('load', () => { const e = new pc.Entity('scene'); e.addComponent('gsplat', { asset: a }); app.root.addChild(e); ok() }); a.on('error', bad); app.assets.load(a)
-      })
+    // the scan read here, so its progress can be shown (f: 0-1, or NaN when the size is not known), then handed to PlayCanvas
+    async loadScene(progress) {
+      ix = await json(base + 'index.json'); prog = progress
+      // the orbit's middle: the course line's when it is in (whichever of the two files arrives last), else index.json's
+      if (ix.orbit?.target && !course.length) { home.target.set(ix.orbit.target[0], ix.orbit.target[1], ix.orbit.target[2]); home.dist = ix.orbit.dist ?? home.dist; orb.init = false }
+      await showScan(scanName())
       return { title: ix.title }
     },
+    // HQ: the full scan (3M splats, 45 MB) instead of the lite one (0.8M, 12 MB) every page starts with; this browser remembers
+    hq: loadHQ(),
+    async setHQ(on) { stage.hq = on; saveHQ(on); if (ix) await showScan(scanName()) },
     setCourse(track) {                                       // the course line; it may come later or be replaced during the day
       if (!track?.length) { course = []; line = []; lineS = []; return }
       course = track.filter((_, k) => k % 8 === 0).map(q => new pc.Vec3(q[0], q[1], q[2]))

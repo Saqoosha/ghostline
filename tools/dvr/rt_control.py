@@ -96,12 +96,12 @@ def course(name, line=""):
 
 def track(name):
     """a race.json's course line (make_race.py: the anchor pilot's laps averaged, 1,600 points along a lap, about 25 cm apart on the FDF course; the page closes it) seen from above, and its
-    start / finish gate as the segment across it"""
+    start / finish gate, and its other gates (track.json "gates"), as the segments across them"""
     if name not in options()["tracks"]: raise ValueError("コースの線が見つからない")
     r = json.load(open(f"{HERE}/{name}")); t = r.get("track") or []; g = r.get("gate")
     pts = [[round(p[0], 2), round(p[2], 2)] for p in t]
-    gate = [[round(g["centre"][0] + k * g["half_width"] * g["width_dir"][0], 2), round(g["centre"][2] + k * g["half_width"] * g["width_dir"][2], 2)] for k in (-1, 1)] if g else None
-    return dict(pts=pts, gate=gate)
+    seg = lambda g: [[round(g["centre"][0] + k * g["half_width"] * g["width_dir"][0], 2), round(g["centre"][2] + k * g["half_width"] * g["width_dir"][2], 2)] for k in (-1, 1)]
+    return dict(pts=pts, gate=seg(g) if g else None, gates=[seg(x) for x in r.get("gates") or []])   # gates: the course's other gates (the 3D page's splits)
 
 rendering, failed = set(), {}                    # failed: file -> when; tried again after 2 minutes (a render during a heat may hit a full GPU)
 def topview(name, scene, line=""):
@@ -410,8 +410,8 @@ def stop():
         if p is None: raise ValueError("動いていない")
         S["phase"] = "stopping"
     p.send_signal(signal.SIGTERM)                   # the tracker writes its summary and files on TERM
-    def wait():
-        try: p.wait(40)
+    def wait():                                     # 40 s was not enough for a 2-hour run's files (70 MB a cell): JDL R7 2026-10-24 lost three cells' twice
+        try: p.wait(300)
         except subprocess.TimeoutExpired: p.kill()
     threading.Thread(target=wait, daemon=True).start()
 

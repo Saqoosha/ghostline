@@ -17,12 +17,14 @@ and keeps each heat's answers on disk, uploading them when the heat ends.
   <id>.json.pending, tried again every 30 s and when the relay starts.
 usage: python rt_relay.py --push http://127.0.0.1:8765 --base https://ghostline.saqoo.sh --event <day> [--pilots URL] [--out live/relay]
    the key: ~/.config/ghostline/key (RELAY_KEY of the Worker). rt_control.py starts one itself (RELAY_BASE, RELAY_EVENT)."""
-import argparse, datetime, glob, gzip, json, os, re, threading, time, urllib.error, urllib.request
+import argparse, datetime, glob, gzip, json, math, os, re, threading, time, urllib.error, urllib.request
 
 JST = datetime.timezone(datetime.timedelta(hours=9))
 ORDER = ("R2", "F1", "R4", "R5")                     # the cells tl, tr, bl, br when there is no venue config (FDF's names)
 EVENT = re.compile(r"(staging-)?[a-z0-9][a-z0-9-]*")  # as the Worker's
-HOLD, X_EVERY, H_EVERY, SAVE_EVERY, RETRY_EVERY, KEEPALIVE = 0.5, 0.5, 10.0, 10.0, 30.0, 5.0
+HOLD, X_EVERY, H_EVERY, SAVE_EVERY, RETRY_EVERY, KEEPALIVE = 0.2, 0.5, 10.0, 10.0, 30.0, 5.0   # HOLD: 0.5 s waited for all of BA's revisions, but put a phone 1-1.8 s behind (JDL R7 2026-10-24); 0.2 s gets most of them
+WEAK, JUMP = 60, 5.0                                 # an answer with fewer inliers landing this far (m) from its stream's last within 0.5 s is a wrong pose: dropped
+SETTLE = 5.0                                         # s a named heat's new names must hold before they end it (Heats.names)
 DVR_MAX, DVR_TRIES = 95 << 20, 10                    # a clip's bytes (the Worker takes 100 MB a request), a heat's DVR attempts
 ms = lambda t: round(t * 1000)
 day = lambda t: datetime.datetime.fromtimestamp(t, JST).strftime("%Y%m%d")
@@ -31,7 +33,7 @@ day = lambda t: datetime.datetime.fromtimestamp(t, JST).strftime("%Y%m%d")
 class Heats:
     """where heats start and end, and their names; the clock comes in as arguments"""
     def __init__(self, gap=30.0, order=ORDER):
-        self.gap, self.order, self.cur, self.last, self.p = gap, list(order), None, None, {}
+        self.gap, self.order, self.cur, self.last, self.p, self.pend = gap, list(order), None, None, {}, None
 
     def h(self):
         c = self.cur; return dict(k="h", t=c["t"], id=c["id"], heat=c["heat"], cls=c["cls"], cells=dict(c["cells"]), order=self.order)
@@ -42,16 +44,20 @@ class Heats:
 
     def expire(self, now):                           # first in every entry: a row or names after the gap must not reach the old heat
         if not self.cur or now - self.last <= self.gap: return []
-        e = dict(k="e", t=ms(self.last), id=self.cur["id"]); self.cur = None; return [e]
+        # a heat the names started (no row since) ends at its own start, not at the last heat's last row (JDL R7 10/25 h26)
+        e = dict(k="e", t=max(ms(self.last), self.cur["t"]), id=self.cur["id"]); self.cur = None; return [e]
 
     def row(self, now, stream):
         out = self.expire(now); self.last = now
         if self.cur: return out
-        heat, cls, cells = self._named()
+        return out + [self._start(now)]
+
+    def _start(self, now):
+        heat, cls, cells = self._named(); self.pend = None
         n = re.sub(r"[^A-Za-z0-9_-]", "", heat or "")[:16]   # the Worker's heat id is ASCII: "予選 7" becomes -h7
         hid = datetime.datetime.fromtimestamp(now, JST).strftime("%H%M%S") + (f"-h{n}" if n else "")
         self.cur = dict(id=hid, t=ms(now), heat=heat, cls=cls, cells=cells)
-        return out + [self.h()]
+        return self.h()
 
     def names(self, now, p):
         out = self.expire(now)
@@ -59,9 +65,16 @@ class Heats:
         if not isinstance(p, dict) or not isinstance(p.get("cells"), dict) or p.get("stale"): self.p = {}; return out
         self.p = p
         if not self.cur: return out
-        heat, cls, cells = self._named()
-        if (heat, cls, cells) == (self.cur["heat"], self.cur["cls"], self.cur["cells"]): return out
-        self.cur.update(heat=heat, cls=cls, cells=cells); return out + [self.h()]
+        new = self._named()
+        if new == (self.cur["heat"], self.cur["cls"], self.cur["cells"]): self.pend = None; return out
+        if self.cur["heat"] is None and not any(self.cur["cells"].values()):   # an unnamed heat takes its names (the manager set late)
+            self.cur.update(heat=new[0], cls=new[1], cells=new[2]); return out + [self.h()]
+        # a named heat's names changed: the heat manager moves on when a race is run (JDL R7 2026-10-24: while the pilots were
+        # still landing, and the next heat sometimes came within the 30 s gap), so a change that holds SETTLE s ends the heat
+        # there and the next one starts with the new names. A change that does not hold (the manager clicked through) is ignored
+        if not self.pend or self.pend[0] != new: self.pend = (new, now); return out
+        if now - self.pend[1] < SETTLE: return out
+        e = dict(k="e", t=ms(now), id=self.cur["id"]); return out + [e, self._start(now)]
 
     tick = expire
 
@@ -74,6 +87,7 @@ class Relay:
         self.order = order if callable(order) else (lambda o=list(order): o)   # the cells tl, tr, bl, br: the venue's config, read at each heat start
         self.heats = Heats(order=self._order(ORDER)); self.lock = threading.Lock()
         self.held, self.queue, self.last_x, self.rec, self.ends, self.uploads = {}, [], {}, None, [], []
+        self.last_p = {}                             # stream -> (time, position) of its last answer kept (WEAK, JUMP)
         self.last_h = self.last_save = self.last_retry = self.last_names = 0.0
         self.sent_at = self.tried = None
         self.push_err = self.upload_err = self.bg_err = self.dvr_err = None   # kept apart: a good push must not hide a failing upload
@@ -114,13 +128,18 @@ class Relay:
                 a = self.held.get((s, w[0]))
                 if a: a["p"], a["q"] = w[1:4], w[4:8]
             t = now - (r.get("lat") or 0) / 1000
-            if "pos" in r: self.held[(s, r["i"])] = dict(s=s, t=ms(t), p=r["pos"], q=r["quat"], n=r.get("inl", 0), due=now + HOLD)
+            # the tracker's jumps (JDL R7 2026-10-24: about 2 a pilot a heat, nearly all on 30-60 inliers while tracking): a weak
+            # answer far from the one before goes as no answer; a strong one is believed wherever it lands
+            lp = self.last_p.get(s)
+            if "pos" in r and r.get("inl", 0) < WEAK and lp and t - lp[0] < 0.5 and math.dist(r["pos"], lp[1]) > JUMP: r = {k: v for k, v in r.items() if k != "pos"}
+            if "pos" in r: self.held[(s, r["i"])] = dict(s=s, t=ms(t), p=r["pos"], q=r["quat"], n=r.get("inl", 0), due=now + HOLD); self.last_p[s] = (t, r["pos"])
             elif now - self.last_x.get(s, -1e9) >= X_EVERY: self.last_x[s] = now; self.queue.append(dict(k="x", s=s, t=ms(t)))
 
     def on_names(self, p, now):
         with self.lock:
             for m in self.heats.names(now, p):
                 if m["k"] == "e": self.close(m); continue
+                if not self.rec or self.rec["id"] != m["id"]: self.start(m, now); continue   # the next heat, split off on new names
                 m["at"] = ms(now); self.queue.append(m); self.log(m); self.last_h = now
             if self.rec and self.heats.cur: self.rec.update(heat=self.heats.cur["heat"], cls=self.heats.cur["cls"], cells=dict(self.heats.cur["cells"]))
 

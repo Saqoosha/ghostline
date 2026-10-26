@@ -15,10 +15,12 @@ for f in "$@"; do
   [ -f "$d/done" ] && continue
   [ -f "$f" ] || { echo "$stem missing" >> "$OUT/runs.txt"; continue; }
   mkdir -p "$d"; specs=()
-  for c in "R2 0:0" "F1 960:0" "R4 0:540" "R5 960:540"; do set -- $c
-    specs+=("$MAP,srt://127.0.0.1:$PORT?mode=listener&latency=80000|$2:960:540|$CAM,$d/$1"); done
+  # the grid's size from the recording: 1920x1080 (FDF 2026-10-17), 1280x720 (JDL R7's ZowieBox), each cell a quarter
+  read W H < <(ffprobe -v error -select_streams v -show_entries stream=width,height -of csv=p=0 "$f" | tr , ' '); w=$((W / 2)) h=$((H / 2))
+  for c in "R2 0:0" "F1 $w:0" "R4 0:$h" "R5 $w:$h"; do set -- $c
+    specs+=("$MAP,srt://127.0.0.1:$PORT?mode=listener&latency=80000|$2:$w:$h|$CAM,$d/$1"); done
   fps=$(ffprobe -v error -select_streams v -show_entries stream=r_frame_rate -of csv=p=0 "$f" | python3 -c "import sys, fractions; print(float(fractions.Fraction(sys.stdin.read().strip())))")
-  SIGNAL=1 GRID=1920x1080 GRID_FPS=$fps GLUE=eng_linux/glue_mix.engine XFEAT=eng_linux/xfeat_fp32.engine \
+  SIGNAL=1 GRID=${W}x$H GRID_FPS=$fps GLUE=eng_linux/glue_mix.engine XFEAT=eng_linux/xfeat_fp32.engine \
     RENDER=1 RCLIP=2 SCENE="$SCENE" BA=0.5 BA_ACC=30 BA_ALPHA=60 python -u rt_track.py "${specs[@]}" > "$d/tracker.log" 2>&1 &
   T=$!
   until grep -q listening "$d/tracker.log" 2>/dev/null; do sleep 2; kill -0 $T 2>/dev/null || break; done

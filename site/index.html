@@ -1,49 +1,41 @@
 <!doctype html>
-<html lang="en">
+<html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ghostline</title>
 <meta name="description" content="FPV flights reconstructed from the pilots' DVR video, replayed over 3D Gaussian-splat scans.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-  :root { --bg: #fafaf7; --fg: #16161a; --muted: #6b6b73; --line: #e2e2dc; --accent: #2f5bd8; }
+  /* the live control page's language (tools/dvr/rt_control.html): paper, hairlines and thin type, no boxes and no
+     fills, the name with its line drawn in the four grid colours. Only fonts the device already has */
+  :root { --paper: #f3f4f6; --ink: #0c0f14; --dim: rgba(12, 15, 20, .58); --faint: rgba(12, 15, 20, .2);
+          --tl: #e8a800; --tr: #22a849; --bl: #2f7bf0; --br: #f0701e;   /* the cells' colours (aud/look.css) */
+          --sans: "Helvetica Neue", -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif;
+          --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   * { box-sizing: border-box; }
-  html, body { margin: 0; }
-  body {
-    background: var(--bg); color: var(--fg);
-    font: 16px/1.5 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-    min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    padding: 48px 16px;
-  }
-  main { width: 100%; max-width: 440px; text-align: center; }
-  .logo { display: inline-flex; align-items: center; gap: 12px; }
-  .logo svg { width: 40px; height: 40px; flex: none; }
-  .logo span { font-weight: 700; font-size: 40px; letter-spacing: -0.03em; }
-  .tag { margin: 12px 0 40px; color: var(--muted); font-size: 15px; }
-  ul { list-style: none; margin: 0; padding: 0; text-align: left; border-top: 1px solid var(--line); }
-  li { padding: 14px 4px; border-bottom: 1px solid var(--line); }
-  a { color: var(--fg); text-decoration: none; font-weight: 500; }
-  a:hover { color: var(--accent); }
-  .sub { margin-left: 8px; font-weight: 400; color: var(--muted); }
-  .sub:hover { color: var(--accent); }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 400 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+         min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 48px 24px; }
+  main { width: 100%; max-width: 560px; }
+  .mark { display: flex; align-items: center; gap: 16px; margin: 0 0 44px; font: 200 21px/1 var(--sans); letter-spacing: .42em; }
+  .mark span:first-child { color: rgba(12, 15, 20, .45); }
+  .mark span:last-child { margin-right: -.42em; }
+  .mark i { flex: 1; height: 1.5px; background: linear-gradient(90deg, var(--tl), var(--tr), var(--bl), var(--br)); }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; align-items: baseline; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--faint); }
+  li:first-child { border-top: 1px solid var(--faint); }
+  a { color: var(--ink); text-decoration: none; }
+  li > a:first-child { flex: 1; font: 300 16px/1.3 var(--sans); letter-spacing: .06em; }
+  .sub { font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); text-transform: uppercase; white-space: nowrap; }
+  a:hover { color: var(--br); }
 </style>
 </head>
 <body>
 <main>
-  <div class="logo" aria-label="ghostline">
-    <svg viewBox="0 0 40 40" aria-hidden="true">
-      <path d="M4 30 C 12 30, 14 10, 22 10 S 32 24, 36 14" fill="none" stroke="#c9cbd3" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 6"/>
-      <path d="M4 30 C 12 30, 14 10, 22 10" fill="none" stroke="#16161a" stroke-width="3" stroke-linecap="round"/>
-      <circle cx="22" cy="10" r="4" fill="#2f5bd8"/>
-    </svg>
-    <span>ghostline</span>
-  </div>
-  <p class="tag">FPV flights rebuilt from DVR video, replayed over 3D Gaussian-splat scans.</p>
+  <h1 class="mark" aria-label="ghostline"><span>ghost</span><i></i><span>line</span></h1>
   <ul>
-    <li><a href="/mgp-champs-2026/">MultiGP Championship 2026</a></li>
+    <li><a href="/jdl-2026-10-25/">JDL 2026 R7 · 10/25 予選 3・決勝</a><a class="sub" href="/jdl-2026-10-25/">heats</a></li>
+    <li><a href="/jdl-2026-10-24/">JDL 2026 R7 · 10/24 練習・予選</a><a class="sub" href="/jdl-2026-10-24/">heats</a></li>
+    <li><a href="/mgp-champs-2026/">MultiGP Championship 2026</a><a class="sub" href="/mgp-champs-2026/">qualifiers</a></li>
     <li><a href="/fdf-2026-r6/">FDF CUP 2026 R6</a><a class="sub" href="/fdf-2026-r6/race">race replay</a></li>
     <li><a href="/jdl-2026-r6/">JDL 2026 R6</a></li>
   </ul>

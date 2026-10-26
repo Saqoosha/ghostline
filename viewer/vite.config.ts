@@ -35,4 +35,4 @@ const padApi: Plugin = {
 // VITE_BASE is the path the page is published under (tools/publish-dvr-viewer.sh sets /<name>/).
 export default defineConfig({ base: process.env.VITE_BASE ?? '/', server: { fs: { allow: ['..'] } }, build: { target: 'es2022', copyPublicDir: false, rollupOptions: { input: { main: resolve(__dirname, 'index.html'), race: resolve(__dirname, 'race.html'), live: resolve(__dirname, 'live.html'),
   // the audience pages of a race day (tools/publish-event.sh): event.html goes up as the day's index.html
-  event: resolve(__dirname, 'event.html'), watch: resolve(__dirname, 'watch.html'), heat: resolve(__dirname, 'heat.html') } } }, plugins: [marksApi, padApi] })   // public/data is the dev symlink to the data, not an asset
+  event: resolve(__dirname, 'event.html'), watch: resolve(__dirname, 'watch.html'), heat: resolve(__dirname, 'heat.html'), compare: resolve(__dirname, 'compare.html') } } }, plugins: [marksApi, padApi] })   // public/data is the dev symlink to the data, not an asset

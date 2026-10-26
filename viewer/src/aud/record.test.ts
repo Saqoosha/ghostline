@@ -25,3 +25,7 @@ test('fromNight reads race.json as it is', () => {
     pilots: [{ stream: 'F1', name: 'B', pos: [[0, 1, 2], null], video: 'F1.mp4' }] })
   expect(r.version).toBe('night'); expect(r.pilots[0]).toMatchObject({ stream: 'F1', slot: 'tr', name: 'B', video: 'F1.mp4' }); expect(r.dur).toBe(1)
 })
+test('fromLive smooths with the shared Gaussian mean', () => {
+  const r = fromLive(rec({ R2: rows(0, 3, s => [s, 1 + (Math.round(s * 30) % 2 ? 0.5 : -0.5), 0]) }))   // a zigzag of ±0.5 m frame to frame
+  for (const k of [30, 45, 60]) expect(Math.abs(r.pilots[0].pos[k]![1] - 1)).toBeLessThan(0.05)
+})

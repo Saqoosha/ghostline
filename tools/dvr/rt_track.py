@@ -422,10 +422,13 @@ def smooth(win):
     M = np.zeros((N, N)); Mv = M.reshape(n, 6, n, 6); k = np.arange(n); Mv[k, :, k, :] = Hs
     rhs = np.zeros((n, 6)); rhs[:] = np.einsum("nij,nj->ni", Hs[:, :, 3:], Pm)
     if n >= 3:
-        h1, h2 = t[1:-1] - t[:-2], t[2:] - t[1:-1]; hm = (h1 + h2) / 2; ok = (h1 > 0) & (h2 > 0) & (h1 <= 0.3) & (h2 <= 0.3)
+        h1, h2 = t[1:-1] - t[:-2], t[2:] - t[1:-1]; ok = (h1 > 0) & (h2 > 0) & (h1 <= 0.3) & (h2 <= 0.3)
+        # two answers at the same time (a 0 s step) are not tied either; the step is set to 1 before dividing, or its inf
+        # times ok's 0 is NaN and the solve fails (the tracker died on it: JDL R7 2026-10-24 replay, 13:40 heat)
+        h1, h2, dt = np.where(ok, h1, 1.0), np.where(ok, h2, 1.0), t[1:] - t[:-1]; dt = np.where(dt > 0, dt, 1.0); hm = (h1 + h2) / 2
         c = np.stack([1 / h1, -1 / h1 - 1 / h2, 1 / h2], 1) / hm[:, None] * ok[:, None]            # (n-2, 3): second difference over uneven steps
         Rrel = np.einsum("nji,njk->nik", Rm[:-1], Rm[1:])                                          # R_k^T R_{k+1}
-        w = Rot.from_matrix(Rrel).as_rotvec() / (t[1:] - t[:-1])[:, None]
+        w = Rot.from_matrix(Rrel).as_rotvec() / dt[:, None]
         e = (w[1:] - w[:-1]) / hm[:, None] / BA_ALPHA * ok[:, None]                                # angular acceleration in answer k's axes
         ne = np.linalg.norm(e, axis=1); sw = np.where(ne > 3.0, np.sqrt(3.0 / np.maximum(ne, 1e-12)), 1.0)   # Huber at 3 sigma
         m = n - 2; J = np.zeros((m, 6, n, 6)); r = np.zeros((m, 6)); j = np.arange(m); I3 = np.eye(3)
@@ -683,11 +686,16 @@ def finish(s):
     if sol:
         fi = np.array([r["i"] for r in sol]); dn = np.array([r["done"] if LIVE else r["i"] / fps for r in sol]); AP = np.array([r["pos"] for r in sol])
         wt = np.sqrt(np.minimum([r["inl"] for r in sol], 400) / 200) / np.array([FLOW_SIG if r["how"] == "flow" else 1 for r in sol]); L, Wf = TRAIL_L * fps, TRAIL_W * fps
+        # only the answers within 2 windows of j can count (one farther is a gap over 2 windows: no trail there), so each
+        # frame looks at a slice found by bisection instead of every answer (JDL R7 10/25, a 6.7 h run: 4 min a cell -> seconds)
+        o = np.argsort(fi, kind="stable"); fi, dn, AP, wt, sol = fi[o], dn[o], AP[o], wt[o], [sol[k] for k in o]
+        lo, hi = np.searchsorted(fi, np.arange(N) - 2 * Wf, "left"), np.searchsorted(fi, np.arange(N) + 2 * Wf, "right")
         for j in range(N):
-            got = dn <= (j + L) / fps + 1e-9; m = got & (np.abs(fi - j) <= Wf)
-            ga = np.nonzero(got & (fi <= j))[0]; gb = np.nonzero(got & (fi >= j))[0]   # only answers that have arrived by then
+            s0, s1 = lo[j], hi[j]; f = fi[s0:s1]
+            got = dn[s0:s1] <= (j + L) / fps + 1e-9; m = got & (np.abs(f - j) <= Wf)
+            ga = np.nonzero(got & (f <= j))[0]; gb = np.nonzero(got & (f >= j))[0]   # only answers that have arrived by then
             if m.sum() < 4 or not len(ga) or not len(gb): trail.append(None); continue
-            a, b = ga[-1], gb[0]
+            a, b = s0 + ga[-1], s0 + gb[0]; m = np.nonzero(m)[0] + s0
             if fi[b] - fi[a] > 2 * Wf: trail.append(None); continue
             p = np.polyfit(fi[m] - j, AP[m], 2, w=wt[m])[-1]
             R = Rot.from_quat(sol[a]["quat"]) if a == b else Slerp([fi[a], fi[b]], Rot.from_quat([sol[a]["quat"], sol[b]["quat"]]))([j])[0]

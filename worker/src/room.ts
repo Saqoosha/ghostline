@@ -7,7 +7,7 @@ import { DurableObject } from 'cloudflare:workers'
 import { applyToIndex, dropEnded, HEAT_ID, validEntry, type HeatIndex, type HMsg, type Msg } from './api'
 
 export interface RoomEnv { BUCKET: R2Bucket }
-const KEEP = 80_000                                      // 60 s of delay, the page's 0.7 s lag, one 10 s repeat of the heat start, and margin
+const KEEP = 150_000                                     // a 90 s run from its holeshot for a viewer joining at its end (the page counts laps over it), 60 s of delay, margin
 
 export class LiveRoom extends DurableObject<RoomEnv> {
   recent: Msg[] = []

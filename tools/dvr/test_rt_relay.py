@@ -1,7 +1,7 @@
 """tests for rt_relay.py (python -m unittest test_rt_relay -v, from tools/dvr)"""
 import datetime, gzip, io, json, os, tempfile, unittest
 from unittest import mock
-from rt_relay import Heats, Relay
+from rt_relay import HOLD, Heats, Relay
 
 T0 = 1792211516.0                                  # 2026-10-17 13:31:56 JST (the first FDF recording)
 JST = datetime.timezone(datetime.timedelta(hours=9))
@@ -41,10 +41,26 @@ class HeatsTest(unittest.TestCase):
         h = hs.row(T0 + 1, "R2")[0]
         self.assertEqual(h["id"], hms(T0 + 1) + "-h7"); self.assertEqual(h["cells"], {"R2": "A"})
 
-    def test_heat_number_change_alone_does_not_split(self):
-        hs = Heats(); first = hs.row(T0, "R2")[0]; hs.names(T0, {"cells": {"R2": "A"}, "heat": "7", "cls": "Expert"})
-        hs.row(T0 + 5, "R2"); out = hs.names(T0 + 6, {"cells": {"R2": "A"}, "heat": "8", "cls": "Expert"})
-        self.assertEqual([m["k"] for m in out], ["h"]); self.assertEqual(out[0]["id"], first["id"])
+    def test_new_names_that_hold_split_a_named_heat(self):         # JDL R7: the manager moves on as the pilots land
+        hs = Heats(); hs.names(T0, {"cells": {"R2": "A"}, "heat": "7", "cls": "Expert"}); first = hs.row(T0, "R2")[0]
+        hs.row(T0 + 5, "R2"); nxt = {"cells": {"R2": "B"}, "heat": "8", "cls": "Expert"}
+        self.assertEqual(hs.names(T0 + 6, nxt), [])                  # not yet: it has to hold
+        self.assertEqual(hs.cur["cells"], {"R2": "A"})
+        out = hs.names(T0 + 11, nxt)
+        self.assertEqual([m["k"] for m in out], ["e", "h"]); self.assertEqual(out[0]["id"], first["id"]); self.assertEqual(out[0]["t"], round((T0 + 11) * 1000))
+        self.assertEqual(out[1]["id"], hms(T0 + 11) + "-h8"); self.assertEqual(out[1]["cells"], {"R2": "B"})
+        self.assertEqual(hs.names(T0 + 20, nxt), [])
+
+    def test_a_heat_the_names_started_does_not_end_before_it(self):  # JDL R7 10/25: 132039-h26 ended 17 s before it began
+        hs = Heats(); hs.names(T0, {"cells": {"R2": "A"}, "heat": "25", "cls": "X"}); hs.row(T0, "R2")
+        nxt = {"cells": {"R2": "B"}, "heat": "26", "cls": "X"}; hs.names(T0 + 10, nxt); out = hs.names(T0 + 16, nxt)
+        h = out[1]; e = hs.tick(T0 + 47)
+        self.assertEqual(e, [{"k": "e", "t": h["t"], "id": h["id"]}])
+
+    def test_names_that_flicker_do_not_split(self):
+        hs = Heats(); hs.names(T0, {"cells": {"R2": "A"}, "heat": "5", "cls": "X"}); first = hs.row(T0, "R2")[0]
+        for k, h in enumerate(["8", "6", "5", "5", "5", "5", "5", "5"]): self.assertEqual(hs.names(T0 + 1 + 2 * k, {"cells": {"R2": "A"}, "heat": h, "cls": "X"}), [])
+        self.assertEqual(hs.cur["id"], first["id"]); self.assertEqual(hs.cur["heat"], "5")
 
     def test_stale_names_not_given_to_a_new_heat(self):       
         hs = Heats(); hs.names(T0, {"cells": {"R2": "A"}, "heat": "7", "cls": "X"}); hs.row(T0, "R2"); hs.tick(T0 + 40)
@@ -96,9 +112,9 @@ class RelayTest(unittest.TestCase):
 
     def test_revision_applied(self):
         self.row(T0, 10)
-        self.row(T0 + 0.3, 11, win=[[10, 1, 2, 3, 0, 0, 0, 1]])
-        self.r.flush(T0 + 0.45); self.assertFalse(any(m["k"] == "a" for _, b, _ in self.sent for m in json.loads(b)["msgs"]))
-        self.r.flush(T0 + 0.5)
+        self.row(T0 + HOLD * 0.6, 11, win=[[10, 1, 2, 3, 0, 0, 0, 1]])   # a revision while the answer is still held
+        self.r.flush(T0 + HOLD * 0.9); self.assertFalse(any(m["k"] == "a" for _, b, _ in self.sent for m in json.loads(b)["msgs"]))
+        self.r.flush(T0 + HOLD)
         a = [m for _, b, _ in self.sent for m in json.loads(b)["msgs"] if m["k"] == "a"]
         self.assertEqual(a[0]["p"], [1, 2, 3]); self.assertEqual(a[0]["t"], round((T0 - 0.04) * 1000)); self.assertEqual(a[0]["s"], "R2")
 
@@ -196,6 +212,19 @@ class RelayTest(unittest.TestCase):
         self.r.post = put_fails
         self.row(T0, 1); self.r.flush(T0 + 1); self.r.tick(T0 + 40); self.r.work(T0 + 40); self.r.flush(T0 + 41)
         st = self.r.status(T0 + 41); self.assertEqual(st["pending"], 1); self.assertIn("uplink down", st["err"])
+
+    def test_weak_jump_dropped_strong_kept(self):                 # the tracker's wrong poses: few inliers, far from the last
+        a = lambda i, now, pos, inl: self.r.on_row(dict(stream="R2", i=i, done=0, lat=0, fps=30, inl=inl, how="track", pos=pos, quat=[0, 0, 0, 1]), now)
+        a(1, T0, [0.0, 1.0, 0.0], 200); a(2, T0 + 0.03, [9.0, 1.0, 0.0], 40); a(3, T0 + 0.06, [0.5, 1.0, 0.0], 45); a(4, T0 + 0.1, [9.0, 1.0, 0.0], 150)
+        self.assertEqual(sorted(i for (_, i) in self.r.held), [1, 3, 4])
+        a(5, T0 + 0.8, [30.0, 1.0, 0.0], 40)                         # after 0.5 s a weak answer is believed again (a real re-find)
+        self.assertIn(("R2", 5), self.r.held)
+
+    def test_split_on_names_starts_a_record(self):
+        self.r.on_names({"cells": {"R2": "A"}, "heat": "7", "cls": None}, T0); self.row(T0, 1); first = self.r.rec["id"]
+        for t in (T0 + 2, T0 + 8): self.r.on_names({"cells": {"R2": "B"}, "heat": "8", "cls": None}, t)
+        self.assertNotEqual(self.r.rec["id"], first); self.assertEqual(self.r.rec["cells"], {"R2": "B"})
+        self.assertEqual([u["id"] for u in self.r.uploads], [first]); self.assertEqual(self.r.uploads[0]["cells"], {"R2": "A"})
 
     def test_names_with_kana_go_up_ascii(self):
         self.row(T0, 1); self.r.on_names({"cells": {"R2": "佐藤"}, "heat": "7", "cls": None}, T0 + 1)

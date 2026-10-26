@@ -12,8 +12,8 @@ export function drawPilots(host: HTMLElement, stage: Stage, rows: { stream: stri
   host.replaceChildren(...rows.map((r, i) => {
     const b = document.createElement('button'), follow: Mode = `p${r.stream}`
     b.style.setProperty('--c', `var(--${r.slot ?? SLOTS[i] ?? 'tl'})`); b.className = (stage.mode === follow ? 'on ' : '') + (r.state === 'nopic' && !r.name ? 'off' : '')
-    b.append(Object.assign(document.createElement('span'), { className: 'cell', textContent: r.stream }),
-      Object.assign(document.createElement('span'), { textContent: r.name ? `${flagOf(country(r.name, countries))} ${r.name}`.trim() : '—' }),
+    b.append(Object.assign(document.createElement('span'), { className: 'cell', textContent: r.name ? '●' : r.stream }),
+      Object.assign(document.createElement('span'), { textContent: r.name || '—' }),
       Object.assign(document.createElement('span'), { className: 'st ' + r.state, textContent: LABEL[r.state] }))
     b.onclick = () => stage.setMode(stage.mode === follow ? 'orbit' : follow)
     return b

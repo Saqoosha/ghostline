@@ -36,7 +36,7 @@ const TopView = (() => {
     if (!r || !r.ok) { trackKey = null; onError("コースの線を読めない: " + (r ? (await r.json().catch(() => ({}))).error || r.status : "サーバーに届かない")); return; }
     const t = await r.json(); if ((name || "") !== trackKey) return;
     $("track").setAttribute("d", smoothLoop(t.pts));
-    $("gate").setAttribute("d", t.gate ? `M${t.gate[0].join(",")}L${t.gate[1].join(",")}` : "");
+    $("gate").setAttribute("d", [t.gate, ...(t.gates || [])].filter(Boolean).map(g => `M${g[0].join(",")}L${g[1].join(",")}`).join(""));   // the start gate and the others
   }
   // a closed Catmull-Rom curve through the points, as cubic Béziers, so the line has no corners between them
   function smoothLoop(q) {
@@ -131,10 +131,19 @@ const TopView = (() => {
     for (const cell of CELLS) { const pts = live[cell] || []; while (pts.length && now - pts[0][2] > keep + view.delay) pts.shift(); drawTrail(cell, pts, now); }
   })();
 
+  // who flies each cell (/api/pilots: the venue's heat manager), every 5 s; the last answer stays when it does not answer
+  let who = {}, whoAt = 0;
+  function pollWho() {
+    if (Date.now() - whoAt < 5000) return; whoAt = Date.now();
+    fetch("/api/pilots").then(r => r.ok ? r.json() : null).then(j => { if (j && j.cells) who = j.cells; }).catch(() => {});
+  }
   // one state a second from /api/state: the names on the tags, the stream, the course for the map and scene given, the track line
   function update(s, map, scene, track) {
-    if (s.view) setView(s.view); listen(s); const stopped = s.phase === "stopped";
-    for (const c of CELLS) $("tag-" + c).textContent = stopped ? "" : (Object.entries(s.cells).find(([, x]) => x.cell === c) || [""])[0];
+    if (s.view) setView(s.view); listen(s); pollWho(); const stopped = s.phase === "stopped";
+    for (const c of CELLS) {
+      const n = (Object.entries(s.cells).find(([, x]) => x.cell === c) || [""])[0], w = n && Object.hasOwn(who, n) ? who[n] : "";
+      $("tag-" + c).textContent = stopped ? "" : w ? `${n}  ${w}` : n;   // textContent: names from the heat manager never go in as markup
+    }
     loadCourse(map, scene || "", track || ""); loadTrack(track);
   }
   function setView(v) { if (v.delay !== view.delay || v.smooth !== view.smooth) { view = { delay: +v.delay || 0, smooth: +v.smooth || 0 }; dirty = true; } }

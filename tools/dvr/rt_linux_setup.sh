@@ -150,6 +150,27 @@ WantedBy=multi-user.target
 UNIT
 sudo systemctl daemon-reload; sudo systemctl enable --now ghostline-ndiview.service
 
+step "the venue's lap timing decoder (rt_mylaps.py): MYLAPS passes for the 3D page's lap timeline, on :8766"
+cp "$(dirname "$0")/rt_mylaps.py" ~/rt/
+sudo tee /etc/systemd/system/ghostline-mylaps.service > /dev/null <<UNIT
+[Unit]
+Description=ghostline: the venue's MYLAPS decoder, read for the 3D page's lap timeline (rt_mylaps.py)
+After=network-online.target
+
+[Service]
+User=$USER
+WorkingDirectory=$HOME/rt
+# the decoder's address is the venue's (JDL R7 2026-10-24: 10.0.0.200): a drop-in sets it there
+Environment=MYLAPS=10.0.0.200
+ExecStart=/usr/bin/python3 -u rt_mylaps.py \$MYLAPS 8766
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload; sudo systemctl enable --now ghostline-mylaps.service
+
 step "done: a paced 4-pilot run to compare with WSL"
 echo 'cd ~/rt && GLUE=eng_linux/glue_mix.engine XFEAT=eng_linux/xfeat_fp32.engine RENDER=1 RCLIP=2 PACE=1 \'
 echo '  SCENE=~/scenes/FDF-2026-R6b-spirula-web-dvr2.ply ~/mastenv/bin/python rt_track.py map_fdf-r6b-d05.npz,../fdf-r6b-d05/dvr_pinhole.mp4,pw/o_d05,truth-d05.json ...'

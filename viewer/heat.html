@@ -11,13 +11,27 @@
       #seek { flex: 1; accent-color: var(--ink); }
       #clock { font: 400 11px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; min-width: 90px; text-align: right; white-space: nowrap; }
       .ver { font: 400 10px var(--mono); letter-spacing: .16em; color: var(--spirit); border: 1px solid currentColor; padding: 2px 6px; }
-      /* the night version: the pilots' DVR clips in a column on the right, each edged in its colour */
-      #dvr { position: fixed; right: 20px; top: 68px; bottom: calc(var(--foot, 34px) + var(--time, 46px) + 16px); z-index: 3; width: min(26vw, 360px); display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
-      #dvr figure { margin: 0; position: relative; border-left: 2px solid var(--c); background: #000; aspect-ratio: 4 / 3; overflow: hidden; }
-      #dvr video { width: 100%; height: 100%; object-fit: cover; display: block; }
-      #dvr figcaption { position: absolute; left: 8px; bottom: 6px; font: 400 10px var(--mono); letter-spacing: .1em; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, .8); white-space: pre; }
-      @media (max-width: 720px) { #dvr { left: 16px; right: 16px; width: auto; top: auto; bottom: calc(var(--foot, 34px) + var(--time, 46px) + 10px); flex-direction: row; height: 110px; } #dvr figure { flex: none; height: 100%; }
-        .bar.time { gap: 10px; padding: 0 12px; } #clock { min-width: 0; } #seek { min-width: 0; } #speed button { padding: 4px 3px; } .with-dvr .pilots { bottom: calc(var(--foot, 34px) + var(--time, 46px) + 130px); } }
+      /* split, never stacked over the scene: the scene top left, the DVR clips in a column on the right (the night version),
+         and along the bottom the laps band (aud/laptimeline.ts or aud/progress.ts, always four rows tall), the timeline and
+         the footer. The header stays over the scene */
+      :root { --band: 118px; --bottom: calc(var(--foot, 34px) + var(--time, 46px) + var(--band)); --side: min(36vw, calc((100vh - var(--head, 52px) - var(--foot, 34px) - var(--time, 46px) - 0px) / 4 * 4 / 3 + 6px)); }   /* as wide as four 4:3 clips stacked from the header to the timeline */
+      body.stage #c { inset: var(--head, 52px) auto auto 0; width: 100%; height: calc(100% - var(--head, 52px) - var(--bottom)); }
+      body.stage.with-dvr #c { width: calc(100% - var(--side)); }
+      #laps { position: fixed; left: 0; right: 0; bottom: calc(var(--foot, 34px) + var(--time, 46px)); height: var(--band); z-index: 3; padding: 4px 20px; background: var(--paper); border-top: 1px solid var(--faint); }
+      #lapc { display: block; width: 100%; cursor: pointer; }
+      body .note { top: calc(var(--head, 52px) + (100vh - var(--head, 52px) - var(--bottom)) / 2); transform: translate(-50%, -50%); }   /* the scene's middle */
+      body.with-dvr .note { left: calc((100vw - var(--side)) / 2); }
+      .with-dvr #laps { right: var(--side); }
+      #dvr { position: fixed; right: 0; top: var(--head, 52px); bottom: calc(var(--foot, 34px) + var(--time, 46px)); z-index: 3; width: var(--side); display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden; background: var(--paper); }
+      #dvr[hidden] { display: none; }
+      #dvr figure { margin: 0; flex: none; box-sizing: content-box; width: calc(100% - 6px); aspect-ratio: 4 / 3; position: relative; border-left: 6px solid var(--c); background: #000; overflow: hidden; }   /* the picture 4:3 (its content box: the colour bar beside it) */
+      #dvr video { width: 100%; height: calc(100% * 360 / 348); object-fit: fill; display: block; }   /* the cell is the goggles' 4:3 picture stretched to 16:9, over 12 black lines at its foot: squeezed back to 4:3, the black pushed out below */
+      #dvr figcaption { position: absolute; left: 8px; bottom: 6px; font: 400 11px var(--sans); letter-spacing: .06em; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, .8); white-space: pre; }
+      @media (max-width: 720px) {
+        :root { --side: 0px; }
+        body.stage.with-dvr #c { width: 100%; height: calc(100% - var(--head, 52px) - var(--bottom) - 110px); }
+        #dvr { left: 0; top: auto; bottom: var(--bottom); width: auto; } .with-dvr #laps { right: 0; } #dvr { height: 110px; flex-direction: row; padding: 6px 16px; border-left: 0; border-top: 1px solid var(--faint); } #dvr figure { flex: none; width: auto; height: 100%; aspect-ratio: 4 / 3; }
+        #laps { padding: 2px 16px; } .bar.time { gap: 10px; padding: 0 12px; } #clock { min-width: 0; } #seek { min-width: 0; } #speed button { padding: 4px 3px; } }
     </style>
   </head>
   <body class="stage">
@@ -28,21 +42,23 @@
       <span class="what" id="heat"></span>
       <span class="ver" id="ver"></span>
       <span class="grow"></span>
+      <a class="btn" id="cmp" href="compare.html" title="このヒートの選手を比べるページで開く" data-en="Compare" data-en-title="Open this heat's pilots on the compare page">比べる</a>
       <span class="seg" id="cams"></span>
     </header>
-    <nav class="pilots" id="pilots" hidden></nav>
     <aside id="dvr" hidden></aside>
-    <div class="note" id="note">読み込み中…</div>
+    <div id="laps"><canvas id="lapc"></canvas></div>
+    <div class="note" id="note" data-en="Loading…">読み込み中…</div>
     <div class="bar time">
-      <button class="btn" id="play">PAUSE</button>
+      <button class="btn" id="play">PLAY</button>
       <input id="seek" type="range" min="0" max="1" step="0.01" value="0" />
       <span id="clock"></span>
       <span class="seg" id="speed"></span>
+      <button class="btn" id="link" title="いまの時刻から始まるリンクをコピー" data-en-title="Copy a link that starts at this moment">LINK</button>
     </div>
     <footer class="bar foot">
-      <span>位置は<wbr>各機の DVR 映像から<wbr>推定したもので、<wbr>公式の記録では<wbr>ありません。</span>
+      <span data-en="Positions are estimated from each drone's DVR video and are not official results.">位置は<wbr>各機の DVR 映像から<wbr>推定したもので、<wbr>公式の記録では<wbr>ありません。</span>
       <span class="grow"></span>
-      <a href="./">ヒートの一覧 →</a>
+      <a href="./" data-en="All heats →">ヒートの一覧 →</a>
     </footer>
     <script type="module" src="/src/heat.ts"></script>
   </body>
