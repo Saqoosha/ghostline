@@ -14,7 +14,13 @@
 4. `python night_put.py <大会> <out> [heat id ...]`：rt4090 から直接上げる。中継が DVR を上げるのと同じ Worker の口
    （`PUT /<大会>/api/heats/<id>/<ファイル>`、`RELAY_KEY`）に、DVR を先に、`race.json` を最後に。R2 の鍵も Mac も要らない
    （10/25 は会場の回線が落ちて、1.6 GB を Mac に引けなかった）
-5. ライブのページを閉じる：一覧に `closed: true`（ライブへのリンクが消え、古い順に並ぶ）。トップページの行も `heats` へのリンクにする
+5. 公式の周回を入れる：rt4090 で `DAY=<日付> RELAY=<作業用> python official_laps.py <セッション id> <出力>` をセッションごとに回し、
+   Speedhive の選手を名前と時刻でヒートの行に振り分ける（公式の時刻は、デコーダーのログのその選手のトランスポンダーの通過との差の中央値で、
+   この箱の時計に直す）。出力をヒートごとに 1 つにまとめ（`sessions` にヒートごとのセッション）、Mac で `python put_official.py <まとめ> <大会>` が
+   公開の `race.json` と `live.json` に `official` として入れる。セッションの一覧は `…/eventresults/events/<大会 id>?sessions=true`。
+   Speedhive のセッションの名前と中身はずれることがある（10/25 の日付の「Qualify2」の中身は 10/24 の予選で、どのヒートにも合わなかった）。
+   10/25 は 45 ヒートの 155 人に入った
+6. ライブのページを閉じる：一覧に `closed: true`（ライブへのリンクが消え、古い順に並ぶ）。トップページの行も `heats` へのリンクにする
 
 ## 割れたヒートをつなぐ
 
