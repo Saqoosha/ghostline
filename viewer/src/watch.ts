@@ -153,7 +153,7 @@ function frame() {
     p.show(d.pos, tr.slice(Math.max(0, d.frame - TRAIL * FPS)), st, { name: n, flag: '', note: st === 'lost' ? 'LOST' : '' })
   }
   // the run's progress under the scene: the pilots who have flown this heat, in the heat's order
-  // with the lap timing decoder's passes (tools/dvr/rt_passfwd.py) the laps are its own wherever a transponder is matched
+  // with the lap timing decoder's passes (tools/dvr/rt_relay.py, PASSINGS) the laps are its own wherever a transponder is matched
   const pr = order.filter(s => progs.has(s)); progShown = pr
   if (shown) decode(progs, tl.passes.filter(x => x.t >= t0 - 5000).map(x => ({ t: (x.t - t0) / 1000, tx: x.tx, hits: x.hits })), ts - lag)
   if (line) drawProgress($<HTMLCanvasElement>('lapc'), line!, pr.map(s => ({ cell: s, name: nameOf(s), color: css('--' + (SLOTS[order.indexOf(s)] ?? 'tl')) || '#5b4bff', prog: progs.get(s)! })), ts - lag, shown?.cls ?? null)

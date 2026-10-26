@@ -67,7 +67,7 @@ const set = (id, html) => { const el = $(id); if (el.dataset.html !== html) { el
 function render(s) {
   if (!s) return; last = s;
   const src = Object.entries(s.sources || {});
-  set("bar", (s.on ? "" : "<b>録画は止まっている（REC=0 か NDI が使えない）</b>")
+  set("bar", (s.on ? "" : "<b>録画は止まっている（REC=0 か NDI が使えない）</b>") + (s.err ? `<b>${esc(s.err)}</b>` : "")
     + src.map(([n, w]) => `<span class="src${w.rec ? " rec" : ""}"><span class="dots">${[0, 1, 2, 3].map(k => `<i class="${w.cells && w.cells[k] ? "on" : ""}"></i>`).join("")}</span><b>${esc(n)}</b>${w.rec ? " 録画中" : ""}</span>`).join("")
     + (s.free != null ? `<span>空き <b>${gb(s.free)}</b></span>` : ""));
   set("rows", s.recs.map(r => `<tr class="${r.file === playing ? "sel" : ""}">

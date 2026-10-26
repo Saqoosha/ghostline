@@ -29,7 +29,8 @@ $<HTMLAnchorElement>('home').href = BASE + (QS.has('e') ? `?e=${EVENT}` : '')
 // the scan first: its progress over the scene, and the replay starts once both it and the heat's record are in
 const loading = (f: number) => note(`${L('3D を​読み込み中', 'Loading 3D')} ${Number.isFinite(f) ? Math.min(99, Math.floor(f * 100)) + '%' : '…'}`)
 loading(0)
-stage.loadScene(loading).then(ix => { if (ix.title) $('title').textContent = words(ix.title); sceneReady = true; note(rp ? '' : L('読み込み中…', 'Loading…')); begin() }).catch(e => { console.error(e); note(L('スキャンを​読めなかった', 'Could not load the scan')) })
+// the title: the day without its sessions ("10/25 予選 3・決勝"), the heat's own name follows it
+stage.loadScene(loading).then(ix => { if (ix.title) $('title').textContent = words(ix.title.replace(/^(.* · \d{1,2}\/\d{1,2})\s.*$/, '$1')); sceneReady = true; note(rp ? '' : L('読み込み中…', 'Loading…')); begin() }).catch(e => { console.error(e); note(L('スキャンを​読めなかった', 'Could not load the scan')) })
 // ?t=<s>: the replay starts there (the LINK button below copies one)
 const T0 = Number(QS.get('t')) || 0
 // without ?t: 2 s before the first lift-off, GO as on the venue page's timeline (a pilot's last frame on the launch pads before its

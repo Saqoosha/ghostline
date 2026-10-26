@@ -7,7 +7,7 @@ export type AMsg = { k: 'a'; s: string; t: number; p: number[]; q: number[]; n: 
 export type XMsg = { k: 'x'; s: string; t: number }
 export type HMsg = { k: 'h'; t: number; at?: number; id: string; heat: string | null; cls: string | null; cells: Record<string, string>; order: string[] }
 export type EMsg = { k: 'e'; t: number; id: string }
-export type PMsg = { k: 'p'; t: number; n: number; tx: number; hits?: number }   // the lap timing decoder's pass (tools/dvr/rt_passfwd.py)
+export type PMsg = { k: 'p'; t: number; n: number; tx: number; hits?: number }   // the lap timing decoder's pass (tools/dvr/rt_relay.py, PASSINGS)
 export type Msg = AMsg | XMsg | HMsg | EMsg | PMsg
 
 export const DELAY = { min: 0, max: 60, step: 0.5, presets: [['低遅延', 7], ['通常', 20]] as [string, number][] }
