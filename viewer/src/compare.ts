@@ -133,7 +133,7 @@ const fmt = (s: number) => `${s < 0 ? '-' : ''}${Math.floor(Math.abs(s) / 60)}:$
 function setPlaying(v: boolean) { playing = v; resorted = false; $('play').textContent = v ? 'PAUSE' : 'PLAY' }
 $('play').onclick = () => { if (t >= dur) t = 0; setPlaying(!playing) }
 seek.oninput = () => { t = Number(seek.value); resorted = false; syncClips(true) }
-$('speed').replaceChildren(...[0.5, 1, 2].map(v => Object.assign(document.createElement('button'), { textContent: `${v}×`, className: v === speed ? 'on' : '',
+$('speed').replaceChildren(...[0.1, 0.5, 1].map(v => Object.assign(document.createElement('button'), { textContent: `${v}×`, className: v === speed ? 'on' : '',
   onclick: (e: Event) => { speed = v; for (const b of Array.from($('speed').children)) b.classList.toggle('on', b === e.target) } })))
 window.addEventListener('keydown', e => { if (e.key === ' ') { $('play').click(); e.preventDefault() } if (e.key === '1') stage.setMode('orbit'); if (e.key === '2') stage.setMode('top') })
 function drawCams() {
