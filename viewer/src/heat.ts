@@ -11,6 +11,7 @@ import { fromLive, fromNight, heldFrom, type Replay } from './aud/record'
 import { drawLaps, lapRows, timeAt, type LapRow } from './aud/laptimeline'
 import { advance, drawProgress, makeCourse, newProg, progressOf, RACE_LAPS, type Course } from './aud/progress'
 import { createStage, hqButton, SLOTS, type Mode, type PilotState } from './aud/stage'
+import { createBroadcast, type Broadcast } from './aud/broadcast'
 
 applyStatic()
 document.querySelector('header')!.append(langToggle())
@@ -80,7 +81,23 @@ async function load() {
   // the official laps (race.json / live.json "official"), under the scene: each cell in its place's colour (look.css --tl ...)
   const css = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim()
   laps = lapRows(rp.official, rp.start, cell => css('--' + (SLOTS[rp!.order.indexOf(cell)] ?? 'tl')) || '#5b4bff', rp.order)
+  // the broadcast's sound, when the heat has it (aud/broadcast.ts): on or off as the viewer last left it (this browser only;
+  // off at first). Left on, but the browser wants a click before any sound: shown off, the setting kept for the next visit
+  const b: Broadcast | null = await get('broadcast.json').catch(() => null)
+  if (!b?.audio || !b.t0) return
+  const show = (on: boolean) => {
+    if (on && !bc) bc = createBroadcast(dir + b.audio, b, () => show(false)); else if (!on && bc) { bc.destroy(); bc = null }
+    $('bc').classList.toggle('on', on); $('bc').textContent = on ? 'AUDIO ON' : 'AUDIO OFF'
+  }
+  $('bc').hidden = false
+  $('bc').onclick = () => { show(!bc); try { localStorage.setItem(BC_KEY, bc ? '1' : '0') } catch {} }
+  let saved = false; try { saved = localStorage.getItem(BC_KEY) === '1' } catch {}
+  // Firefox says beforehand (getAutoplayPolicy); elsewhere the first play() is refused (NotAllowedError, createBroadcast's onBlocked)
+  const policy: string | undefined = (navigator as any).getAutoplayPolicy?.('mediaelement')
+  if (saved && policy !== 'allowed-muted' && policy !== 'disallowed') show(true)
 }
+let bc: ReturnType<typeof createBroadcast> | null = null
+const BC_KEY = 'ghostline.broadcast'
 const lapC = $<HTMLCanvasElement>('lapc')
 lapC.onclick = e => {                                       // the official laps: a click seeks there; the progress: a row follows that pilot
   if (laps.length) { const v = timeAt(lapC, laps, e.offsetX); if (v !== null && rp) { t = Math.max(0, Math.min(rp.dur, v)); syncVideos(true); resorted = false } return }
@@ -107,7 +124,7 @@ const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).p
 function setPlaying(v: boolean) { playing = v; resorted = false; $('play').textContent = v ? 'PAUSE' : 'PLAY'; for (const el of videos()) v ? el.play().catch(() => {}) : el.pause() }
 $('play').onclick = () => { if (rp && t >= rp.dur) t = 0; setPlaying(!playing) }
 seek.oninput = () => { t = Number(seek.value); syncVideos(true); resorted = false }
-$('speed').replaceChildren(...[0.5, 1, 2].map(v => Object.assign(document.createElement('button'), { textContent: `${v}×`, className: v === speed ? 'on' : '',
+$('speed').replaceChildren(...[0.1, 0.5, 1].map(v => Object.assign(document.createElement('button'), { textContent: `${v}×`, className: v === speed ? 'on' : '',
   onclick: (e: Event) => { speed = v; for (const b of Array.from($('speed').children)) b.classList.toggle('on', b === e.target); for (const el of videos()) el.playbackRate = v } })))
 window.addEventListener('keydown', e => {
   if (e.key === ' ') { $('play').click(); e.preventDefault() }
@@ -163,6 +180,7 @@ function frame(now: number) {
     progShown = rows.map(x => x.cell); drawProgress(lapC, line, rows, t, rp.cls)
   }
   if (playing) syncVideos()
+  bc?.follow(rp.start + t * 1000, playing, speed)
   const k = Math.min(Math.floor(t * rp.fps), Math.max(0, (rp.pilots[0]?.pos.length ?? 1) - 1)), u = t * rp.fps - k   // u: how far into frame k
   // the dot between frame k and the next by the time, not held at k: held, it moved in 30 Hz steps on a 60-120 Hz screen
   const between = (a: number[], b: number[] | null) => b ? a.map((v, i) => v + (b[i] - v) * u) : a
@@ -178,4 +196,4 @@ function frame(now: number) {
   }
 }
 requestAnimationFrame(frame)
-Object.assign((window as any).ghostline, { heat: { get rp() { return rp }, get t() { return t }, set t(v: number) { t = v }, setPlaying } })
+Object.assign((window as any).ghostline, { heat: { get rp() { return rp }, get t() { return t }, set t(v: number) { t = v }, setPlaying, get bc() { return bc } } })

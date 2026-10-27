@@ -9,6 +9,8 @@
       /* the timeline: one hairline bar at the bottom */
       .bar.time { bottom: var(--foot, 34px); height: 46px; border-top: 1px solid var(--faint); }
       #seek { flex: 1; accent-color: var(--ink); }
+      #bc { min-width: 88px; text-align: left; }   /* ON and OFF the same width: the bar does not shift */
+      #bc.on { color: var(--ink); border-bottom-color: var(--ink); }   /* the broadcast sound on: as a chosen button */
       #clock { font: 400 11px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; min-width: 90px; text-align: right; white-space: nowrap; }
       .ver { font: 400 10px var(--mono); letter-spacing: .16em; color: var(--spirit); border: 1px solid currentColor; padding: 2px 6px; }
       /* split, never stacked over the scene: the scene top left, the DVR clips in a column on the right (the night version),
@@ -53,6 +55,7 @@
       <input id="seek" type="range" min="0" max="1" step="0.01" value="0" />
       <span id="clock"></span>
       <span class="seg" id="speed"></span>
+      <button class="btn" id="bc" hidden title="大会の配信の音を、この見返しに合わせて流す" data-en-title="Play the event broadcast's sound in step with this replay">AUDIO OFF</button>
       <button class="btn" id="link" title="いまの時刻から始まるリンクをコピー" data-en-title="Copy a link that starts at this moment">LINK</button>
     </div>
     <footer class="bar foot">
