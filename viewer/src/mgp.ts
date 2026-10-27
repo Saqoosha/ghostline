@@ -273,7 +273,8 @@ function pick(e: RoundEntry, push = true) {
   closeRounds()
   if (R?.entry === e) return
   if (push) { const q = new URLSearchParams(location.search); q.set('round', String(e.round)); history.pushState(null, '', '?' + q.toString()) }
-  loadRound(e).catch((err: Error) => { loadingRound = false; say(`could not show round ${e.round}: ${err.message}`) })
+  const p = loadRound(e), token = loadToken   // loadRound took its token synchronously
+  p.catch((err: Error) => { if (token !== loadToken) return; loadingRound = false; say(`could not show round ${e.round}: ${err.message}`) })
 }
 const rlist = $('rlist'), rfilter = $<HTMLInputElement>('rfilter'), roundsBox = $('rounds')
 function buildRoundList() {

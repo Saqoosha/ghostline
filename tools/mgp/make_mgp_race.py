@@ -31,7 +31,7 @@ TRACK_TXT = f"{ROOT}/build/mgp/champs2026.txt"      # decrypted VelociDrone trac
 COLORS = ["#ff3b30", "#ff9500", "#ffcc00", "#34c759", "#00c7be", "#0a84ff", "#af52de", "#ff2d92"]
 HOLE_LEAD = 2.0      # assumed horn -> first start-gate pass (FDF holeshots were 1.6-2.4 s), used only when no start is given
 RESTART_GAP = 120.0  # no qualifier lap is this long: a gap like it between passes means two heats in one recording
-PRE = 4.0           # clip pre-roll before the horn (page opens ~2 s + audio lead before the start)
+PRE = 4.0           # clip pre-roll before the horn (the page opens 5 s before the start: mgp.ts PRE_START)
 POST = 6.0
 LAYOUT = os.environ.get("LAYOUT", "8up")           # 4up: the Mains' 2x2 recordings, as extract.py LAYOUT=4up
 GRID, CELL_W, CELL_H, FEED_X, FEED_W = (2, 960, 540, 120, 720) if LAYOUT == "4up" else (3, 640, 360, 80, 480)
