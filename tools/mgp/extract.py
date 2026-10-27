@@ -52,7 +52,7 @@ for f in frames():
     for slot in range(NS):
         s = S[slot]; g = cell(f, slot).mean(2).astype(np.float32)
         s["bright"].append(g.mean())
-        # frozen = crashed / no signal: almost no change against the previous sample. Compare 8x8
+        # frozen = crashed / no signal: almost no change against the sample 1/3 s earlier. Compare 8x8
         # block means so a crashed quad's flickering close-up (codec noise) does not count as motion
         gb = g[BAR:BAR + 312].reshape(39, 8, 60, 8).mean((1, 3))
         # against the frame 1/3 s earlier, not the previous one: the threshold was set at 3 fps, and at 30-60 fps

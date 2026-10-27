@@ -34,13 +34,13 @@ env/bin/python ocr_scan.py raw/<mp4> ocr/<name>.json 10      # 帯と時計の O
 uv run --with numpy --with scipy python tools/mgp/poses_from_loc.py <top_frame.json> <fit.json> <poses_dir> <loc.json>=s0:0 ... --smooth
 uv run --with numpy python tools/mgp/name_slots.py 44 <poses_dir> build/mgp/poses/q44 60        # ラップの並びでマス→pilot
 uv run --with numpy python tools/mgp/make_mgp_race.py build --round 44 --poses build/mgp/poses/q44 --out build/mgp/q44 \
-    --fps 60 --margin 1.5 --min-gap 3 --ocr-dir /nonexistent --gates build/mgp/gates/gates.json --crop-top 40 [--clips]
+    --fps 60 --margin 2.5 --min-gap 10 --ocr-dir /nonexistent --gates build/mgp/gates/gates_1404.json --crop-top 40 [--clips]
 ```
 
 - `extract.py`：2 回読み（1 回目で統計と live 判定、2 回目で書き出し）。メモリは 1 本 1.7 GB。**前の版は全フレームを載せる作りで、6 本並べて
   Studio（64 GB）を落とした。** ファイル名は `(i + 0.5) / fps` の時刻（ffmpeg の fps フィルタは区間の真ん中を取る。3 fps なら 167 ms）。
   OSD は時間方向の分散が小さい画素、プロペラは下の両隅の彩度の高い非緑、上の帯 42 px、魚眼の隅をマスクにする。
-  live 判定：明るさ > 30、8×8 のブロック平均の前フレームとの差 > 6（墜落して止まった絵の圧縮ノイズを動きと数えない）、隣の画素との差 < 12（砂嵐）。
+  live 判定：明るさ > 30、8×8 のブロック平均の 1/3 秒前との差 > 6（墜落して止まった絵の圧縮ノイズを動きと数えない）、隣の画素との差 < 12（砂嵐）。
 - SfM：pilot のフォルダごとに OPENCV_FISHEYE を 1 台（初期値は上側のレンズ寄り `195,197,240,180,0.155,-0.09,0.026,-0.003`）。
   **15 レース 2.4 万枚をまとめて組むと壊れる**（global はかけらだらけ、incremental は 1 つになるが同じ印刷のゲートの取り違えで中身が散る）。
   効くのは、きれいな 1 レース（レース 1、1,199 枚、3 fps、全組み合わせ照合で 1 モデル）に、`register.py`（既存フレーム固定、
@@ -54,7 +54,7 @@ uv run --with numpy python tools/mgp/make_mgp_race.py build --round 44 --poses b
 - 位置合わせ（`localize.py`）：OpenCV の RootSIFT（COLMAP の記述子と直接合う）、地図のキャッシュ `loc_cache.npz`、等速予測で近い地図画像 6 枚、
   失敗時は全点の記述子で再探索。同じレースなら 15 fps の 98〜99% が乗り、前後 7 フレームのぶれ 6 cm（p50）。
   **別の時刻の映像は乗りにくい**：14:00 の Q44 を 10:34 の地図に合わせると 52〜62%、一致点 35〜40（同レースは約 200）。レンズのせいではない
-  （純正レンズは全マスで最下位。`--lens auto` が純正・上側・中央値から選ぶ）。日の向きと影の違い。時間帯の違うレースを地図に足して埋める。
+  （純正レンズは全マスで最下位。`--lens auto` が純正・上側から選ぶ）。日の向きと影の違い。時間帯の違うレースを地図に足して埋める。
 - `poses_from_loc.py --smooth`：60 fps の格子にジャークのペナルティ付きで当てはめ、Huber で外れを落とす（2 m 超は捨てる）。`LAM` 2e-4 が
   観測からのずれ p50 9 cm、加速度の最大 130 m/s²。地図の取り違えは先に捨てる：80 m/s を超える（4 m 超の）動きを「ありえない跳び」とし、
   1 枚だけの外れ（抜けば前後が普通の速さでつながるもの）を先に、次に跳びで切り離された 15 コマまでの短い塊を短い順に捨てる。
@@ -66,7 +66,7 @@ uv run --with numpy python tools/mgp/make_mgp_race.py build --round 44 --poses b
   スキャンの測定値）。クリップを作り直さないときも `--crop-top 40` が要る（無いと `video_size` が 360 に戻る）。スタートの合図は
   「いちばん早いホールショットの 2 秒前」の仮置き（帯の時計は前のレースの帯が残る時間があり使えない）。
 - 3DGS：spirula `train in-the-wild`、`--disable-viewer 1`（7007 番の取り合いで落ちる）、マスクは `masks/` を自動で使う。座標は SfM のまま
-  なので `to_metric.py`（地面の面 ＋ 2D 相似）→ `ply_to_web.py`（x 軸 −90°、y 上・z = −VelociDrone y）→
+  なので `to_metric.py`（地面の面 ＋ 2D 相似）→ `ply_to_web.py`（x 軸 −90°、y 上）→
   `npx -y @playcanvas/splat-transform@3.4.2 -w in.ply out.sog`。1,199 枚・30k 反復・200 万 splats で 12 分（GPU 独占時）。
 
 ## 夕方と夜の決勝（B・A・E Main の Final）

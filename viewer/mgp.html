@@ -96,7 +96,6 @@
       /* The DVR column takes the whole right edge, flush with the window, its tiles edge to edge (2 px apart) filling the
          height; the 3D canvas is everything left of it, full height (the page sizes it; nothing renders under the
          column). The round header, the standings and the control bar float over the canvas.
-         The round header and the standings float over the canvas's top-left corner.
          The DVR column: one column of equal tiles, sized by the page so the column fills its height exactly, at most a quarter of the window wide (--rows is
          the tile count, --ah the clips' height over width); the followed pilot's tile is the same size, outlined, and
          moves to the top. The CSS formula here is only the fallback */
@@ -107,7 +106,6 @@
       .tile.sel { outline: 2px solid var(--hot); outline-offset: -2px; }   /* the followed pilot's */
       .tile video { display: block; width: 100%; height: auto; aspect-ratio: var(--ar, 4 / 3); object-fit: cover; }
       .tile .kmh { position: absolute; right: 5px; bottom: 4px; font: 700 11px var(--mono); color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.9); white-space: pre; }
-      /* the clips carry the broadcast's own bar across the top, so the page's chips sit along the bottom */
       .tile .nm { position: absolute; left: 0; bottom: 0; display: flex; align-items: center; gap: 4px; height: 17px; padding: 0 6px 0 4px; font: 800 10px var(--cond); text-transform: uppercase; color: #fff; background: linear-gradient(90deg, var(--red-hi), var(--red)); border-left: 3px solid; border-top-right-radius: 4px; max-width: 60%; white-space: nowrap; overflow: hidden; }
       .tile .lt { position: absolute; left: 4px; bottom: 21px; font: 700 10px var(--cond); letter-spacing: .04em; color: #fff; background: rgba(5, 7, 12, .8); padding: 2px 5px; border-radius: 4px; white-space: nowrap; }
       .tile .lt:empty { display: none; }

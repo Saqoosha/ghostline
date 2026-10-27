@@ -1,15 +1,12 @@
-# MGP Champs 2026：並行している作業（2026-10-19 時点）
+# MGP Champs 2026：並行している作業
 
 同時に走っている作業と、次の一手の控え。終わったものは消す。仕組みと罠の正本は [mgp-champs-2026.ja.md](mgp-champs-2026.ja.md)。
 
-## 0. いまの状態（10/20）
+## 0. いまの状態（10/28）
 
-- 本番 https://ghostline.saqoo.sh/mgp-champs-2026/ は確認用ページ（`-check`）と同じ中身：予選 125 Round（作り直したもの）、
-  D・C・B・A・E の決勝、A Main の Race 1〜13。143 Round。差し替える前の本番の Round は 117
+- 本番 https://ghostline.saqoo.sh/mgp-champs-2026/ と確認用ページ（`-check`）は同じ中身の 208 Round：予選 141（夕方〜夜の
+  105〜120 は夜の流れ）、決勝 901〜905、Main の勝ち抜き A・E・D・C・B。残りは正本の「残タスク」
 - 夜の決勝と A Main は、夜の地図の折りたたみを描いて照合して直した線。夜のスキャンは箱の中が t5、外が t4 の合成
-- Main の勝ち抜きのレース：A（Race 1〜13）、E（2〜13）、D（3〜13）、C（1〜13）、B（1）を本番に出した（180 Round）。B の 2〜13 は rt4090 で処理中。
-- 残り：Round 157 RECONFPV・Round 2 RECONFPV・Round 83 WILLFPV は
-  作り直しで悪くなったまま
 - Studio の `~/mgp` は rt4090 の `/mnt/data/mgp_studio/` に移した（正本の「機械」）
 
 ## 1. 予選の全 Round の処理と公開
@@ -55,14 +52,6 @@
 
 - 公式フライスルー（youtu.be/XvGI1JULiOQ）は地図に乗らなかった（登録・単独 SfM・区間 SfM・アンカーからの広げ、どれも崩れる）。
   アンカー（手で打った対応点、http://studio:8765/）は、上の原因の確かめ（重ね描き）に使った
-
-- 公式フライスルー（youtu.be/XvGI1JULiOQ）。単独では地図に乗らない（夕方・色加工・同じ印刷のゲート）
-- 錨のページ http://studio:8765/（`tools/mgp/anchor_server.py`＋`anchor.html`、保存 `~/mgp/fly15/anchor/anchors.json`）。
-  使える錨：8 px 以内 6 組以上・隅 3 つ以上・ぶれ 0.5 m 以内。カメラは錨から較正（`camera.json`、焦点距離 約 460）
-- 登録：`tools/mgp/anchor_register.py` を Studio で実行中（`~/mgp/fly15/areg.log`、出力 `~/mgp/fly15/areg/reg`）
-- 次：登録できたフレームのつながり（速さ）を確かめる → 地図＋フライスルーで Spirula（Studio、`~/tools/spirula/spirula`）で 3DGS
-  → `to_metric.py` → `ply_to_web.py` → `.sog` を差し替え
-- 錨の数値と場所の正しさは別物：同じ印刷のゲートなら数値は良くても場所が違う（50 s の 1 回目）。場所は人の目で決める
 
 ## 3. 本戦のページ（ライブの音つき）
 

@@ -1,4 +1,4 @@
-"""Build one race-page data folder (race.json + per-pilot DVR clips + audio) for a 2026 MultiGP Championship qualifier round.
+"""Build one race-page data folder (race.json + per-pilot DVR clips + audio) for a 2026 MultiGP Championship round.
 Same schema as tools/dvr/make_race.py's race.json, plus pilot.country / official_laps / position / video_size / slot.
 
   make_mgp_race.py build --round 1 --poses build/mgp/poses/q01 --out build/mgp/q01 [--slots TBELL=0,FORMULA=6] [--clips]
@@ -112,12 +112,23 @@ def crossings(pos, fps, gate, margin, min_gap, last=None):
     return out
 
 
+def place_order(names, off, cross_v):
+    """Pilots by place: official laps, then the finish in recording time: the path's pass for the last official lap, else
+    its holeshot plus the official total. A pilot with no pass at all (no pose file) takes the others' median holeshot:
+    the holeshots of a round are within about a second of each other."""
+    firsts = [c[0] for c in cross_v.values() if c]; mid = float(np.median(firsts)) if firsts else 0.0
+    def finish_at(n):
+        c, k = cross_v.get(n, []), len(off[n])
+        return c[k] if len(c) > k else (c[0] if c else mid) + sum(off[n])
+    return sorted(names, key=lambda n: (-len(off[n]), finish_at(n)))
+
+
 def fmt_time(t):
     return f"{int(t // 60)}:{t % 60:06.3f}" if t >= 60 else f"{t:.3f}"
 
 
 def official_for(rnd):
-    """the qualifier rounds (livefpv_laps.json), then the Mains' finals (livefpv_finals.json: rounds 901-905, with a label)"""
+    """the qualifier rounds (livefpv_laps.json), then the Mains' finals (livefpv_finals.json: rounds 901+, with a label)"""
     races = json.load(open(f"{ROOT}/data/mgp/livefpv_laps.json")) + json.load(open(f"{ROOT}/data/mgp/livefpv_finals.json"))
     R = next(r for r in races if r["round"] == rnd)
     return R, {p["pilot"]: [t for n, t in p["laps"] if n > 0] for p in R["pilots"]}
@@ -210,7 +221,7 @@ def build(a):
     rects = {int(k): v for k, v in json.loads(subprocess.check_output(
         ["ssh", MGP_HOST, f"~/mastenv/bin/python {MGP_DIR}/feed_rects.py {MGP_DIR}/raw/{vfile}"])).items()} if LAYOUT == "4up" else {}
 
-    # holeshots in video time, from the poses alone (3 s grid: crossings from a long pre-roll resample)
+    # holeshots in video time, from the poses alone
     t_lo = min(p["t"][0] for p in P.values()); t_hi = max(p["t"][-1] for p in P.values())
     nfull = int((t_hi - t_lo) * fps) + 1
     cross_v = {n: [t_lo + c for c in crossings(resample(p, t_lo, fps, nfull), fps, gate, a.margin, a.min_gap, int(round((p['t'][-1] - t_lo) * fps)))] for n, p in P.items()}
@@ -236,7 +247,7 @@ def build(a):
     if a.sky:
         race["sky"] = a.sky                                  # the round's own sky (a night scan's), else the page's sky.jpg
     cmp_ = {}
-    ranked = sorted(names, key=lambda n: (-len(off[n]), (cross_v[n][len(off[n])] if n in cross_v and len(cross_v[n]) > len(off[n]) else (holes.get(n, 0) + sum(off[n])))))
+    ranked = place_order(names, off, cross_v)
     pos_of = {n: i + 1 for i, n in enumerate(ranked)}
     lead_t = sum(off[ranked[0]]); countries = json.load(open(a.countries)) if a.countries and os.path.exists(a.countries) else {}
     for n in names:

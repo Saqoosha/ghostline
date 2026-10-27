@@ -1,6 +1,6 @@
 #!/bin/bash
 # rt4090 (night/, ~/mastenv on PATH): a night race onto the day map, as the finals were. Frames: src/rounds/<id>/{full,masks}
-# (Studio's extract.py LAYOUT=4up + fullres_frames.py, pushed here). Writes race/<id>/gap/<feed>.json for round_mac.sh.
+# (main_night_race.sh). Writes race/<id>/gap/<feed>.json for round_mac.sh.
 #   localize on the night map (night_localize.py, cameras: night_race_prep.py) -> day map (night_anchor.py, the D final's
 #   anchors and the local field as for the finals) -> the folded part re-checked on the scan and tracked (night_refine.py
 #   ONLY_BOX, night_keep.py, cpr_gap.py)
@@ -15,7 +15,8 @@ else
   FEEDS=$(ls sk/images | grep "^${id}_s" | tr '\n' ' ')    # already linked (na11: frames in the map at every third)
 fi
 python -u night_race_prep.py sk/sfm/models_srf2 "$O" $FEEDS
-[ -s "$O/loc/results.txt" ] || WIN=0.7 NRET=5 QCAM_FROM="$O/qcam" python -u night_localize.py sk/sfm sk/sfm/models_srf2 sk/images sk/masks "$O/loc" $FEEDS
+# an interrupted run leaves its features half written (hloc reuses them and fails on a missing image): start loc/ afresh
+[ -s "$O/loc/results.txt" ] || { rm -rf "$O/loc"; WIN=0.7 NRET=5 QCAM_FROM="$O/qcam" python -u night_localize.py sk/sfm sk/sfm/models_srf2 sk/images sk/masks "$O/loc" $FEEDS; }
 cat sk/loc2/results_all.txt "$O/loc/results.txt" > "$O/res.txt"
 python -c "import json, sys; a = json.load(open(sys.argv[1])); a.update(json.load(open(sys.argv[2]))); json.dump(a, open(sys.argv[3], 'w'))" \
   sk/loc2/inliers_all.json "$O/loc/inliers.json" "$O/inl.json"

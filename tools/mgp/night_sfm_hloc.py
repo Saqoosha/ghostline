@@ -14,7 +14,7 @@ env: MAXK (4096), OVERLAP (10), NRET (30), CAM (OPENCV_FISHEYE params at the fra
   continue from, e.g. a snapshot),
   MAPPER (incremental | hierarchical: models_hierarchical/ | global: GLOMAP, models_global/), REUSE_DB=1 (map again from
   the verified database.db). GLOMAP failed on the evening feeds twice: 1.1 px, right rotations, but every feed's cameras
-  collapsed to within ~3 steps of one point (night_model_check.py: 13-17% of the steps are jumps)"""
+  collapsed to within ~3 steps of one point"""
 import os, shutil, sys, time
 from pathlib import Path
 import cv2, h5py, numpy as np

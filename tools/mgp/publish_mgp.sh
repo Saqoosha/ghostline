@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Publish the MGP page (viewer/mgp.html) with some rounds to https://ghostline.saqoo.sh/<name>/mgp.html
-#   tools/mgp/publish_mgp.sh <name> <data dir> [round ...]     e.g. mgp-champs-2026 viewer/public/mgp-dev 44
+#   tools/mgp/publish_mgp.sh <name> <data dir> [round ...]     e.g. mgp-champs-2026 viewer/public/mgp-dev
 # <data dir> holds rounds.json, one folder per round (race.json, the pilots' clips, audio.m4a), scene/<scene>.sog and
 # sky.jpg; only the listed rounds go up (all when none are listed). Same R2 layout and credentials as
 # tools/publish-dvr-viewer.sh: the page under dvr/<name>/, the data under dvr/<name>/data/.
@@ -22,7 +22,6 @@ SK="$(printf '%s\n' "$CREDS" | sed -n 's/^R2_SECRET_ACCESS_KEY=//p' | head -1)"
 unset CREDS
 [ -n "$AK" ] && [ -n "$SK" ] || { echo "$MOUNT has no R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY" >&2; exit 1; }
 UC="$(printf '%s' "$REMOTE" | tr '[:lower:]-' '[:upper:]_')"
-export "RCLONE_CONFIG_${UC}_ACCESS_KEY_ID=$AK" "RCLONE_CONFIG_${UC}_SECRET_ACCESS_KEY=$SK"; unset AK SK
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT INT TERM
 
 say "build the page"
@@ -58,6 +57,7 @@ for SCN in ${EXTRA_SCENES:-}; do
 done
 [ -e "$DATA/sky.jpg" ] && cp -L "$DATA/sky.jpg" "$UP/sky.jpg"
 du -sh "$UP"
+export "RCLONE_CONFIG_${UC}_ACCESS_KEY_ID=$AK" "RCLONE_CONFIG_${UC}_SECRET_ACCESS_KEY=$SK"; unset AK SK   # after the build, for rclone only
 rclone --s3-no-check-bucket copy --checksum --progress "$UP" "$REMOTE:$BUCKET/dvr/$NAME/data/"
 
 say "page -> r2:$BUCKET/dvr/$NAME/"

@@ -1,6 +1,6 @@
 """Name a 4-up round's unnamed cells from the broadcast bar over each cell (pilot name, lap, time), read with macOS
 Vision: for cells that laps and elimination left open (no laps, one lap that fits several pilots, two of each left).
-One frame from the middle of the round's clip window (race.json source; a recording holding several races gives
+Three frames across the round's clip window (race.json source; a recording holding several races gives
 each its own window), the bar of each open cell (46 px over the 960x540 cell; 8-up 42 px over 640x360) OCR'd, and the closest still unplaced
 pilot of the round taken when the match is clear (similarity >= MIN, 0.6, and that pilot claimed by no other cell).
 usage (Mac, repo root; LAYOUT=8up for an 8-up qualifier): uv run --with ocrmac --with pillow python tools/mgp/name_from_bars.py <round>[=<recording>] ...
@@ -16,12 +16,12 @@ GRID, CW, CH, BAR = (3, 640, 360, 42) if os.environ.get("LAYOUT") == "8up" else 
 laps = json.load(open(f"{ROOT}/data/mgp/livefpv_laps.json")) + json.load(open(f"{ROOT}/data/mgp/livefpv_finals.json"))
 for arg in sys.argv[1:]:                                     # <round> or <round>=<recording> (no race.json yet)
     n = int(arg.split("=")[0]); off = next((x for x in laps if x["round"] == n), None)
-    rj = f"{ROOT}/build/mgp/q{n}/race.json"
+    rj = f"{ROOT}/build/mgp/q{n:02d}/race.json"   # as round_mac.sh names them
     if os.path.exists(rj): src = json.load(open(rj))["source"]
     else:
         rec = arg.split("=")[1]; d = float(subprocess.check_output(["ssh", "-n", HOST, f"ffprobe -v error -show_entries format=duration -of csv=p=0 {DIR}/raw/{rec}"]))
         src = {"recording": rec, "clip_t0": 0.0, "clip_t1": d}
-    q = f"{ROOT}/build/mgp/poses/q{n}"
+    q = f"{ROOT}/build/mgp/poses/q{n:02d}"
     named = {json.load(open(f))["pilot"]: json.load(open(f)).get("slot") for f in glob.glob(f"{q}/*.json")}
     cells = {int(os.path.basename(f)[1:-5]): f for f in glob.glob(f"{q}_slots/s*.json")}
     free_cells = [s for s in cells if s not in named.values() and json.load(open(cells[s]))["frames"]]

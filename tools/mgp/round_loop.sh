@@ -27,10 +27,9 @@ while true; do
     echo "$(date +%T) round $n: finishing"
     if bash tools/mgp/round_mac.sh "$n"; then echo "$n" >> "$DONE"; changed=1; else echo "$(date +%T) round $n: failed"; fi
   done
-  # 3. publish everything finished so far
+  # 3. publish every round in rounds.json (a round list would publish a rounds.json of only those rounds)
   if [ -n "$changed" ]; then
-    ROUNDS="44 $(tr '\n' ' ' < "$DONE")"
-    bash tools/mgp/publish_mgp.sh "$NAME" viewer/public/mgp-dev $ROUNDS 2>&1 | grep -E "^https|rror"
+    bash tools/mgp/publish_mgp.sh "$NAME" viewer/public/mgp-dev 2>&1 | grep -E "^https|rror"
   fi
   sleep "$INT"
 done

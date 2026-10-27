@@ -11,7 +11,7 @@ laps = json.load(open(f"{ROOT}/data/mgp/livefpv_laps.json")) + json.load(open(f"
 for n in map(int, sys.argv[1:]):
     off = next((x for x in laps if x["round"] == n), None)
     if off is None: print(n, "no official entry"); continue
-    q = f"{ROOT}/build/mgp/poses/q{n}"
+    q = f"{ROOT}/build/mgp/poses/q{n:02d}"   # as round_mac.sh names them
     named = {json.load(open(f))["pilot"]: json.load(open(f)).get("slot") for f in glob.glob(f"{q}/*.json")}
     cells = {int(os.path.basename(f)[1:-5]): f for f in glob.glob(f"{q}_slots/s*.json")}
     free_cells = [s for s in cells if s not in named.values() and json.load(open(cells[s]))["frames"]]

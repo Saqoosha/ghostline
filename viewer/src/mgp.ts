@@ -1,4 +1,4 @@
-// 2026 MultiGP Championship qualifiers: every round's pilots' DVR paths on one 3DGS scan, one round at a time.
+// 2026 MultiGP Championship: every round's pilots' DVR paths on one 3DGS scan, one round at a time.
 // rounds.json in the data folder lists the rounds; each round's folder holds a race.json in the race page's schema
 // (race.ts), with optional extras per pilot: country (ISO-2), official_laps (LiveFPV), position (official place).
 // The scan and the sky are the data folder's own (scene/<race.scene>.sog, sky.jpg), shared by every round.
@@ -73,9 +73,11 @@ function loadMedia(m: HTMLMediaElement, url: string, token: number) {
 }
 const whenScanSettled = (f: () => void) => { if (scanSettled) f(); else afterScan.push(f) }
 const settleScan = () => { scanSettled = true; afterScan.splice(0).forEach(f => f()) }
+let scanAsset: pc.Asset | null = null, pendingDrop: (() => void) | null = null   // the shown scan's asset; the loading one's drop
+function dropScan() { scan?.destroy(); scan = null; if (scanAsset) { app.assets.remove(scanAsset); scanAsset.unload(); scanAsset = null } }
 function loadScene(name: string) {
   if (name === sceneName) return
-  sceneName = name; sceneTry = 0; scanSettled = false; loadSceneTry(name)
+  pendingDrop?.(); sceneName = name; sceneTry = 0; scanSettled = false; loadSceneTry(name)
 }
 function loadSceneTry(name: string) {
   sceneReady = false; sceneMissing = false; sceneFailed = false; showSky(); clearTimeout(sceneTimer)
@@ -83,12 +85,13 @@ function loadSceneTry(name: string) {
   showScanLoad(null, label)
   const a = new pc.Asset(`${name}#${sceneTry}`, 'gsplat', { url: `${BASE}scene/${name}.sog${retry ? `?r=${sceneTry}` : ''}` }); app.assets.add(a)
   let got = 0, total = 0, building = false, over = false
-  const drop = () => { over = true; clearTimeout(sceneTimer); a.off(); app.assets.remove(a); a.unload() }
+  const drop = () => { over = true; pendingDrop = null; clearTimeout(sceneTimer); a.off(); app.assets.remove(a); a.unload() }
+  pendingDrop = drop
   const fail = (why: string) => {
     if (sceneName !== name || over) return
     console.warn(`scene ${name}: ${why} at ${(got / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB (try ${sceneTry + 1} of ${RETRIES + 1})`); drop()
     if (sceneTry < RETRIES) { sceneTry++; loadSceneTry(name); return }
-    sceneFailed = true; scan?.destroy(); scan = null; showSky(); showScanLoad(null, 'Scan failed — reload the page'); scanBar.classList.remove('busy'); scanBar.style.width = '0'; if (!loadingRound) say(sceneNote())
+    sceneFailed = true; dropScan(); showSky(); showScanLoad(null, 'Scan failed — reload the page'); scanBar.classList.remove('busy'); scanBar.style.width = '0'; if (!loadingRound) say(sceneNote())
     settleScan()
   }
   const arm = () => { clearTimeout(sceneTimer); sceneTimer = window.setTimeout(() => fail(building ? 'build hung' : 'download stalled'), building ? BUILD_MS : STALL_MS) }
@@ -97,10 +100,10 @@ function loadSceneTry(name: string) {
     got = g; total = t; building = t > 0 && g >= t; arm()
     showScanLoad(t > 0 ? g / t : null, building ? (retry ? `Building scan… (retry ${sceneTry}/${RETRIES})` : 'Building scan…') : `${label} ${(g / 1048576).toFixed(0)} / ${(t / 1048576).toFixed(0)} MB`) })
   a.on('load', () => { if (sceneName !== name || over) return
-    clearTimeout(sceneTimer); scan?.destroy(); const e = new pc.Entity('scan'); e.addComponent('gsplat', { asset: a }); app.root.addChild(e); scan = e; sceneReady = true; topCut = NaN; scanLoad.hidden = true; if (!loadingRound) say(''); settleScan() })
+    clearTimeout(sceneTimer); pendingDrop = null; dropScan(); scanAsset = a; const e = new pc.Entity('scan'); e.addComponent('gsplat', { asset: a }); app.root.addChild(e); scan = e; sceneReady = true; topCut = NaN; scanLoad.hidden = true; if (!loadingRound) say(''); settleScan() })
   // a 404 (no scan made yet) is final: the round plays over a ground grid; any other error is retried
   a.on('error', (err: string) => { if (sceneName !== name || over) return
-    if (/404|not found/i.test(String(err))) { console.warn('scene', name, err); drop(); scan?.destroy(); scan = null; sceneMissing = true; showSky(); scanLoad.hidden = true; if (!loadingRound) say(sceneNote()); settleScan(); return }
+    if (/404|not found/i.test(String(err))) { console.warn('scene', name, err); drop(); dropScan(); sceneMissing = true; showSky(); scanLoad.hidden = true; if (!loadingRound) say(sceneNote()); settleScan(); return }
     fail('error: ' + err) })
   app.assets.load(a)
 }
@@ -211,8 +214,7 @@ async function loadRound(entry: RoundEntry) {
   const topView = (() => {
     const cx = all.reduce((a, q) => a + q[0], 0) / all.length, cz = all.reduce((a, q) => a + q[2], 0) / all.length
     // laid out as MultiGP's official track map: the start pads bottom-left, the speed-trap straight along the bottom
-    // running left to right into the start / finish gate, the rest of the course above. In the page's frame (x =
-    // VelociDrone x, z = -VelociDrone y) that is screen-right = world -z and screen-up = world -x (right x up = +y, so
+    // running left to right into the start / finish gate, the rest of the course above. In the page's frame that is screen-right = world -z and screen-up = world -x (right x up = +y, so
     // nothing is mirrored); the pads -> gate line then runs right along the bottom
     const right = new pc.Vec3(0, 0, -1), down = new pc.Vec3(1, 0, 0)
     // the yaw whose screen-right and screen-up best match (searched rather than derived: a closed form was 30 deg out)
@@ -225,8 +227,8 @@ async function loadRound(entry: RoundEntry) {
   })()
   // the gates: each opening's frame, 0.1 m apart along it so the ribbon turns only at the corners; the start / finish gate in red.
   // Drawn only while there is no scan (the update loop checks sceneMissing every frame, since the scan loads after the
-  // round is built and may fail later): the scan shows the real gates, and the frames come from the VelociDrone layout
-  // (gates_from_map.py snaps the measured ones to it), which is not ground truth
+  // round is built and may fail later): the scan shows the real gates, and the frames are gates_from_map.py's estimate, which is
+  // not ground truth
   const gates = (race.checkpoints ?? (race.gate ? [race.gate] : [])).filter(g => g.half_width && g.height && g.width_dir).map(g => {
     const c = new pc.Vec3(g.centre[0], g.centre[1], g.centre[2]), w = new pc.Vec3(g.width_dir![0], g.width_dir![1], g.width_dir![2]).mulScalar(g.half_width!), up = new pc.Vec3(0, g.height!, 0)
     const corners = [c.clone().sub(w), c.clone().sub(w).add(up), c.clone().add(w).add(up), c.clone().add(w)], pts: pc.Vec3[] = []
@@ -270,7 +272,7 @@ function pick(e: RoundEntry, push = true) {
   closeRounds()
   if (R?.entry === e) return
   if (push) { const q = new URLSearchParams(location.search); q.set('round', String(e.round)); history.pushState(null, '', '?' + q.toString()) }
-  loadRound(e)
+  loadRound(e).catch((err: Error) => { loadingRound = false; say(`could not show round ${e.round}: ${err.message}`) })
 }
 const rlist = $('rlist'), rfilter = $<HTMLInputElement>('rfilter'), roundsBox = $('rounds')
 function buildRoundList() {
@@ -324,7 +326,7 @@ function buildBoard() {
     b.append(place, bar, lap); b.onclick = () => { setMode(camMode === 'p' + k ? 'orbit' : 'p' + k); b.blur() }
     return { el: b, place, lap, lapLabel, lapTime }
   })
-  board.replaceChildren(...boardRows.map(r => r.el))
+  board.replaceChildren(...boardRows.map(r => r.el)); lastBoard.length = 0
 }
 const lastBoard: string[] = []
 function drawBoard(tc: number) {
@@ -572,10 +574,11 @@ function cameraFree() {
   const r = new pc.Quat().setFromEulerAngles(freeCam.pitch, freeCam.yaw, 0)
   cam.setPosition(r.transformVector(new pc.Vec3(0, 0, freeCam.dist), new pc.Vec3()).add(freeCam.pivot)); cam.setRotation(r)
 }
+function leaveTop() { if (lastMode === 'top') { cam.camera!.nearClip = 0.2; cam.camera!.farClip = 2000; setTopCut(NaN) } }   // the top view's clipping and cut
 function setMode(v: string) {
   if (v === lastMode || !R) return
   const yaw = view.yawOffset + (lastMode === 'orbit' ? TURN * (t - R.T0) : 0)   // the orbit's heading now, kept across the switch
-  if (lastMode === 'top') { cam.camera!.nearClip = 0.2; cam.camera!.farClip = 2000; setTopCut(NaN) }   // the top view's clipping and cut
+  leaveTop()
   camMode = v; startBlend(); if (v === 'free') enterFree()
   view.yawOffset = v === 'orbit' ? yaw - TURN * (t - R.T0) : yaw; lastMode = v; refreshCam(); plan()
 }
@@ -674,7 +677,6 @@ let blendT = BLEND
 function startBlend() { blendFrom.pos.copy(cam.getPosition()); blendFrom.rot.copy(cam.getRotation()); blendT = 0 }
 const lastPos = new pc.Vec3(), lastRot = new pc.Quat()
 let stillFor = 0, resorted = false
-// the track line: faint white over the scan, darker over the bare grid
 // the track line: a band TRACK_W metres wide on the ground (perspective thins it with distance), dashed along its arc
 // length (TRACK_DASH on, TRACK_GAP off); faint white over the scan, darker over the bare grid
 const TRACK_W = 0.12, TRACK_DASH = 1.0, TRACK_GAP = 0.7
@@ -728,7 +730,7 @@ $<HTMLButtonElement>('resetbtn').onclick = e => {
   (e.currentTarget as HTMLButtonElement).blur(); if (!R) return; setPlaying(false); t = R.T0
   Object.assign(view, { yawOffset: 30, topYaw: 0, pitch: PITCH0, zoom: 1 })
   speedSel.value = '1'; speedSel.onchange!(new Event('change'))
-  startBlend(); camMode = 'orbit'; lastMode = 'orbit'; refreshCam(); plan()
+  leaveTop(); startBlend(); camMode = 'orbit'; lastMode = 'orbit'; refreshCam(); plan()
 }
 window.addEventListener('resize', () => { if (R) { sizeTimeline(); layoutStrip() } })
 
