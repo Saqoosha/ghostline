@@ -1,0 +1,260 @@
+// The audience pages' 3D (watch.ts live, heat.ts replay): the scan, the course line, a sphere, a trail and a name tag per
+// pilot, and the camera - Orbit, Top, Follow one pilot. Drawn as livepage.ts draws them (that page is the venue's; this one
+// leaves out its Free camera, BA switch and sliders). A pilot's colour is their cell's place in the grid (--tl ... --br, look.css).
+import * as pc from 'playcanvas'
+import { L } from './i18n'
+import { loadHQ, pickScan, saveHQ, sceneBlob } from './scan'
+import { bakeSky } from '../sky'
+
+export type Slot = 'tl' | 'tr' | 'bl' | 'br'
+export const SLOTS: Slot[] = ['tl', 'tr', 'bl', 'br']
+export type Mode = 'orbit' | 'top' | `p${string}`
+export type PilotState = 'flying' | 'lost' | 'nopic'
+// line: a flight's whole line only (compare.ts): thin and light all along, no sphere and no name tag
+export interface StagePilot { stream: string; slot: Slot; color: string; pos: pc.Vec3 | null; line: boolean
+  show(pos: number[], trail: (number[] | null)[], state: PilotState, label: { name: string; flag: string; note: string }): void; hide(): void }
+export interface Stage { app: pc.Application; mode: Mode; onMode: (m: Mode) => void
+  loadScene(progress?: (f: number) => void): Promise<{ title?: string }>; hq: boolean; setHQ(on: boolean): Promise<void>; setCourse(track: number[][] | null): void; pilot(stream: string, slot: Slot): StagePilot
+  setMode(m: Mode): void; clear(): void }
+
+const css = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim()
+const hex = (h: string) => new pc.Color(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255)
+const TRAIL_PX = 5, LINE_W = 0.12, LINE_DASH = 1.0, LINE_GAP = 0.7, LINE_A = 0.22, PITCH0 = -18, TURN = 6, BLEND = 0.7
+const cLost = new pc.Color(0.55, 0.57, 0.6)
+// a phone gets the light scan (index.json "lite", tools/publish-event.sh) unless ?q=full; a tall screen looks down more steeply,
+// or the orbit, backing off to hold the course across the narrow width, ends up inside the trees round it
+const PHONE = typeof location !== 'undefined' && new URLSearchParams(location.search).get('q') !== 'full' && matchMedia('(pointer: coarse) and (max-width: 1000px) and (max-height: 1000px)').matches   // not a tablet
+const PITCH_TALL = -38
+
+function emptyMesh(m: pc.Mesh) { m.setPositions([0, 0, 0, 0, 0, 0, 0, 0, 0]); m.setNormals([0, 1, 0, 0, 1, 0, 0, 1, 0]); m.setColors(new Array(12).fill(0)); m.setIndices([0, 1, 2]); m.update(pc.PRIMITIVE_TRIANGLES) }
+
+const SHOT = new URLSearchParams(typeof location === 'undefined' ? '' : location.search)   // (no location in the tests)
+// the header's scan quality, apart from the cameras so it does not read as a fourth: LITE (0.8M splats) or HQ (the full 3M, 45 MB),
+// the chosen one underlined. Redraw the buttons now, done once the new scan is in
+export const hqButton = (stage: Stage, redraw: () => void, done: () => void) => {
+  const q = (hq: boolean, label: string, title: string) => Object.assign(document.createElement('button'), { textContent: label, title, className: stage.hq === hq ? 'on' : '',
+    onclick: () => { if (stage.hq !== hq) { stage.setHQ(hq).then(done, e => console.error('scan', e)); redraw() } } })
+  const box = Object.assign(document.createElement('span'), { className: 'quality', title: L('スキャンの画質', 'Scan quality') })
+  box.append(q(false, 'LITE', L('軽いスキャン（80 万 splat、12 MB）', 'Light scan (0.8M splats, 12 MB)')), q(true, 'HQ', L('高画質のスキャン（300 万 splat、45 MB）', 'High-quality scan (3M splats, 45 MB)')))
+  return box
+}
+export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
+  const app = new pc.Application(canvas, { mouse: new pc.Mouse(canvas), touch: new pc.TouchDevice(canvas), graphicsDeviceOptions: { antialias: !PHONE } })   // MSAA: the trail fades by alpha-to-coverage, as mgp.ts - not on a phone, where 4x the splats' fill dropped the frame rate
+  // the canvas is as large as the page's CSS makes it (the whole window, or the part over the live page's progress band)
+  app.setCanvasFillMode(pc.FILLMODE_NONE); app.setCanvasResolution(pc.RESOLUTION_AUTO)
+  // (resizeCanvas writes the size into the canvas's style: cleared again, or the first size would stick over the CSS)
+  new ResizeObserver(() => { app.resizeCanvas(canvas.clientWidth, canvas.clientHeight); canvas.style.width = canvas.style.height = '' }).observe(canvas)
+  // the bottom bars' heights as --foot and --time (look.css stacks the timeline and the pilots over them; the footer wraps on a phone)
+  const bars = new ResizeObserver(() => { for (const [v, q] of [['--head', '.bar.top'], ['--foot', '.bar.foot'], ['--time', '.bar.time']]) document.documentElement.style.setProperty(v, `${document.querySelector(q)?.getBoundingClientRect().height ?? 0}px`) })
+  for (const q of ['.bar.top', '.bar.foot', '.bar.time']) { const e = document.querySelector(q); if (e) bars.observe(e) }
+  const cam = new pc.Entity('cam'); cam.addComponent('camera', { clearColor: hex(css('--paper') || '#f3f4f6'), fov: 60, nearClip: 0.1, farClip: 600 }); app.root.addChild(cam)
+
+  // --- camera (as livepage.ts): orbit turns slowly round the course's middle, as near as holds the course and everyone up;
+  // top looks straight down; follow sits behind and above one pilot. Drag turns and tilts, the wheel zooms; a switch glides.
+  const view = { yawOffset: 30, topYaw: 0, pitch: innerHeight > innerWidth ? PITCH_TALL : PITCH0, zoom: 1 }
+  const home = { target: new pc.Vec3(), dist: 70 }, orb = { target: new pc.Vec3(), dist: 70, init: false }
+  const blendFrom = { pos: new pc.Vec3(), rot: new pc.Quat() }; let blendT = BLEND
+  let course: pc.Vec3[] = [], line: pc.Vec3[] = [], lineS: number[] = []
+  let drag: { x: number; y: number } | null = null
+  // two fingers pinch the zoom (as the wheel) and do not turn; lifting one does not start a drag
+  const touches = new Map<number, { x: number; y: number }>(); let pinch: { d: number; zoom: number } | null = null
+  const spread = () => { const [a, b] = [...touches.values()]; return Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)) }
+  const setZoom = (z: number) => { view.zoom = Math.max(0.4, Math.min(3, z)) }
+  const rebase = () => { pinch = touches.size === 2 ? { d: spread(), zoom: view.zoom } : null }   // whenever two fingers are down, measured from now
+  canvas.addEventListener('pointerdown', e => {
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY }); canvas.setPointerCapture(e.pointerId)
+    rebase(); drag = touches.size === 1 ? { x: e.clientX, y: e.clientY } : null
+  })
+  const lift = (e: PointerEvent) => { if (!touches.delete(e.pointerId)) return; rebase(); drag = null }
+  for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) canvas.addEventListener(ev, lift)
+  canvas.addEventListener('pointermove', e => {
+    if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (pinch) { setZoom(pinch.zoom * pinch.d / spread()); return }
+    if (!drag) return
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY
+    if (stage.mode === 'top') view.topYaw -= dx * 0.3
+    else { view.yawOffset -= dx * 0.3; view.pitch = Math.max(-85, Math.min(-5, view.pitch - dy * 0.3)) }
+  })
+  canvas.addEventListener('wheel', e => { setZoom(view.zoom * Math.exp(e.deltaY * 0.001)); e.preventDefault() }, { passive: false })
+
+  const pilots = new Map<string, Pilot>()
+  function cameraAt(t: number, dt: number) {
+    const up = [...pilots.values()].filter(p => p.pos && p.state === 'flying').map(p => p.pos as pc.Vec3)
+    if (!orb.init) { orb.target.copy(home.target); orb.dist = home.dist; orb.init = true }
+    if (stage.mode === 'top') {
+      cam.setPosition(home.target.x, home.target.y + home.dist * 1.1 * view.zoom, home.target.z); cam.setEulerAngles(-89.9, view.topYaw, 0); return
+    }
+    if (stage.mode[0] === 'p') {
+      const p = pilots.get(stage.mode.slice(1))
+      if (p?.pos) {
+        const now = p.pos.clone(), fwd = p.fwd
+        cam.setPosition(now.clone().sub(fwd.clone().mulScalar(8 * view.zoom)).add(new pc.Vec3(0, 3 * view.zoom, 0))); cam.lookAt(now.add(fwd.clone().mulScalar(5))); return
+      }
+    }
+    const r = new pc.Quat().setFromEulerAngles(view.pitch, view.yawOffset + TURN * t, 0)
+    const dir = r.transformVector(new pc.Vec3(0, 0, 1), new pc.Vec3()), right = r.transformVector(new pc.Vec3(1, 0, 0), new pc.Vec3()), upv = r.transformVector(new pc.Vec3(0, 1, 0), new pc.Vec3())
+    const goal = course.length ? home.target : up.length ? up.reduce((a, b) => a.clone().add(b), new pc.Vec3()).mulScalar(1 / up.length) : home.target
+    orb.target.lerp(orb.target, goal, 1 - Math.exp(-dt / 1.5))
+    const tanV = Math.tan(30 * Math.PI / 180) * 0.85, tanH = tanV * canvas.clientWidth / Math.max(1, canvas.clientHeight)
+    let need = course.length || up.length ? 12 : home.dist
+    for (const q of course.length ? course.concat(up) : up) { const v = q.clone().sub(orb.target), a = v.dot(right), b = v.dot(upv), c = v.dot(dir); need = Math.max(need, Math.abs(a) / tanH + c, Math.abs(b) / tanV + c) }
+    need *= view.zoom; orb.dist += (need - orb.dist) * (1 - Math.exp(-dt / (need > orb.dist ? 1.0 : 2.5)))
+    cam.setPosition(r.transformVector(new pc.Vec3(0, 0, orb.dist), new pc.Vec3()).add(orb.target)); cam.setRotation(r)
+  }
+
+  // --- the trail (as livepage.ts): an opaque, depth-writing band facing the camera, before the splats, thinning to its old
+  // end by alpha-to-coverage (as mgp.ts; a phone, without MSAA, by a blue-noise dither moved every frame); broken where a frame has no position
+  const trailMat = new pc.StandardMaterial()
+  { const m = trailMat; m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.cull = pc.CULLFACE_NONE; m.emissiveVertexColor = true; m.emissive = new pc.Color(1, 1, 1)
+    m.blendType = pc.BLEND_NONE; m.depthWrite = true; m.depthTest = true; m.opacityVertexColor = true; m.opacityVertexColorChannel = 'a'; if (PHONE) m.opacityDither = pc.DITHER_BLUENOISE; else m.alphaToCoverage = true; m.update() }
+  function drawTrail(mesh: pc.Mesh, pts: (number[] | null)[], c: pc.Color, eye: pc.Vec3, pxWorld: number, full = false) {
+    const pos: number[] = [], col: number[] = [], nrm: number[] = [], idx: number[] = [], n = pts.length
+    const tan = new pc.Vec3(), vw = new pc.Vec3(), side = new pc.Vec3(), a = new pc.Vec3(), b = new pc.Vec3(), q = new pc.Vec3(); let run = 0
+    for (let k = 0; k < n; k++) {
+      const p = pts[k]; if (!p) { run = 0; continue }
+      const pa = pts[k - 1] ?? p, pb = pts[k + 1] ?? p
+      q.set(p[0], p[1], p[2]); a.set(pa[0], pa[1], pa[2]); b.set(pb[0], pb[1], pb[2])
+      tan.sub2(a, b); if (tan.lengthSq() < 1e-12) tan.set(1, 0, 0); tan.normalize(); vw.sub2(eye, q)
+      const al = full ? 0.25 : k / Math.max(1, n - 1), w = (1 + (TRAIL_PX - 1) * al) / 2 * pxWorld * vw.length()
+      side.cross(tan, vw.normalize()); if (side.lengthSq() < 1e-12) side.set(0, 1, 0); side.normalize().mulScalar(w)
+      pos.push(q.x + side.x, q.y + side.y, q.z + side.z, q.x - side.x, q.y - side.y, q.z - side.z); col.push(c.r, c.g, c.b, al, c.r, c.g, c.b, al); nrm.push(0, 1, 0, 0, 1, 0)
+      if (run) { const i = pos.length / 3 - 2; idx.push(i - 2, i - 1, i, i - 1, i + 1, i) }
+      run++
+    }
+    if (idx.length < 3) { emptyMesh(mesh); return }
+    mesh.setPositions(pos); mesh.setNormals(nrm); mesh.setColors(col); mesh.setIndices(idx); mesh.update(pc.PRIMITIVE_TRIANGLES)
+  }
+
+  // --- the course line (as livepage.ts): a faint white dashed band, blended over the splats without depth
+  const lineMesh = new pc.Mesh(app.graphicsDevice); lineMesh.clear(true, false); emptyMesh(lineMesh)
+  { const m = new pc.StandardMaterial(); m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.cull = pc.CULLFACE_NONE; m.emissiveVertexColor = true; m.emissive = new pc.Color(1, 1, 1)
+    m.opacityVertexColor = true; m.opacityVertexColorChannel = 'a'; m.blendType = pc.BLEND_NORMAL; m.depthWrite = false; m.depthTest = false; m.update()
+    const e = new pc.Entity('course'); e.addComponent('render', { meshInstances: [new pc.MeshInstance(lineMesh, m)], layers: [pc.LAYERID_IMMEDIATE] }); app.root.addChild(e) }
+  function drawLine(eye: pc.Vec3) {
+    const n = line.length; if (!n) { emptyMesh(lineMesh); return }
+    const pos: number[] = [], col: number[] = [], nrm: number[] = [], idx: number[] = [], tan = new pc.Vec3(), vw = new pc.Vec3(), side = new pc.Vec3()
+    for (let k = 0; k < n; k++) {
+      const q = line[k]; tan.sub2(line[(k - 1 + n) % n], line[(k + 1) % n]).normalize(); vw.sub2(eye, q)
+      side.cross(tan, vw.normalize()).normalize().mulScalar(LINE_W / 2)
+      const al = lineS[k] % (LINE_DASH + LINE_GAP) < LINE_DASH ? LINE_A : 0
+      pos.push(q.x + side.x, q.y + side.y, q.z + side.z, q.x - side.x, q.y - side.y, q.z - side.z); col.push(1, 1, 1, al, 1, 1, 1, al); nrm.push(0, 1, 0, 0, 1, 0)
+      const i = 2 * k, j = 2 * ((k + 1) % n); idx.push(i, i + 1, j, i + 1, j + 1, j)
+    }
+    lineMesh.setPositions(pos); lineMesh.setNormals(nrm); lineMesh.setColors(col); lineMesh.setIndices(idx); lineMesh.update(pc.PRIMITIVE_TRIANGLES)
+  }
+
+  // --- a pilot: sphere, trail and tag; drawn each frame from what the page last showed
+  class Pilot implements StagePilot {
+    line = false; color: string; col: pc.Color; pos: pc.Vec3 | null = null; state: PilotState = 'nopic'; fwd = new pc.Vec3(0, 0, -1); prev: pc.Vec3 | null = null
+    mat = new pc.StandardMaterial(); dot = new pc.Entity('dot'); trail: pc.Mesh; trailE = new pc.Entity('trail'); pts: (number[] | null)[] = []; tag = document.createElement('div'); label = ''; sx = 0; sy = 0; order = 0; lift = 0
+    constructor(public stream: string, public slot: Slot) {
+      this.color = css('--' + slot) || '#5b4bff'; this.col = hex(this.color)
+      const m = this.mat; m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.emissive = this.col; m.update()
+      this.dot.addComponent('render', { type: 'sphere', material: m, castShadows: false }); this.dot.setLocalScale(0.14, 0.14, 0.14); this.dot.enabled = false; app.root.addChild(this.dot)
+      this.trail = new pc.Mesh(app.graphicsDevice); this.trail.clear(true, false); emptyMesh(this.trail)
+      this.trailE.addComponent('render', { meshInstances: [new pc.MeshInstance(this.trail, trailMat)] }); app.root.addChild(this.trailE)
+      this.tag.className = 'tag'; this.tag.style.setProperty('--c', this.color); this.tag.hidden = true; document.body.appendChild(this.tag)
+    }
+    show(pos: number[], trail: (number[] | null)[], state: PilotState, label: { name: string; flag: string; note: string }) {
+      const now = new pc.Vec3(pos[0], pos[1], pos[2]), flat = new pc.Vec3(pos[0], 0, pos[2])
+      if (this.prev) { const v = flat.clone().sub(this.prev); if (v.length() > 0.02) this.fwd.lerp(this.fwd, v.normalize(), 0.08).normalize() }
+      this.prev = flat; this.pos = now; this.state = state; this.pts = trail
+      this.dot.enabled = true; this.dot.setPosition(now)
+      const key = [state, label.flag, label.name, label.note].join('|')
+      if (key === this.label) return; this.label = key                 // the material and the tag only when they change
+      this.mat.emissive = state === 'flying' ? this.col : cLost; this.mat.update()
+      const b = document.createElement('b'); b.textContent = label.name ? '' : this.stream   // the audience knows pilots by name: the cell only when there is none
+      const who = Object.assign(document.createElement('span'), { textContent: (label.flag + ' ' + label.name).trim() })
+      const note = Object.assign(document.createElement('small'), { textContent: label.note })
+      this.tag.classList.toggle('lost', state !== 'flying'); this.tag.replaceChildren(b, ...(label.name ? [who] : []), ...(label.note ? [note] : []))
+    }
+    destroy() { this.dot.destroy(); this.trailE.destroy(); this.tag.remove() }
+    hide() { this.pos = null; this.state = 'nopic'; this.pts = []; this.prev = null; this.dot.enabled = false; this.tag.hidden = true; emptyMesh(this.trail) }
+    draw(eye: pc.Vec3, pxWorld: number): boolean {               // true: its tag is on screen, at sx, sy
+      if (!this.pos) return false
+      drawTrail(this.trail, this.pts, this.state === 'flying' ? this.col : cLost, eye, pxWorld, this.line)
+      if (this.line) { this.dot.enabled = false; this.tag.hidden = true; return false }
+      const s = cam.camera!.worldToScreen(this.pos, new pc.Vec3()), behind = cam.forward.dot(this.pos.clone().sub(eye)) < 0
+      this.sx = s.x + at.left; this.sy = s.y + at.top                   // the canvas's own place on the page (below the header)
+      this.tag.hidden = behind; this.tag.style.left = this.sx + 'px'; return !behind
+    }
+  }
+
+  let t = 0, at = canvas.getBoundingClientRect()
+  app.on('update', (dt: number) => {
+    if (!SHOT.has('still')) t += dt   // ?still: the orbit stays at its first angle (screenshots from one view)
+    cameraAt(t, dt)
+    if (blendT < BLEND) { blendT = Math.min(BLEND, blendT + dt); const u = blendT / BLEND, k = u * u * (3 - 2 * u)
+      cam.setPosition(new pc.Vec3().lerp(blendFrom.pos, cam.getPosition(), k)); cam.setRotation(new pc.Quat().slerp(blendFrom.rot, cam.getRotation(), k)) }
+    const eye = cam.getPosition(), pxWorld = 2 * Math.tan(30 * Math.PI / 180) / Math.max(1, canvas.clientHeight)
+    drawLine(eye); if (PHONE) trailMat.setParameter('blueNoiseJitter', [Math.random(), Math.random(), Math.random(), Math.random()])
+    // name tags that would overlap are stacked upwards, as the venue's 3D page's (livepage.ts): the lowest on screen stays
+    // over its sphere, each other one goes up past the tags it would cover and glides there; two within 30 px of each
+    // other keep last frame's order, so pilots at about the same height do not trade places every few frames
+    at = canvas.getBoundingClientRect()
+    const on = [...pilots.values()].filter(p => p.draw(eye, pxWorld))
+    on.sort((a, b) => Math.abs(a.sy - b.sy) < 30 ? a.order - b.order : b.sy - a.sy); on.forEach((p, i) => { p.order = i })
+    const boxes: number[][] = []
+    for (const p of on) {
+      const w = p.tag.offsetWidth, h = p.tag.offsetHeight + 2, x0 = p.sx - w / 2, x1 = p.sx + w / 2
+      let y = p.sy
+      for (let moved = true; moved;) { moved = false; for (const r of boxes) if (x0 < r[1] && x1 > r[0] && y > r[2] - h && y < r[2] + h) { y = r[2] - h; moved = true } }
+      boxes.push([x0, x1, y]); p.lift += (p.sy - y - p.lift) * (1 - Math.exp(-dt / 0.15))
+      p.tag.style.top = p.sy - p.lift + 'px'
+    }
+  })
+  app.start()
+
+  // the scan shown: one entity, replaced once the next one is in (the old one stays on screen meanwhile)
+  let ix: any = null, prog: ((f: number) => void) | undefined, shown: { name: string; e: pc.Entity } | null = null, want = ''
+  const scanName = () => pickScan(ix, stage.hq)
+  async function showScan(name: string) {
+    if (shown?.name === name) return; want = name
+    const url = URL.createObjectURL(await sceneBlob(`${base}scene/${name}.sog`, prog))
+    await new Promise<void>((ok, bad) => {
+      const a = new pc.Asset(name, 'gsplat', { url, filename: `${name}.sog` }); app.assets.add(a)
+      a.on('load', () => {
+        URL.revokeObjectURL(url)
+        if (want !== name) { app.assets.remove(a); a.unload(); ok(); return }      // switched again while this one came
+        const e = new pc.Entity('scene'); e.addComponent('gsplat', { asset: a }); app.root.addChild(e)
+        if (shown) { const old = shown.e.gsplat?.asset; shown.e.destroy(); const oa = typeof old === 'number' ? app.assets.get(old) : old; if (oa) { app.assets.remove(oa); oa.unload() } }
+        shown = { name, e }; ok()
+      }); a.on('error', bad); app.assets.load(a)
+    })
+  }
+  // the day's sky (index.json "sky", tools/x6/jdl-r7-sky.sh): a scan trained with the sky masked out ends in the clear colour
+  // above the trees, so the photographs' own sky goes round it as a skybox, baked into a cubemap once (sky.ts, as the viewer)
+  const loadSky = (url: string) => {
+    const img = new Image(); img.crossOrigin = 'anonymous'
+    img.onload = () => { app.scene.skyboxMip = 0; app.scene.skybox = bakeSky(app.graphicsDevice, img) }
+    img.onerror = () => console.error('sky failed:', url); img.src = url
+  }
+  const json = (u: string) => fetch(u).then(r => { if (!r.ok) throw new Error(`${u}: ${r.status}`); return r.json() })
+  const stage: Stage = {
+    app, mode: 'orbit', onMode: () => {},
+    // the scan read here, so its progress can be shown (f: 0-1, or NaN when the size is not known), then handed to PlayCanvas
+    async loadScene(progress) {
+      ix = await json(base + 'index.json'); prog = progress
+      // the orbit's middle: the course line's when it is in (whichever of the two files arrives last), else index.json's
+      if (ix.orbit?.target && !course.length) { home.target.set(ix.orbit.target[0], ix.orbit.target[1], ix.orbit.target[2]); home.dist = ix.orbit.dist ?? home.dist; orb.init = false }
+      if (ix.sky && !SHOT.get('nosky')) loadSky(base + ix.sky)   // beside the scan, not waited for
+      await showScan(scanName())
+      return { title: ix.title }
+    },
+    // HQ: the full scan (3M splats, 45 MB) instead of the lite one (0.8M, 12 MB) every page starts with; this browser remembers
+    hq: loadHQ(),
+    async setHQ(on) { stage.hq = on; saveHQ(on); if (ix) await showScan(scanName()) },
+    setCourse(track) {                                       // the course line; it may come later or be replaced during the day
+      if (!track?.length) { course = []; line = []; lineS = []; return }
+      course = track.filter((_, k) => k % 8 === 0).map(q => new pc.Vec3(q[0], q[1], q[2]))
+      line = track.map(q => new pc.Vec3(q[0], q[1], q[2])); lineS = [0]; for (let k = 1; k < line.length; k++) lineS.push(lineS[k - 1] + line[k].distance(line[k - 1]))
+      const mid = (k: number) => { const v = track.map(q => q[k]); return (Math.min(...v) + Math.max(...v)) / 2 }, ys = track.map(q => q[1]).sort((a, b) => a - b)
+      home.target.set(mid(0), ys[ys.length >> 1], mid(2)); orb.init = false
+    },
+    pilot(stream, slot) { let p = pilots.get(stream); if (!p || p.slot !== slot) { p?.destroy(); p = new Pilot(stream, slot); pilots.set(stream, p) } return p },
+    setMode(m) { if (m === stage.mode) return; blendFrom.pos.copy(cam.getPosition()); blendFrom.rot.copy(cam.getRotation()); blendT = 0; stage.mode = m; stage.onMode(m) },
+    clear() { for (const p of pilots.values()) p.hide() },
+  }
+  Object.assign(window, { ghostline: { app, pc, pilots, stage } })   // for checking the page from outside
+  return stage
+}

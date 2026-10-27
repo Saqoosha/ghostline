@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g'><stop offset='0' stop-color='%23ff2e63'/><stop offset='.33' stop-color='%23f59e0b'/><stop offset='.67' stop-color='%2312b76a'/><stop offset='1' stop-color='%232f6bff'/></linearGradient></defs><rect width='32' height='32' rx='7' fill='%23f3f4f6'/><rect x='5' y='13' width='22' height='6' rx='3' fill='url%28%23g%29'/></svg>" />
+    <title>ghostline compare</title>
+    <style>
+      /* split as the replay page: the flights to pick on the left, the scene, along the bottom the progress band (four rows),
+         the timeline and the footer. The header stays over the scene */
+      :root { --band: 118px; --bottom: calc(var(--foot, 34px) + var(--time, 46px) + var(--band)); --side: 300px; --dvr: 0px; }
+      /* the flights' DVR clips on the right (the night version's), as the replay page's: 4:3 each, the column as wide as four of them stacked */
+      body.with-dvr { --dvr: min(30vw, calc((100vh - var(--head, 52px) - var(--foot, 34px) - var(--time, 46px)) / 4 * 4 / 3 + 6px)); }
+      #dvr { position: fixed; right: 0; top: var(--head, 52px); bottom: calc(var(--foot, 34px) + var(--time, 46px)); z-index: 3; width: var(--dvr); display: flex; flex-direction: column; overflow: hidden; background: var(--paper); }
+      #dvr[hidden] { display: none; }
+      #dvr figure { margin: 0; flex: none; box-sizing: content-box; width: calc(100% - 6px); aspect-ratio: 4 / 3; position: relative; border-left: 6px solid var(--c); background: #000; overflow: hidden; }
+      #dvr video { width: 100%; height: calc(100% * 360 / 348); object-fit: fill; display: block; }
+      #dvr figcaption { position: absolute; left: 8px; bottom: 6px; font: 400 11px var(--sans); letter-spacing: .06em; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, .8); white-space: pre; }
+      body.stage #c { inset: var(--head, 52px) auto auto var(--side); width: calc(100% - var(--side) - var(--dvr)); height: calc(100% - var(--head, 52px) - var(--bottom)); }
+      .bar.time { bottom: var(--foot, 34px); height: 46px; border-top: 1px solid var(--faint); }
+      #seek { flex: 1; accent-color: var(--ink); }
+      #clock { font: 400 11px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; min-width: 90px; text-align: right; white-space: nowrap; }
+      #laps { position: fixed; left: 0; right: var(--dvr); bottom: calc(var(--foot, 34px) + var(--time, 46px)); height: var(--band); z-index: 3; padding: 4px 20px; background: var(--paper); border-top: 1px solid var(--faint); }
+      #lapc { display: block; width: 100%; }
+      #pick { position: fixed; left: 0; top: var(--head, 52px); bottom: var(--bottom); width: var(--side); z-index: 3; overflow-y: auto; background: var(--paper); border-right: 1px solid var(--faint); padding: 10px 0 20px; }
+      #pick h3 { margin: 16px 16px 4px; font: 400 10px var(--mono); letter-spacing: .18em; color: var(--dim); }
+      #pick .heat { padding: 6px 16px; border-top: 1px solid var(--faint); }
+      #pick .heat b { display: block; font: 400 11px var(--mono); letter-spacing: .08em; color: var(--dim); margin-bottom: 4px; }
+      #pick button { display: inline-block; margin: 2px 4px 2px 0; padding: 3px 8px; border: 1px solid var(--faint); border-radius: 3px; background: none; color: var(--ink); font: 400 12px var(--sans); cursor: pointer; }
+      #pick button:hover { background: rgba(12, 15, 20, .05); }
+      #pick button.on { border-color: var(--c); box-shadow: inset 4px 0 0 var(--c); }
+      #chosen { padding: 4px 16px 8px; font-size: 12px; color: var(--dim); }
+      #chosen.full { color: var(--alarm); }
+      body .note { top: calc(var(--head, 52px) + (100vh - var(--head, 52px) - var(--bottom)) / 2); left: calc(var(--side) + (100vw - var(--side) - var(--dvr)) / 2); transform: translate(-50%, -50%); }
+      @media (max-width: 720px) {
+        :root { --side: 0px; }
+        #pick { width: auto; right: 0; display: none; } body.picking #pick { display: block; } body.with-dvr { --dvr: 0px; } #dvr { display: none; }
+        #laps { padding: 2px 16px; } .bar.time { gap: 10px; padding: 0 12px; } #clock { min-width: 0; } #seek { min-width: 0; }
+      }
+    </style>
+  </head>
+  <body class="stage">
+    <canvas id="c"></canvas>
+    <header class="bar top">
+      <a id="home" class="mark" href="./"><span>ghost</span><i></i><span>line</span></a>
+      <span class="what" id="title"></span>
+      <span class="what" data-en="Compare flights">飛行を比べる</span>
+      <span class="grow"></span>
+      <button class="btn" id="picktoggle" data-en="Pick flights">飛行を選ぶ</button>
+      <span class="seg" id="cams"></span>
+    </header>
+    <aside id="dvr" hidden></aside>
+    <aside id="pick"><div id="chosen"></div><div id="heats"></div></aside>
+    <div id="laps"><canvas id="lapc"></canvas></div>
+    <div class="note" id="note" data-en="Loading…">読み込み中…</div>
+    <div class="bar time">
+      <button class="btn" id="play">PLAY</button>
+      <input id="seek" type="range" min="0" max="1" step="0.01" value="0" />
+      <span id="clock"></span>
+      <span class="seg" id="speed"></span>
+    </div>
+    <footer class="bar foot">
+      <span data-en="The picked flights replay side by side, each from its pass through the start gate. Positions are estimated from each drone's DVR video and are not official results.">選んだ飛行を、<wbr>それぞれの<wbr>スタートのゲートの<wbr>通過にそろえて<wbr>再生する。<wbr>位置は各機の DVR 映像から<wbr>推定したもので、<wbr>公式の記録では<wbr>ありません。</span>
+      <span class="grow"></span>
+      <a href="./" data-en="All heats →">ヒートの一覧 →</a>
+    </footer>
+    <script type="module" src="/src/compare.ts"></script>
+  </body>
+</html>

@@ -3,14 +3,26 @@
 the cells, start (the frame size and rate are read off the source). While the tracker runs it reads its output (signal on / off per cell), its PUSH stream
 (frames processed and solved per cell, the positions for the page's top view) and the GPU's power from nvidia-smi. The page also
 shows the source's picture: its low-bandwidth stream, two JPEGs a second, received only while a page asks for it.
-Beside all that, every NDI source is recorded while any cell of its grid shows a picture (rt_rec.py), tracker or not; /rec lists the files.
+Beside all that, every NDI source is recorded while any cell of its grid shows a picture (rt_rec.py, a child process started again when it ends), tracker or not; /rec lists the files.
 usage (mastenv, from the folder with rt_track.py, the maps and the engines): python rt_control.py      # http://<box>:8080, the top view alone at /obs
 env: PORT (8080), PUSH (8765: the tracker's answers, also what viewer/live.html reads), ENG (eng_linux),
-     REC, REC_* (rt_rec.py), CONF (~/.ghostline-control.json: the last start, shown again when the page opens), VIEW (~/.ghostline-view.json: the trails' delay and smoothing)
+     REC, REC_* (rt_rec.py), CONF (~/.ghostline-control.json: the last start, shown again when the page opens), VIEW (~/.ghostline-view.json: the trails' delay and smoothing),
+     CAM (~/.ghostline-cam.json: the camera of the 3D page that rt_ndiview.py sends),
+     OUTCONF (~/.ghostline-out.json: what rt_ndiview.py sends - NDI, SRT, both or nothing - and at what size and rate),
+     PILOTS_URL (unset: no names; the venue heat manager's current_pilots, e.g. http://192.168.3.20:8001/current_pilots at FDF),
+     RELAY_BASE, RELAY_EVENT (both set and ~/.config/ghostline/key there: the answers go out to the audience pages,
+     RELAY_BASE/RELAY_EVENT/, through rt_relay.py; it reads PUSH whether or not a tracker runs, and keeps heats in live/relay/)
+Between heats (all cells without a picture for GROW_QUIET s) it grows the map with the frames the tracker kept in the last
+GROW_WINDOW s (rt_map_grow.py: the day's light, docs/realtime-architecture.html 12) and the tracker swaps it in without stopping;
+the page can grow now or go back to the scan alone. Needs "描いて照合" (RENDER): the new keyframes are matched beside the render.
+routes beside the page: /api/state, /rec (recordings), /obs (top view for OBS), /view/ (the 3D live page, viewer/live.html built with VITE_BASE=/view/,
+     and its data folders in view/), /api/pilots (the pilot per cell, from the heat manager), /api/cam (the sent picture's camera; POST sets it; /api/cam/events pushes each change), /api/out (rt_ndiview.py's output; POST sets it), /obs-setup (how to receive it in OBS), /api/addr (this box's LAN addresses)
 No login: whoever reaches the port can start and stop the tracker. Keep it on the venue LAN / Tailscale."""
-import collections, glob, http.server, json, os, re, signal, subprocess, sys, threading, time, traceback, urllib.parse, urllib.request
+import collections, glob, http.server, json, mimetypes, os, re, signal, subprocess, sys, threading, time, traceback, urllib.parse, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
 PORT, PUSH, ENG, CONF = int(E("PORT", 8080)), int(E("PUSH", 8765)), E("ENG", "eng_linux"), os.path.expanduser(E("CONF", "~/.ghostline-control.json"))
+CAM = os.path.expanduser(E("CAM", "~/.ghostline-cam.json"))     # the sent picture's camera (/view/?ndi=1 gets it from /api/cam/events)
+OUTCONF = os.path.expanduser(E("OUTCONF", "~/.ghostline-out.json"))   # rt_ndiview.py reads it, and starts again when it changes
 VIEW = os.path.expanduser(E("VIEW", "~/.ghostline-view.json"))   # how the trails are drawn (delay, smoothing): changed any time, read by every page
 CELLS = ("tl", "tr", "bl", "br")                    # the grid's cells, row by row
 # rt_track.py's knobs the page may set in "extra". Not any variable: the page has no login, and LD_PRELOAD is a variable too
@@ -18,6 +30,11 @@ KNOBS = set("NKF MIN_INL LOST RELOC_TOPK RELOC_MIN TOPK MAPK BATCH FRESH PIPE BA
             "REACH NEAR FLOW FLOW_EVERY SIGNAL INFO PNP PL_DYN".split())
 lock = threading.Lock(); gpu = {}
 HIST = 300; hist = collections.deque(maxlen=HIST)   # one sample a second, for the page's sparklines: it shows the last 5 minutes whenever it is opened
+KF_DIR, MAP_PTR = "live/kf", "live/map.txt"         # the frames the tracker keeps, and the file that names the map it should use (MAPWATCH)
+GROW_MAX = int(E("GROW_MAX", 0))                    # keyframes a grown map is cut to (rt_map_grow.py MAX; 0 = no cap): the tracker holds it on the GPU
+GROW_WINDOW, GROW_QUIET = int(E("GROW_WINDOW", 1800)), int(E("GROW_QUIET", 30))   # s: only the heats just before (older light hurt); a heat is over after this long without a picture
+GROW_KF = int(E("GROW_KF", 300))                    # s: a place gets a fresh frame once its last is this old; the grow keeps the newest per place
+G = dict(phase="idle", last=None, error=None, heat=False, quiet=None, using=None)   # growing the map between heats; using: the map the tracker says it swapped to
 S = dict(phase="stopped", proc=None, since=None, exit=None, ndi=None, input=None, config=None, cells={}, log=collections.deque(maxlen=400))
 
 try:                                                # the same finder rt_track.py uses; it keeps its list fresh on a thread
@@ -53,8 +70,8 @@ class Preview:
             except Exception as e: print("preview:", e, flush=True); time.sleep(2)
             finally: rx.disconnect(); self.jpg = None
 preview = Preview()
-from rt_rec import Recorders, FILE, REC_DIR
-recorders = Recorders(finder)
+from rt_rec import RecProc, FILE, REC, REC_DIR, REC_ENC
+recorders = RecProc(finder is not None)              # a process of its own (rt_rec.py): an NDI receiver that crashes or freezes takes only it down
 
 courses = {}
 def course(name, line=""):
@@ -80,12 +97,12 @@ def course(name, line=""):
 
 def track(name):
     """a race.json's course line (make_race.py: the anchor pilot's laps averaged, 1,600 points along a lap, about 25 cm apart on the FDF course; the page closes it) seen from above, and its
-    start / finish gate as the segment across it"""
+    start / finish gate, and its other gates (track.json "gates"), as the segments across them"""
     if name not in options()["tracks"]: raise ValueError("コースの線が見つからない")
     r = json.load(open(f"{HERE}/{name}")); t = r.get("track") or []; g = r.get("gate")
     pts = [[round(p[0], 2), round(p[2], 2)] for p in t]
-    gate = [[round(g["centre"][0] + k * g["half_width"] * g["width_dir"][0], 2), round(g["centre"][2] + k * g["half_width"] * g["width_dir"][2], 2)] for k in (-1, 1)] if g else None
-    return dict(pts=pts, gate=gate)
+    seg = lambda g: [[round(g["centre"][0] + k * g["half_width"] * g["width_dir"][0], 2), round(g["centre"][2] + k * g["half_width"] * g["width_dir"][2], 2)] for k in (-1, 1)]
+    return dict(pts=pts, gate=seg(g) if g else None, gates=[seg(x) for x in r.get("gates") or []])   # gates: the course's other gates (the 3D page's splits)
 
 rendering, failed = set(), {}                    # failed: file -> when; tried again after 2 minutes (a render during a heat may hit a full GPU)
 def topview(name, scene, line=""):
@@ -110,6 +127,42 @@ def topview(name, scene, line=""):
     threading.Thread(target=run, daemon=True).start()
 
 _opt = [0.0, None]
+PILOTS_URL = E("PILOTS_URL", "")                   # the venue's heat manager: [name per channel ..., heat, class]; a venue address, so no default
+_pilots = [0.0, {}, None]                           # when asked, the last good answer, the last failure (printed once)
+def cell_name(x): return re.sub(r"[^A-Za-z0-9_-]", "", str(x.get("name") or ""))[:24] or str(x.get("cell"))   # as the tracker's stream names
+def pilots():
+    """the current heat's pilot per cell, from the heat manager (asked at most every 3 s). Its list has a name per channel, every
+    channel, an empty one "" (FDF 2026-10-17), in the order of the config's cells (R2, F1, R4, R5 there), then the heat and the class.
+    A failed ask keeps the last good answer, marked stale; {} when there is none, and the page shows the cell names alone."""
+    if PILOTS_URL and time.time() - _pilots[0] > 3:
+        _pilots[0] = time.time()
+        try:
+            with urllib.request.urlopen(PILOTS_URL, timeout=1) as f: r = json.loads(f.read(65536))
+            cells = [cell_name(x) for x in ((S["config"] or {}).get("cells") or json.load(open(CONF)).get("cells", []))]
+            if not isinstance(r, list) or len(r) < len(cells): raise ValueError(f"expected [{len(cells)} names, heat, class], got {str(r)[:80]}")
+            _pilots[1] = dict(cells={c: str(n) if n else "" for c, n in zip(cells, r)}, heat=r[len(cells)] if len(r) > len(cells) else None,
+                              cls=r[len(cells) + 1] if len(r) > len(cells) + 1 else None)
+            if _pilots[2]: print("pilots: the heat manager answers again", flush=True); _pilots[2] = None
+        except Exception as e:                      # unreachable (a venue LAN changes), or an answer of another shape
+            if str(e) != _pilots[2]: print(f"pilots: {PILOTS_URL}: {e}", flush=True); _pilots[2] = str(e)
+            if _pilots[1]: _pilots[1] = dict(_pilots[1], stale=True)
+    return _pilots[1]
+
+def cell_order():                                   # the cells' names in grid order (tl, tr, bl, br): the audience pages colour by place
+    conf = S["config"] or json.load(open(CONF))
+    by = {x.get("cell"): cell_name(x) for x in conf.get("cells", []) if isinstance(x, dict)}
+    return [by.get(c, c) for c in CELLS]
+
+relay = relay_off = None                            # relay_off: why a configured relay is not running, shown on the page
+if E("RELAY_BASE") or E("RELAY_EVENT"):
+    from rt_relay import Relay, read_key
+    try:
+        if not (E("RELAY_BASE") and E("RELAY_EVENT")): raise ValueError("RELAY_BASE と RELAY_EVENT の両方が要る")
+        relay = Relay(f"http://127.0.0.1:{PUSH}/", E("RELAY_BASE"), E("RELAY_EVENT"), read_key(), pilots=lambda: pilots(), out_dir=HERE + "/live/relay", order=cell_order,
+                      rec_dir=REC_DIR if REC else None, nvenc=REC_ENC == "h264_nvenc",   # rec_dir: each heat's DVR, right after it
+                      passings=E("PASSINGS", "http://127.0.0.1:8766/passings") or None).start_threads()   # the decoder's passes (rt_mylaps.py); PASSINGS= turns it off
+    except (OSError, ValueError) as e: relay_off = f"送信しない: {e}"; print("relay off:", e, flush=True)
+
 def options():
     if time.time() - _opt[0] < 2 and _opt[1]: return _opt[1]   # every open page asks once a second: the globs and the finder are read at most every 2 s
     rel = lambda ps: sorted(os.path.relpath(p, HERE) for p in ps)
@@ -149,7 +202,7 @@ def start(c):
     if c.get("track") and c["track"] not in o["tracks"]: raise ValueError("コースの線が見つからない")
     on = [x for x in c.get("cells", []) if x.get("on")]
     if not on: raise ValueError("使うマスが 1 つも無い")
-    names = [re.sub(r"[^A-Za-z0-9_-]", "", str(x.get("name") or ""))[:24] or str(x.get("cell")) for x in on]
+    names = [cell_name(x) for x in on]
     if len(set(names)) < len(names): raise ValueError("マスの名前が重なっている")
     with lock:
         if S["phase"] != "stopped": raise ValueError("もう動いている")
@@ -163,11 +216,13 @@ def start(c):
         k = CELLS.index(x["cell"]); specs.append(f"{c['map']},ndi://{src}|{k % 2 * (w // 2)}:{k // 2 * (h // 2)}:{w // 2}:{h // 2}|{c['cam']},live/{n}")
     env = dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}",
                SIGNAL="1", GRID=f"{w}x{h}", GRID_FPS=f"{cap:g}", PUSH=str(PUSH), **({"MAXFPS": f"{cap:g}"} if cap < fps else {}))
+    if PILOTS_URL and "+" in c["cam"]:               # the lens each pilot flies, learnt over the day's heats (LENS_* in rt_track.py)
+        env.update(LENS_PILOTS=f"http://127.0.0.1:{PORT}/api/pilots", LENS_MEM=f"live/lens-{time.strftime('%Y%m%d')}.json")
     for k, f in (("GLUE", "glue_mix.engine"), ("XFEAT", "xfeat_fp32.engine")):
         if os.path.exists(f"{HERE}/{ENG}/{f}"): env[k] = f"{ENG}/{f}"
     if c.get("render"):
         if c.get("scene") not in o["scenes"]: raise ValueError("描いて照合するにはシーン（.ply）が要る")
-        env.update(RENDER="1", RCLIP="2", SCENE=c["scene"])
+        env.update(RENDER="1", RCLIP="2", SCENE=c["scene"], RKF="1", KFOUT=KF_DIR, KF_WINDOW=str(GROW_KF), MAPWATCH=MAP_PTR)
     if c.get("ba"): env.update(BA="0.5", BA_ACC="30", BA_ALPHA="60")   # the outdoor setting, docs/realtime-tracking.ja.md
     for kv in str(c.get("extra", "")).split():
         k, _, v = kv.partition("=")
@@ -175,13 +230,77 @@ def start(c):
         env[k] = v
     with lock:
         if S["phase"] != "stopped": raise ValueError("もう動いている")
-        os.makedirs(HERE + "/live", exist_ok=True)
+        os.makedirs(HERE + "/live", exist_ok=True); point(c["map"])   # each start begins on the scan alone; the next heat grows it again
+        made = f"{c['map']}|{c.get('scene')}"; tag = f"{HERE}/{KF_DIR}/made-with"   # frames posed on another map are in another world frame
+        if os.path.isdir(f"{HERE}/{KF_DIR}") and (not os.path.exists(tag) or open(tag).read() != made):
+            for f in glob.glob(f"{HERE}/{KF_DIR}/*.npz"): os.remove(f)
+        os.makedirs(f"{HERE}/{KF_DIR}", exist_ok=True)
+        with open(tag, "w") as f: f.write(made)
+        G.update(last=None, error=None, heat=False, quiet=None, using=None)
         p = subprocess.Popen([sys.executable, "-u", "rt_track.py", *specs], cwd=HERE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         S.update(phase="loading", proc=p, since=time.time(), exit=None, ndi=None, config=c, input=f"{w}×{h} · {fps:g} fps" + (f" → {cap:g}" if cap < fps else ""),
                  cells={n: dict(cell=x["cell"], signal=None, lens=None, rows=collections.deque(maxlen=600), last=None, trail=collections.deque(maxlen=150)) for x, n in zip(on, names)})
         S["log"].clear(); S["log"].append("$ rt_track.py " + " ".join(specs))
     json.dump({k: c.get(k) for k in ("source", "map", "cam", "scene", "track", "render", "ba", "extra", "cells")}, open(CONF, "w"), ensure_ascii=False)
     threading.Thread(target=watch, args=(p,), daemon=True).start(); threading.Thread(target=answers, args=(p,), daemon=True).start()
+
+def point(path):                                    # tell the tracker which map to use (it reads the file every 2 s)
+    tmp = f"{HERE}/{MAP_PTR}.tmp"
+    with open(tmp, "w") as f: f.write(path)
+    os.replace(tmp, f"{HERE}/{MAP_PTR}")
+
+def grow(reason):
+    with lock:
+        c = S["config"]
+        if S["phase"] != "running" or not c: raise ValueError("tracker が動いていない")
+        if not c.get("render"): raise ValueError("地図を育てるには「描いて照合」が要る")
+        if G["phase"] == "growing": raise ValueError("いま育てている")
+        G.update(phase="growing", error=None); run = S["since"]
+    threading.Thread(target=run_grow, args=(c, reason, run), daemon=True).start()
+
+def run_grow(c, reason, run):                       # run: the start it belongs to; a grow that outlives its tracker is thrown away
+    out, t0 = time.strftime("live/map-grow-%Y%m%d-%H%M%S.npz"), time.time()
+    try:
+        for f in glob.glob(f"{HERE}/{KF_DIR}/*.npz") + glob.glob(f"{HERE}/live/*.part") + glob.glob(f"{HERE}/{KF_DIR}/*.part"):   # ~280 KB each, thousands a day; never used past the window (2x: a margin); .part: a killed write
+            if t0 - os.path.getmtime(f) > 2 * GROW_WINDOW: os.remove(f)
+        r = subprocess.run([sys.executable, "-u", "rt_map_grow.py", c["map"], c["scene"], out, KF_DIR], cwd=HERE, capture_output=True, text=True, timeout=600,
+                           env=dict(os.environ, SINCE=str(GROW_WINDOW), MAX=str(GROW_MAX), PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}"))
+        m = re.search(r"GROW-DONE \d+ \+ (\d+) real", r.stdout)
+        if not m:
+            tail = (r.stdout + r.stderr).strip().splitlines()
+            raise RuntimeError("直前のフレームが無い" if "no frame to add" in r.stdout + r.stderr else (tail[-1][:200] if tail else f"終了コード {r.returncode}"))
+        with lock:
+            if S["since"] != run or S["phase"] == "stopped": G.update(phase="idle"); os.remove(f"{HERE}/{out}"); return
+            point(out)
+        for f in sorted(glob.glob(f"{HERE}/live/map-grow-*.npz"), key=os.path.getmtime)[:-2]: os.remove(f)   # the one in use and the one before
+        with lock: G.update(phase="idle", last=dict(t=time.time(), n=int(m[1]), reason=reason, s=round(time.time() - t0), map=out))
+        note(f"(地図を育てた：直前 {GROW_WINDOW // 60} 分の実フレーム {m[1]} 枚、{reason}、{time.time() - t0:.0f} 秒)")
+    except Exception as e:
+        with lock: G.update(phase="idle", error=str(e)[:200])
+        note(f"(地図を育てられなかった：{e})")
+
+def reset_map():
+    with lock:
+        c = S["config"]
+        if S["phase"] == "stopped" or not c: raise ValueError("tracker が動いていない")
+        if G["phase"] == "growing": raise ValueError("いま育てている")
+        point(c["map"]); G.update(last=None, error=None)
+    note("(地図をスキャンだけに戻した)")
+
+def between_heats():                                # a heat is over when every cell has been without a picture for GROW_QUIET s
+    while True:
+      try:
+        time.sleep(1); now = time.time(); go = False
+        with lock:
+            if S["phase"] == "running" and S["config"] and S["config"].get("render"):
+                if any(c["signal"] for c in S["cells"].values()): G.update(heat=True, quiet=None)
+                elif G["heat"]:
+                    G["quiet"] = G["quiet"] or now
+                    if now - G["quiet"] >= GROW_QUIET and G["phase"] == "idle": G.update(heat=False, quiet=None); go = True
+        if go:
+            try: grow("ヒートの後に自動")
+            except ValueError: pass
+      except Exception as e: note(f"(ヒートの区切りの見張りで例外：{e})")   # keep watching: the next heat still grows
 
 def view():
     try: v = json.load(open(VIEW))
@@ -195,6 +314,53 @@ def set_view(v):                                   # ms; the delay lets the smoo
     tmp = f"{VIEW}.{threading.get_ident()}.tmp"
     with open(tmp, "w") as f: json.dump(dict(delay=round(d), smooth=round(m)), f)
     os.replace(tmp, VIEW)                # whole: /api/state reads it on other threads
+
+def addrs():                                       # this box's IPv4 on the LAN, for the OBS page's URLs: not loopback, Tailscale (100.64/10) or docker
+    try: out = subprocess.run(["ip", "-4", "-o", "addr", "show"], capture_output=True, text=True, timeout=3).stdout
+    except Exception: return []
+    ips = [l.split()[3].split("/")[0] for l in out.splitlines() if len(l.split()) > 3 and not l.split()[1].startswith(("lo", "tailscale", "docker", "br-", "virbr"))]
+    ips = [ip for ip in ips if not ip.startswith(("127.", "169.254."))]
+    try: src = subprocess.run(["ip", "-4", "route", "get", "1.1.1.1"], capture_output=True, text=True, timeout=3).stdout.split(" src ")[1].split()[0]   # the default route's own address first
+    except Exception: src = None
+    return sorted(ips, key=lambda ip: ip != src)
+
+def cam():
+    try: v = json.load(open(CAM))
+    except Exception: v = {}
+    if not isinstance(v, dict): v = {}                 # valid JSON but not an object (hand-edited): /api/state must not break on it
+    return dict(mode=v.get("mode", "orbit"), zoom=v.get("zoom", 1))
+
+cam_changed, cam_n = threading.Condition(), [0]    # /api/cam/events: each page waiting is told at once
+
+def set_cam(v):                                    # mode: orbit, top, or p<output name> to follow that tracker output's pilot
+    if not isinstance(v, dict): raise ValueError("JSON の形がおかしい")
+    c = dict(cam(), **{k: v[k] for k in ("mode", "zoom") if k in v})
+    if not (isinstance(c["mode"], str) and re.fullmatch(r"orbit|top|p[\w.-]{1,40}", c["mode"])): raise ValueError("カメラは orbit・top・p<出力の名前>")
+    if not (isinstance(c["zoom"], (int, float)) and not isinstance(c["zoom"], bool) and 0.4 <= c["zoom"] <= 3): raise ValueError("ズームは 0.4〜3")
+    tmp = f"{CAM}.{threading.get_ident()}.tmp"
+    with open(tmp, "w") as f: json.dump(c, f)
+    os.replace(tmp, CAM)
+    with cam_changed: cam_n[0] += 1; cam_changed.notify_all()
+
+OUTS, SIZES = ("ndi", "srt", "ndi,srt", "off"), ((1280, 720), (1920, 1080))
+def out():
+    try: v = json.load(open(OUTCONF))
+    except Exception: v = {}
+    if not isinstance(v, dict): v = {}
+    return dict(out=v.get("out", "ndi"), w=v.get("w", 1920), h=v.get("h", 1080), fps=v.get("fps", 60))
+
+def set_out(v):                                    # the sender's output: written whole, the sender starts again with it
+    if not isinstance(v, dict): raise ValueError("JSON の形がおかしい")
+    c = dict(out(), **{k: v[k] for k in ("out", "w", "h", "fps") if k in v})
+    if c["out"] not in OUTS: raise ValueError("出力は ndi・srt・ndi,srt・off")
+    if (c["w"], c["h"]) not in SIZES: raise ValueError("大きさは 1280x720 か 1920x1080")
+    if c["fps"] not in (30, 60): raise ValueError("fps は 30 か 60")
+    try:
+        if json.load(open(OUTCONF)) == c: return       # unchanged: a write would restart the sender for nothing
+    except Exception: pass                             # missing or broken: written
+    tmp = f"{OUTCONF}.{threading.get_ident()}.tmp"
+    with open(tmp, "w") as f: json.dump(c, f)
+    os.replace(tmp, OUTCONF)
 
 def watch(p):                                       # the tracker's output: the log, and the lines that say how it is doing
     # every run's whole output is kept too (live/tracker-<start>.log): the page shows only the last lines, and a run that went
@@ -222,6 +388,10 @@ def note(line):
                 if m[1] in S["cells"]: S["cells"][m[1]]["lens"] = m[2]
             elif m := re.search(r": receiving (.+)$", line): S["ndi"] = m[1]
             elif line == "listening" and S["phase"] == "loading": S["phase"] = "running"
+            elif m := re.match(r"map (\S+): (\d+ keyframes|.+)", line):   # the tracker's word on a swap: done, or why not
+                if m[2].endswith("keyframes"): G.update(using=m[1], error=None)
+                else: G["error"] = f"tracker が地図を読めなかった：{m[2][:150]}"
+            elif line.startswith("KFOUT off"): G["error"] = f"tracker が実フレームを書けなくなった（{line[11:150]}）。次の開始まで育たない"
 
 def answers(p):                                     # the PUSH stream: one row per processed frame, "pos" when it was solved
     while p.poll() is None:
@@ -244,8 +414,8 @@ def stop():
         if p is None: raise ValueError("動いていない")
         S["phase"] = "stopping"
     p.send_signal(signal.SIGTERM)                   # the tracker writes its summary and files on TERM
-    def wait():
-        try: p.wait(40)
+    def wait():                                     # 40 s was not enough for a 2-hour run's files (70 MB a cell): JDL R7 2026-10-24 lost three cells' twice
+        try: p.wait(300)
         except subprocess.TimeoutExpired: p.kill()
     threading.Thread(target=wait, daemon=True).start()
 
@@ -256,6 +426,21 @@ def poll_gpu():
                                                     capture_output=True, text=True, timeout=5).stdout.strip().split(", ")
             gpu.update(w=float(w), pstate=ps, mem=int(mem), temp=int(temp), util=int(util))
         except Exception: gpu.clear()
+        time.sleep(1)
+
+RAPL = "/sys/class/powercap/intel-rapl:0"         # the CPU package's energy counter: root only by default (CVE-2020-8694), the service's ExecStartPre opens it to its user's group
+cpu = {}
+def poll_cpu():                                    # W over each second from the counter's µJ (it wraps at max_energy_range_uj)
+    prev, said = None, None
+    while True:
+        try:
+            top, uj, t = int(open(RAPL + "/max_energy_range_uj").read()), int(open(RAPL + "/energy_uj").read()), time.monotonic()
+            if prev: cpu["w"] = round((uj - prev[0]) % top / 1e6 / (t - prev[1]), 1)
+            prev, said = (uj, t), None; cpu.pop("err", None)
+        except Exception as e:                     # the reason goes to the page; the log says it once per kind of failure
+            why = "読めない（ExecStartPre の chgrp / chmod）" if isinstance(e, PermissionError) else "RAPL が無い" if isinstance(e, FileNotFoundError) else type(e).__name__
+            cpu["err"] = why; cpu.pop("w", None); prev = None   # in this order: a reader on another thread never sees neither
+            if said != why: print(f"CPU power: {e} ({why})", flush=True); said = why
         time.sleep(1)
 
 def latency(now):
@@ -269,7 +454,7 @@ def sample():
         time.sleep(1); now = time.time()
         with lock:
             on = S["phase"] != "stopped"
-            hist.append(dict(w=gpu.get("w"), temp=gpu.get("temp"), lat=latency(now) if on else None,
+            hist.append(dict(w=gpu.get("w"), cw=cpu.get("w"), temp=gpu.get("temp"), lat=latency(now) if on else None,
                              cells={c["cell"]: round(sum(1 for t, ok, _ in c["rows"] if ok and t > now - 1), 1) for c in S["cells"].values()} if on else {}))
 
 def state():
@@ -284,8 +469,8 @@ def state():
             try: conf = json.load(open(CONF))
             except Exception: conf = None
         return dict(phase=S["phase"], up=S["since"] and S["phase"] != "stopped" and round(now - S["since"]), exit=S["exit"], lat=latency(now) if S["phase"] != "stopped" else None, ndi=S["ndi"], input=S["input"],
-                    config=conf, view=view(), cells=cells, rec=recorders.recording(), log=list(S["log"])[-80:], gpu=dict(gpu), options=options(), push=PUSH,
-                    hist=dict(n=HIST, w=[h["w"] for h in hist], temp=[h["temp"] for h in hist], lat=[h["lat"] for h in hist],
+                    config=conf, view=view(), cam=cam(), out=out(), grow=dict(phase=G["phase"], error=G["error"], last=G["last"] and dict(G["last"], age=round(now - G["last"]["t"]), swapped=G["using"] == G["last"]["map"])), cells=cells, rec=recorders.recording(), relay=relay.status() if relay else relay_off and dict(ok=False, age=None, event=E("RELAY_EVENT"), err=relay_off, pending=0), log=list(S["log"])[-80:], gpu=dict(gpu), cpu=dict(cpu), options=options(), push=PUSH,
+                    hist=dict(n=HIST, w=[h["w"] for h in hist], cw=[h["cw"] for h in hist], temp=[h["temp"] for h in hist], lat=[h["lat"] for h in hist],
                               cells={c: [h["cells"].get(c) for h in hist] for c in CELLS}))
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -308,18 +493,47 @@ class Handler(http.server.BaseHTTPRequestHandler):
             try:
                 while left > 0 and (chunk := f.read(min(left, 1 << 20))): self.wfile.write(chunk); left -= len(chunk)
             except (BrokenPipeError, ConnectionResetError, TimeoutError): pass   # the browser seeks by dropping one range and asking for another
+    def cam_events(self):                           # server-sent events: the camera now, then each change as it is made (a comment every 5 s keeps it open)
+        self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.send_header("Cache-Control", "no-store"); self.end_headers()
+        seen = None
+        try:
+            while True:
+                with cam_changed: cam_changed.wait_for(lambda: cam_n[0] != seen, 5)
+                if cam_n[0] != seen: seen = cam_n[0]; self.wfile.write(f"data: {json.dumps(cam())}\n\n".encode())
+                else: self.wfile.write(b": ping\n\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, TimeoutError): pass
     def do_GET(self):
         u = urllib.parse.urlsplit(self.path); q = dict(urllib.parse.parse_qsl(u.query))
         if u.path == "/": self.send(200, open(HERE + "/rt_control.html", "rb").read(), "text/html")
         elif u.path == "/obs": self.send(200, open(HERE + "/rt_obs.html", "rb").read(), "text/html")   # the top view alone, for an OBS browser source
         elif u.path == "/rt_topview.js": self.send(200, open(HERE + "/rt_topview.js", "rb").read(), "text/javascript")
         elif u.path == "/api/state": self.send(200, state())
+        elif u.path == "/obs-setup": self.send(200, open(HERE + "/rt_obs_setup.html", "rb").read(), "text/html")   # for the venue's OBS operator
+        elif u.path == "/api/addr": self.send(200, addrs())
+        elif u.path == "/api/cam": self.send(200, cam())
+        elif u.path == "/api/cam/events": self.cam_events()
+        elif u.path == "/api/out": self.send(200, out())
+        elif u.path == "/api/pilots": self.send(200, pilots())   # the 3D page's name tags
         elif u.path == "/rec": self.send(200, open(HERE + "/rt_rec.html", "rb").read(), "text/html")   # the recordings
         elif u.path == "/api/rec": self.send(200, recorders.state())
         elif u.path.startswith("/rec/"):
             name = u.path[5:]
             if not FILE.fullmatch(name) or not os.path.exists(f"{REC_DIR}/{name}"): return self.send(404, dict(error="not found"))
             self.send_file(f"{REC_DIR}/{name}", "video/mp4")
+        elif u.path == "/view" or u.path.startswith("/view/"):   # the 3D page: the viewer's build (VITE_BASE=/view/) and its data folders, in view/
+            rel = urllib.parse.unquote(u.path[6:])
+            if not rel and "data" in q:                  # a folder asked for: the query as it is (?ndi=1 and the like too)
+                self.send_response(302); self.send_header("Location", "/view/live.html?" + u.query); self.send_header("Content-Length", "0"); return self.end_headers()
+            if not rel:                                  # the newest scene folder (view/<name>/index.json)
+                ix = sorted(glob.glob(f"{HERE}/view/*/index.json"), key=lambda f: os.stat(f).st_mtime if os.path.exists(f) else 0)
+                if not ix: return self.send(404, dict(error="view/ に index.json のあるフォルダが無い"))
+                self.send_response(302); self.send_header("Location", "/view/live.html?data=" + urllib.parse.quote(os.path.basename(os.path.dirname(ix[-1]))) + (u.query and "&" + u.query))   # ?ndi=1 and the like carried over
+                self.send_header("Content-Length", "0"); return self.end_headers()
+            if "\0" in rel: return self.send(404, dict(error="not found"))
+            path = os.path.realpath(f"{HERE}/view/{rel}")   # symlinks out of view/ are refused too
+            if not path.startswith(os.path.realpath(HERE + "/view") + os.sep) or not os.path.isfile(path): return self.send(404, dict(error="not found"))
+            self.send_file(path, mimetypes.guess_type(path)[0] or "application/octet-stream")
         elif u.path == "/api/preview.jpg":
             jpg = preview.get(q.get("source", "").strip()[:80])
             if jpg: self.send(200, jpg, "image/jpeg")
@@ -345,7 +559,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b"{}")
             if self.path == "/api/start": start(body)
             elif self.path == "/api/stop": stop()
+            elif self.path == "/api/grow": grow("手動")
+            elif self.path == "/api/grow/reset": reset_map()
             elif self.path == "/api/view": set_view(body)
+            elif self.path == "/api/cam": set_cam(body)
+            elif self.path == "/api/out": set_out(body)
             elif self.path == "/api/rec/delete": recorders.delete(body.get("file"))
             else: return self.send(404, dict(error="not found"))
             self.send(200, dict(ok=True))
@@ -363,6 +581,6 @@ def on_term(*_):                                   # systemctl stop: the tracker
         except Exception: pass
     recorders.stop_all(); os._exit(0)
 signal.signal(signal.SIGTERM, on_term)
-threading.Thread(target=poll_gpu, daemon=True).start(); threading.Thread(target=sample, daemon=True).start()
+threading.Thread(target=poll_gpu, daemon=True).start(); threading.Thread(target=poll_cpu, daemon=True).start(); threading.Thread(target=sample, daemon=True).start(); threading.Thread(target=between_heats, daemon=True).start()
 print(f"control page on :{PORT}", flush=True)
 http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,18 +9,17 @@
   /* the live control page's language (tools/dvr/rt_control.html): paper, hairlines and thin type, no boxes and no
      fills, the name with its line drawn in the four grid colours. Only fonts the device already has */
   :root { --paper: #f3f4f6; --ink: #0c0f14; --dim: rgba(12, 15, 20, .58); --faint: rgba(12, 15, 20, .2);
-          --tl: #ff2e63; --tr: #f59e0b; --bl: #12b76a; --br: #2f6bff;
+          --tl: #e8a800; --tr: #22a849; --bl: #2f7bf0; --br: #f0701e;   /* the cells' colours (aud/look.css) */
           --sans: "Helvetica Neue", -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif;
           --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--paper); color: var(--ink); font: 400 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
          min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 48px 24px; }
   main { width: 100%; max-width: 560px; }
-  .mark { display: flex; align-items: center; gap: 16px; margin: 0; font: 200 21px/1 var(--sans); letter-spacing: .42em; }
+  .mark { display: flex; align-items: center; gap: 16px; margin: 0 0 44px; font: 200 21px/1 var(--sans); letter-spacing: .42em; }
   .mark span:first-child { color: rgba(12, 15, 20, .45); }
   .mark span:last-child { margin-right: -.42em; }
   .mark i { flex: 1; height: 1.5px; background: linear-gradient(90deg, var(--tl), var(--tr), var(--bl), var(--br)); }
-  .tag { margin: 14px 0 44px; font: 400 11px/1.5 var(--mono); color: var(--dim); letter-spacing: .04em; }
   ul { list-style: none; margin: 0; padding: 0; }
   li { display: flex; align-items: baseline; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--faint); }
   li:first-child { border-top: 1px solid var(--faint); }
@@ -33,8 +32,9 @@
 <body>
 <main>
   <h1 class="mark" aria-label="ghostline"><span>ghost</span><i></i><span>line</span></h1>
-  <p class="tag">FPV flights rebuilt from DVR video, replayed over 3D Gaussian-splat scans.</p>
   <ul>
+    <li><a href="/jdl-2026-10-25/">JDL 2026 R7 · 10/25 予選 3・決勝</a><a class="sub" href="/jdl-2026-10-25/">heats</a></li>
+    <li><a href="/jdl-2026-10-24/">JDL 2026 R7 · 10/24 練習・予選</a><a class="sub" href="/jdl-2026-10-24/">heats</a></li>
     <li><a href="/mgp-champs-2026/">MultiGP Championship 2026</a><a class="sub" href="/mgp-champs-2026/">qualifiers</a></li>
     <li><a href="/fdf-2026-r6/">FDF CUP 2026 R6</a><a class="sub" href="/fdf-2026-r6/race">race replay</a></li>
     <li><a href="/jdl-2026-r6/">JDL 2026 R6</a></li>

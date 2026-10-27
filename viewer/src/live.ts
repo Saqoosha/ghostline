@@ -13,7 +13,7 @@ export type Dot = { pos: number[]; quat: number[]; state: 'interp' | 'extrap' | 
 
 // taper: weights fall to zero at the window's edge (biweight) instead of ending at a step - an answer entering or
 // leaving a box window moves the fit at once, which shows as small kinks along a trail
-function fit(ans: Answer[], j: number, W: number, taper = false): number[] | null {   // weighted quadratic through the answers within W frames of j, at j
+export function fit(ans: Answer[], j: number, W: number, taper = false): number[] | null {   // weighted quadratic through the answers within W frames of j, at j
   let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0; const b0 = [0, 0, 0], b1 = [0, 0, 0], b2 = [0, 0, 0]; let n = 0
   for (const a of ans) {
     const x = a.i - j; if (Math.abs(x) > W) continue
@@ -27,6 +27,20 @@ function fit(ans: Answer[], j: number, W: number, taper = false): number[] | nul
   if (Math.abs(det) < 1e-9) return null
   return [0, 1, 2].map(k => (b0[k] * (s2 * s4 - s3 * s3) - s1 * (b1[k] * s4 - s3 * b2[k]) + s2 * (b1[k] * s3 - s2 * b2[k])) / det)
 }
+// Every page draws the same way, the control page's top view's (tools/dvr/rt_topview.js): a position is the Gaussian-
+// weighted mean (σ SIGMA s) of the answers within 2.5σ of it in time, inside its run - a gap of RUN_GAP s or more ends a run.
+// The control page's sliders set σ and the delay for the venue's pages; these are the audience pages' (its defaults).
+export const SIGMA = 0.12, RUN_GAP = 0.7   // σ 120 ms: the smoothest with the drawn time 350 ms back or more (2.5σ of answers in hand), and the closest to the course (JDL R7 2026-10-24 logs)
+export function gauss(ans: Answer[], j: number, sg: number, gap: number): number[] | null {   // ans in frame order; j, sg, gap in frames
+  if (!ans.length || !(sg > 0)) return null
+  let lo = 0, hi = ans.length
+  while (lo < hi) { const m = (lo + hi) >> 1; if (ans[m].i < j) lo = m + 1; else hi = m }   // the first answer at or after j
+  const R = 2.5 * sg; let x = 0, y = 0, z = 0, w = 0
+  const add = (a: Answer) => { const k = Math.exp(-(((a.i - j) / sg) ** 2) / 2); x += k * a.pos[0]; y += k * a.pos[1]; z += k * a.pos[2]; w += k }
+  for (let m = lo - 1; m >= 0 && j - ans[m].i <= R && (m === lo - 1 || ans[m + 1].i - ans[m].i < gap); m--) add(ans[m])
+  for (let m = lo; m < ans.length && ans[m].i - j <= R && (m === lo || ans[m].i - ans[m - 1].i < gap); m++) add(ans[m])
+  return w ? [x / w, y / w, z / w] : null
+}
 function slerp(a: number[], b: number[], t: number): number[] {
   let d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]; const s = d < 0 ? -1 : 1; d *= s
   if (d > 0.9995) { const q = a.map((v, k) => v + (s * b[k] - v) * t); const n = Math.hypot(...q); return q.map(v => v / n) }
@@ -37,8 +51,13 @@ function slerp(a: number[], b: number[], t: number): number[] {
 export class LiveDraw {
   byDone: Answer[]; fps: number; trail: (number[] | null)[] = []; trailT = -1
   ws = 0.25                                           // seconds either side in a fit
+  sigma = 0                                           // > 0: positions are gauss() means of this σ (s) instead of fits
   taper = false
   constructor(answers: Answer[], fps: number) { this.byDone = answers.slice().sort((a, b) => a.done - b.done); this.fps = fps }
+  at(got: Answer[], k: number): number[] | null {     // the position at frame k from the answers in hand (frame order)
+    if (this.sigma > 0) return gauss(got, k, this.sigma * this.fps, RUN_GAP * this.fps)
+    const W = this.ws * this.fps; return fit(got.filter(a => Math.abs(a.i - k) <= W), k, W, this.taper)
+  }
   arrived(t: number): Answer[] {                      // answers finished by time t, in frame order
     let lo = 0, hi = this.byDone.length
     while (lo < hi) { const m = (lo + hi) >> 1; if (this.byDone[m].done <= t) lo = m + 1; else hi = m }
@@ -56,8 +75,10 @@ export class LiveDraw {
     const j = Math.floor((t - delay) * this.fps + 1e-3)
     let before: Answer | null = null, after: Answer | null = null
     for (const a of got) { if (a.i <= j) before = a; if (a.i >= j && !after) after = a }
-    if (before && after && after.i - before.i <= 2 * W) {
-      const pos = fit(got, j, W, this.taper) ?? before.pos, u = after.i === before.i ? 0 : (j - before.i) / (after.i - before.i)
+    if (before && after && after.i - before.i <= (this.sigma > 0 ? RUN_GAP * this.fps : 2 * W)) {
+      // the mean is taken at the exact time, not the frame it falls in: at the frame the dot moved in 30 Hz steps (0.7 m
+      // a step at 20 m/s), which showed on a 60-120 Hz phone screen as jumps
+      const pos = (this.sigma > 0 ? gauss(got, (t - delay) * this.fps, this.sigma * this.fps, RUN_GAP * this.fps) : this.at(got, j)) ?? before.pos, u = after.i === before.i ? 0 : (j - before.i) / (after.i - before.i)
       return { pos, quat: slerp(before.quat, after.quat, u), state: 'interp', frame: j }
     }
     // no answer after frame j yet, or a gap around it: hold at the answer before j (never at one ahead of it)
@@ -67,9 +88,9 @@ export class LiveDraw {
   trailAt(t: number, upto: number, settle = 0.5): (number[] | null)[] {
     if (t < this.trailT) this.trail = []              // seeked back: start again
     this.trailT = t
-    const got = this.arrived(t), from = Math.max(0, upto - Math.ceil(settle * this.fps)), W = this.ws * this.fps
-    for (let k = this.trail.length; k < from; k++) this.trail[k] = fit(got.filter(a => Math.abs(a.i - k) <= W), k, W, this.taper)
-    for (let k = from; k <= upto; k++) this.trail[k] = fit(got.filter(a => Math.abs(a.i - k) <= W), k, W, this.taper)
+    const got = this.arrived(t), from = Math.max(0, upto - Math.ceil(settle * this.fps))
+    for (let k = this.trail.length; k < from; k++) this.trail[k] = this.at(got, k)
+    for (let k = from; k <= upto; k++) this.trail[k] = this.at(got, k)
     this.trail.length = upto + 1
     return this.trail
   }

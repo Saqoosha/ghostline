@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g'><stop offset='0' stop-color='%23ff2e63'/><stop offset='.33' stop-color='%23f59e0b'/><stop offset='.67' stop-color='%2312b76a'/><stop offset='1' stop-color='%232f6bff'/></linearGradient></defs><rect width='32' height='32' rx='7' fill='%23f3f4f6'/><rect x='5' y='13' width='22' height='6' rx='3' fill='url%28%23g%29'/></svg>" />
+    <title>ghostline</title>
+    <style>
+      main { max-width: 880px; margin: 0 auto; padding: 32px 24px 64px; }
+      header { display: flex; align-items: baseline; gap: 20px; }
+      header .grow { flex: 1; }
+      h1 { margin: 40px 0 28px; font: 200 30px/1.2 var(--sans); letter-spacing: .06em; }
+      .now { display: grid; grid-template-columns: 110px auto 1fr auto; align-items: baseline; gap: 18px; padding: 22px 4px; border-top: 1.5px solid var(--hair); border-bottom: 1px solid var(--faint); text-decoration: none; color: var(--ink); }
+      .now b { font: 300 18px var(--sans); letter-spacing: .08em; }
+      .now .who { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .now .go { font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); }
+      .now.on .go { color: var(--alarm); }
+      .now:hover .go { color: var(--ink); }
+      h2 { margin: 40px 0 8px; font: 400 11px var(--mono); letter-spacing: .2em; color: var(--dim); }
+      ol { list-style: none; margin: 0; padding: 0; }
+      #now[hidden] { display: none; }
+      .now.cmp { margin-top: 12px; border-top: 1px solid var(--faint); }
+      li a { display: grid; grid-template-columns: 70px 250px 1fr; gap: 18px; align-items: baseline; padding: 11px 4px; border-bottom: 1px solid var(--faint); text-decoration: none; color: var(--ink); }
+      li a:hover { background: rgba(12, 15, 20, .04); }
+      li .t { font: 400 12px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
+      li b { font: 400 13px var(--sans); letter-spacing: .08em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      li .who { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #empty, #fail { color: var(--dim); padding: 12px 4px; } #fail { color: var(--alarm); }
+      footer { margin-top: 48px; font-size: 11px; color: var(--dim); }
+      @media (max-width: 720px) { .now { grid-template-columns: auto 1fr; } .now .who, .now .go { grid-column: 1 / -1; } li a { grid-template-columns: 56px 1fr; } li .who { grid-column: 2; } li b { white-space: normal; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header><a class="mark" href="/"><span>ghost</span><i></i><span>line</span></a><span class="grow"></span></header>
+      <h1 id="title"></h1>
+      <div id="now"></div>
+      <a class="now cmp" href="compare.html"><span class="live">COMPARE</span><b data-en="Compare flights">飛行を比べる</b><span class="who" data-en="Any pilots from any heats, replayed side by side from the start gate">ヒートや選手をまたいで、スタートのゲートの通過にそろえて再生</span><span class="go" data-en="Compare →">比べる →</span></a>
+      <div id="list"></div>
+      <div id="empty" hidden data-en="No heat has finished yet">まだ<wbr>終わった<wbr>ヒートは<wbr>ありません</div>
+      <div id="fail" hidden data-en="Could not load the heat list (retrying every 10 s)">ヒートの一覧を<wbr>読み込めませんでした<wbr>（10 秒ごとに<wbr>読み直します）</div>
+      <footer data-en="Positions are estimated from each drone's DVR video and are not official results.">位置は<wbr>各機の DVR 映像から<wbr>推定したもので、<wbr>公式の記録では<wbr>ありません。</footer>
+    </main>
+    <script type="module" src="/src/event.ts"></script>
+  </body>
+</html>

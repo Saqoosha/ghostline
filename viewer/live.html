@@ -3,31 +3,61 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g'><stop offset='0' stop-color='%23ff2e63'/><stop offset='.33' stop-color='%23f59e0b'/><stop offset='.67' stop-color='%2312b76a'/><stop offset='1' stop-color='%232f6bff'/></linearGradient></defs><rect width='32' height='32' rx='7' fill='%23f3f4f6'/><rect x='5' y='13' width='22' height='6' rx='3' fill='url%28%23g%29'/></svg>" />
     <title>ghostline live</title>
     <style>
-      :root { --ink: #16181d; --muted: #6b7180; --line: #d9dce3; --panel: rgba(255, 255, 255, 0.9); --bg: #e9ebef; }
+      /* the control page's look (tools/dvr/rt_control.html): paper, hairlines and thin type, no rounded cards; the name tags below stay as mgp.html's */
+      :root { --paper: #f3f4f6; --ink: #0c0f14; --dim: rgba(12, 15, 20, .58); --faint: rgba(12, 15, 20, .2); --spirit: #5b4bff; --alarm: #d1301f; --amber: #f59e0b;
+              --sans: "Helvetica Neue", -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
       * { box-sizing: border-box; }
-      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 14px/1.4 ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
-      #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
-      #panel { position: fixed; left: 12px; top: 12px; z-index: 2; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px;
-               display: grid; gap: 6px; font: 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
-      #panel .row { display: flex; gap: 10px; align-items: center; white-space: pre; }
-      #state { font: 700 13px ui-sans-serif, system-ui, sans-serif; letter-spacing: .03em; padding: 2px 8px; border-radius: 6px; color: #fff; background: #b3261e; min-width: 92px; text-align: center; }
-      #state.ok { background: #0a7d5a; } #state.hold { background: #b06a00; }
-      #panel [hidden] { display: none; } #panel label { display: flex; gap: 6px; align-items: center; } #panel input[type=range] { width: 90px; }
-      #panel button { height: 24px; padding: 0 9px; border: 0; border-radius: 6px; background: var(--ink); color: #fff; font: 600 12px ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
-      #dvr { position: fixed; right: 12px; top: 12px; z-index: 2; width: min(30vw, 440px); aspect-ratio: 4 / 3; overflow: hidden; border-radius: 8px; border: 1px solid var(--line); background: #000; }
+      html, body { margin: 0; height: 100%; background: var(--paper); color: var(--ink); font: 400 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; overflow: hidden; }
+      /* a column: the scene over the lap timeline, which never covers it */
+      body { display: flex; flex-direction: column; }
+      #c { flex: 1; min-height: 0; width: 100%; display: block; }
+      #panel { position: fixed; left: 16px; top: 16px; z-index: 2; background: rgba(243, 244, 246, .86); border-left: 1px solid var(--faint); padding: 10px 16px 12px;
+               display: grid; gap: 8px; font: 400 11px/1.4 var(--mono); letter-spacing: .04em; color: var(--dim); }
+      #panel .row { display: flex; gap: 14px; align-items: center; white-space: pre; }
+      #info { color: var(--ink); }
+      /* the state as the control page's: a dot and the word; tracking breathes in the page's violet */
+      #state { font: 400 12px var(--sans); letter-spacing: .14em; color: var(--ink); display: flex; align-items: center; gap: 9px; min-width: 110px; }
+      #state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--alarm); }
+      #state.hold::before { background: var(--amber); } #state.ok::before { background: var(--spirit); animation: breathe 2.4s ease-in-out infinite; }
+      @keyframes breathe { 50% { opacity: .15; } }
+      #panel [hidden] { display: none; } #panel label { display: flex; gap: 7px; align-items: center; } #panel input[type=range] { width: 90px; margin: 0; accent-color: var(--ink); }
+      #panel input[type=checkbox] { appearance: none; -webkit-appearance: none; width: 12px; height: 12px; margin: 0; border: 1px solid var(--ink); border-radius: 50%; background: transparent; cursor: pointer; }
+      #panel input[type=checkbox]:checked { background: radial-gradient(circle, var(--ink) 0 2.4px, transparent 3px); }
+      #panel button { height: 22px; padding: 0 9px; border: 1px solid var(--faint); border-radius: 3px; background: none; color: var(--ink); font: 400 11px var(--mono); letter-spacing: .04em; cursor: pointer; }
+      #panel button:hover { background: rgba(12, 15, 20, .05); }
+      #panel select { height: 22px; border: 1px solid var(--faint); border-radius: 3px; background: none; color: var(--ink); font: 400 11px var(--mono); }
+      #dvr { position: fixed; right: 16px; top: 16px; z-index: 2; width: min(30vw, 440px); aspect-ratio: 4 / 3; overflow: hidden; border: 1px solid var(--faint); background: #000; }
       #dvr video { position: absolute; height: 100%; left: 50%; transform: translateX(-50%); }   /* 16:9 capture, the 4:3 picture in its middle */
-      #dvr span { position: absolute; left: 6px; bottom: 4px; color: #fff; font: 11px ui-monospace, Menlo, monospace; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+      #dvr span { position: absolute; left: 6px; bottom: 4px; color: #fff; font: 400 10px var(--mono); letter-spacing: .04em; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+      .tag { position: fixed; z-index: 1; transform: translate(-50%, -135%); pointer-events: none; display: flex; align-items: center; height: calc(22px * var(--ts, 1.3)); font: 800 calc(13px * var(--ts, 1.3)) ui-sans-serif, system-ui, sans-serif; text-transform: uppercase; color: #fff; padding: 0 7px 0 0; border-radius: 3px; white-space: nowrap; background: #030a18; box-shadow: 0 2px 6px rgba(0,0,0,.3); overflow: hidden; }   /* as mgp.html */
+      .tag b { align-self: stretch; display: grid; place-items: center; min-width: calc(20px * var(--ts, 1.3)); padding: 0 calc(6px * var(--ts, 1.3)); margin-right: calc(6px * var(--ts, 1.3)); color: #fff; }
+      #camseg { gap: 6px; } #camseg button.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+      .tag small { font-weight: 700; color: #b9bfcb; margin-left: 6px; }
+      .tag:not(:has(small, .who)) { padding-right: 0; } .tag:not(:has(small, .who)) b { margin-right: 0; }
+      .tag .who { text-transform: none; }
+      /* the lap timeline, as mgp.html's: a row per pilot, the last 100 s ending at the right edge */
+      #timeline { flex: none; background: var(--paper); border-top: 1px solid var(--faint); padding: 4px 28px; }
+      /* always four rows tall (26 px each, at the text size), empty or not: the scene above never changes size */
+      #timeline[hidden] { display: block; visibility: hidden; } #tl { display: block; width: 100%; height: calc(110px * var(--ts, 1.3)); }
+      /* the panel's hide / show (H): a small tab at the corner that stays when the panel is gone */
+      #panel[hidden] { display: none; }
+      #pt { position: fixed; left: 0; top: 16px; z-index: 3; width: 14px; height: 28px; padding: 0; border: 0; border-radius: 0 3px 3px 0; background: rgba(12, 15, 20, .35); color: #fff; font: 400 10px var(--mono); cursor: pointer; }
+      #pt:hover { background: rgba(12, 15, 20, .6); }
     </style>
   </head>
   <body>
     <canvas id="c"></canvas>
+    <button id="pt" title="hide / show the panel (H; ?panel=0 for OBS)">‹</button>
     <div id="panel">
       <div class="row"><span id="state">CONNECTING</span><span id="info"></span></div>
-      <div class="row"><label>trail <input id="dur" type="range" min="0.5" max="60" step="0.5" value="3" /><span id="durv"></span></label><label>smooth <input id="ws" type="range" min="0.1" max="1" step="0.05" value="0.4" /><span id="wsv"></span></label><label>delay <input id="delay" type="range" min="0" max="500" step="10" value="100" /><span id="delayv"></span></label><label title="draw the tracker's revised poses (BA) instead of its raw answers"><input id="ba" type="checkbox" checked /> BA</label><button id="clear">clear</button><button id="resetview">reset view</button></div>
+      <div class="row"><label>trail <input id="dur" type="range" min="0.5" max="60" step="0.5" value="3" /><span id="durv"></span></label><label title="σ of the Gaussian mean (the control page's, which it follows when served from there)">smooth <input id="ws" type="range" min="20" max="500" step="10" value="200" /><span id="wsv"></span></label><label>delay <input id="delay" type="range" min="0" max="500" step="10" value="250" /><span id="delayv"></span></label><label title="the text's size: name tags and lap timeline (?ts= in the URL for OBS)">text <select id="ts"><option value="1">1×</option><option value="1.3" selected>1.3×</option><option value="1.6">1.6×</option><option value="2">2×</option><option value="2.5">2.5×</option><option value="3">3×</option></select></label><label title="the camera's vertical field of view">fov <input id="fov" type="range" min="30" max="110" step="1" value="60" /><span id="fovv"></span></label><label title="the full scan (3M splats, 45 MB) instead of the lite one (0.8M, 12 MB)" hidden><input id="hq" type="checkbox" /> HQ</label><label title="draw the tracker's revised poses (BA) instead of its raw answers"><input id="ba" type="checkbox" checked /> BA</label><label title="the course line (index.json track)"><input id="line" type="checkbox" checked /> line</label><label title="the start gate's crossings and lap times over the last 100 s (index.json track's gate)"><input id="laps" type="checkbox" checked /> laps</label><label title="the run: practice / qualifying (90 s), the fastest attack (1 lap), a race (4 laps, mass start) - ?run=qual|attack|race for OBS">run <select id="run"><option value="qual">90 s</option><option value="attack">1 lap</option><option value="race">4 laps</option></select></label><label title="hide the room's near walls when the camera is outside it" hidden><input id="seein" type="checkbox" checked /> see in</label><button id="clear">clear</button><button id="resetview">reset view</button></div>
+      <div class="row" id="camseg" title="camera (keys 1-3; 4+ follow a pilot)"></div>
       <div class="row" id="replaybar" hidden><button id="play">pause</button><input id="seek" type="range" min="0" max="1" step="0.01" value="0" style="width: 420px" /><span id="clock"></span></div>
     </div>
+    <div id="timeline" hidden><canvas id="tl"></canvas></div>
     <div id="dvr"><video id="video" muted playsinline></video><span id="dvrinfo"></span></div>
     <script type="module" src="/src/livepage.ts"></script>
   </body>

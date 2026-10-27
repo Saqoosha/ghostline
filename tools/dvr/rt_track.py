@@ -30,7 +30,9 @@ env: LIVE (1), NKF (2) keyframes matched per frame, MIN_INL (30), LOST (0.33 s w
      GLUE / XFEAT (unset; TensorRT engines from rt_trt.py to match / find features with instead of PyTorch),
      PNP (poselib; magsac = OpenCV's USAC_MAGSAC, below),
      RENDER (0; 1 = while tracking, match a render of SCENE (.ply) at the prediction instead of keyframes, rt_render.py), RNEAR (1.0 m near plane),
-     RFALL (1: also match keyframes right after a failed try); RCLIP / ROPA / RBATCH / REDGE: see rt_render.py"""
+     RFALL (1: also match keyframes right after a failed try); RCLIP / ROPA / RBATCH / REDGE: see rt_render.py,
+     KFOUT / KF_MIN / KF_STEP / KF_ROT / KF_WINDOW / RKF / MAPWATCH (the day's frames grown into the map between heats, below),
+     MEMLOG (0; 1 = the GPU memory in the log after each load, at a map swap and every minute)"""
 import os
 # One BLAS thread. numpy's matrices here are small (the BA's system is about 150 x 150), and OpenBLAS otherwise starts a
 # thread per core for them: on a 32-core machine that took the tracker from 54 to 33 Hz with BA on, the solve itself 0.2 ms.
@@ -65,6 +67,16 @@ MAPK = int(E("MAPK", 0))                            # keypoints per keyframe use
 # it was last seen. 0 = everywhere (as at the start)
 REACH = E("REACH", 0)
 NEAR, NEAR_K, NEAR_ANG = int(E("NEAR", 0)), int(E("NEAR_K", 4)), E("NEAR_ANG", 100)
+# The day's light (docs/fdf-2026-10-17-field-test.ja.md): a morning scan matched in the late afternoon loses points. KFOUT=<dir>
+# writes the frames it tracked well (how "track", KF_MIN inliers or more; one per KF_STEP m / KF_ROT deg per cell) - the
+# matcher's own keypoints and descriptors, the pose, the global descriptor - for rt_map_grow.py, which lifts them to 3D with
+# the scan's depth and appends them to a map as real keyframes. RKF=1 (with RENDER) then also matches the nearest real
+# keyframe (within 4 m / 30 deg) while tracking, so such a frame meets a picture taken in the same light as well as the render. Only frames from the
+# heats just before help: 14-15h frames made the 16:44 heats worse, 16:30s frames made them better. KF_WINDOW (s): a place
+# gets a new frame once its last one is older than this (0 = never). MAPWATCH=<file>: the file names the map to use; when
+# what it names changes the map is loaded on a thread and swapped in between cycles (rt_control.py grows one between heats)
+KFOUT, KF_MIN, KF_STEP, KF_ROT, RKF = os.environ.get("KFOUT"), int(E("KF_MIN", 200)), E("KF_STEP", 1.0), E("KF_ROT", 20), int(E("RKF", 0))
+KF_WINDOW, MAPWATCH = E("KF_WINDOW", 0), os.environ.get("MAPWATCH")
 FLOW, FLOW_EVERY, FLOW_RESEED, FLOW_MIN = int(E("FLOW", 0)), int(E("FLOW_EVERY", 8)), int(E("FLOW_RESEED", 60)), int(E("FLOW_MIN", 30))
 GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30), E("SEND_T0", 0), os.environ.get("FRAME_CODE")
 # Two lenses (a live cell's camera field "a.json+b.json"): the HDZero Nano 90 flies with its stock lens or the upgrade one, and the
@@ -77,7 +89,24 @@ GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30),
 # whose mean inliers are at least 1.3x the other's and 30 or more (an unsolved frame counts 0) - otherwise it stays and tries
 # later. Later means: the last 45 frames averaged under LENS_LOW, at most every LENS_AGAIN s, doubling (up to 320 s) when the trial
 # changes nothing. Not solving for 3 s' worth of frames after the picture came on: the other definition gets its turn.
+# One trial is 0.4 s of flight and scores where the drone happens to be: the same cell flipped 132 / 15, 61 / 184, 180 / 40 within
+# 4 minutes, and two runs of the 10/25 recordings ended on opposite lenses in 77 of 205 cells (71% solved; the better of the two
+# in each cell, 77%). So the decision is the mean over the last LENS_KEEP trials, and trials go on every LENS_LEARN s until
+# LENS_SURE of them agree. With LENS_PILOTS (the control page's /api/pilots) the trials are the pilot's, kept over heats in
+# LENS_MEM: a pilot already sure starts the next heat on that lens and is tried only when the inliers drop. Without a name, a cell's
+# trials begin anew each heat.
 LENS_N, LENS_SKIP, LENS_LOW, LENS_AGAIN = int(E("LENS_N", 12)), int(E("LENS_SKIP", 20)), E("LENS_LOW", 100), E("LENS_AGAIN", 20)
+LENS_KEEP, LENS_SURE, LENS_LEARN, LENS_PILOTS, LENS_MEM = int(E("LENS_KEEP", 8)), int(E("LENS_SURE", 3)), E("LENS_LEARN", 20), os.environ.get("LENS_PILOTS"), os.environ.get("LENS_MEM")
+pilot_names = {}                                     # cell -> pilot, from LENS_PILOTS
+try: lens_mem = json.load(open(LENS_MEM)) if LENS_MEM else {}   # pilot -> trials, each the mean inliers per lens
+except (OSError, ValueError): lens_mem = {}
+def lens_save():
+    with open(LENS_MEM + ".tmp", "w") as f: json.dump(lens_mem, f)
+    os.replace(LENS_MEM + ".tmp", LENS_MEM)
+def lens_pick(trials, need=LENS_SURE):              # the best lens over the trials, whether it is clear over `need` or more, the means
+    if not trials: return 0, False, []
+    m = np.mean(trials, axis=0); r = np.argsort(-m)
+    return int(r[0]), len(trials) >= need and m[r[0]] >= 30 and m[r[0]] >= 1.3 * m[r[1]], m.tolist()
 # MAXFPS (0 = all): an NDI source faster than this (the Event VRX sends 60 fps) is thinned to it by its timestamps. Every cycle takes the
 # newest frame, so a 60 fps feed would otherwise be processed at 43-54 Hz per cell for +35% GPU power (three cells 125 -> 172 W) and no
 # better dot (the page draws 100 ms late, interpolated). The caller passes GRID_FPS as the thinned rate (rt_control.py does).
@@ -112,7 +141,19 @@ if PUSH:
 FRESH, KQ, BLEND, TRAIL_L, TRAIL_W = E("FRESH", 0.1), E("KQ", 1e4), E("BLEND", 0.025), E("TRAIL_L", 0.2), E("TRAIL_W", 0.25)
 T = lambda a: torch.tensor(a, dtype=torch.float32, device=dev)
 def sync(): torch.cuda.synchronize() if dev == "cuda" else torch.mps.synchronize() if dev == "mps" else None
+MEMLOG = int(E("MEMLOG", 0))                        # 1: the GPU memory after each load, at a map swap and every minute (what holds the 24 GB)
+def mem(tag):
+    if MEMLOG and dev == "cuda": print(f"mem {tag}: allocated {torch.cuda.memory_allocated() / 2**30:.2f} GB, reserved {torch.cuda.memory_reserved() / 2**30:.2f} GB, "
+                                       f"peak {torch.cuda.max_memory_allocated() / 2**30:.2f} GB", flush=True)
 maps, sources = {}, {}
+def load_map(path, gpu=True):                       # gpu=False: read only; to_gpu() puts it on the device (a swap, in the loop)
+    with np.load(path) as m:
+        mk = MAPK or m["kp"].shape[1]               # XFeat returns the strongest first, so the first MAPK are the best
+        m = dict(K=m["K"], size=[int(x) for x in m["size"]], n=np.minimum(m["n"], mk), kp=m["kp"][:, :mk].astype(np.float32), desc=m["desc"][:, :mk], X=m["X"][:, :mk],
+                 pos=m["pos"], fwd=Rot.from_quat(m["quat"]).as_matrix()[:, :, 2], g=m["g"].astype(np.float32),
+                 real=m["real"].astype(bool) if "real" in m.files else np.zeros(len(m["pos"]), bool))
+    return to_gpu(m) if gpu else m
+def to_gpu(m): return dict(m, kp=T(m["kp"]), desc=torch.tensor(m["desc"], device=dev), g=T(m["g"]))
 import threading, subprocess
 # SIGNAL=1 (live): a cell whose receiver shows no picture - its flat no-signal screen or analog snow (rt_signal.py) - sends no
 # frames to the tracker, and with every cell quiet the loop only waits. On an EventVRX recording the cells had a picture 47% of
@@ -123,6 +164,7 @@ from rt_signal import has_signal
 class GridSource:                                   # one decoded live video; its frames fan out to the cells that use it
     def __init__(self, url):
         self.url, self.cells, self.ended, self.n = url, [], False, 0
+        self.first = None                            # (arrival, frame number) of its first frame: the time line of all its cells
         self.W, self.H = [int(v) for v in GRID.split("x")]
     def start(self):
         if self.url.startswith("ndi://"):           # an NDI source on the LAN (the EventVRX output at the venue), by (part of) its name
@@ -210,10 +252,7 @@ class Stream:
         if self.live:
             url, rect, camj = self.video.split("|"); self.rect = [int(v) for v in rect.split(":")]
             camjs = [c if c.endswith(".json") else c + ".json" for c in camj.split("+")]; self.video = camjs[0][:-5]   # the first one gives the frame size
-        if self.map_npz not in maps:
-            m = np.load(self.map_npz); mk = MAPK or m["kp"].shape[1]   # XFeat returns the strongest first, so the first MAPK are the best
-            maps[self.map_npz] = dict(K=m["K"], size=[int(x) for x in m["size"]], n=np.minimum(m["n"], mk), kp=T(m["kp"][:, :mk]), desc=torch.tensor(m["desc"][:, :mk], device=dev), X=m["X"][:, :mk],
-                                      pos=m["pos"], fwd=Rot.from_quat(m["quat"]).as_matrix()[:, :, 2], g=T(m["g"]))
+        if self.map_npz not in maps: maps[self.map_npz] = load_map(self.map_npz)
         self.m = maps[self.map_npz]; self.K = self.m["K"]; RW, RH = self.m["size"]
         # frames: the pinhole video, at the map's size, with the OSD and the undistortion border masked (as cpr_track.py)
         cam = self.cam = json.load(open(self.video + ".json")); W, H = cam["width"], cam["height"]; self.fps = GRID_FPS if self.live else cam.get("fps", 60)
@@ -222,7 +261,7 @@ class Stream:
         m1, m2 = cv2.fisheye.initUndistortRectifyMap(Kf, np.array(fk["k"]), np.eye(3), Kfull, (W, H), cv2.CV_16SC2)
         osd = np.full((H, W), 255, np.uint8); osd[:82] = 0; osd[632:] = 0
         self.qvalid = T(cv2.resize((cv2.erode(cv2.remap(osd, m1, m2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST)) > 0
-        self.next = 0; self.hist = []; self.recs = []; self.flow = None; self.fails = 0; self.last = None
+        self.next = 0; self.hist = []; self.recs = []; self.flow = None; self.fails = 0; self.last = None; self.kfs = []   # kfs: (pos, fwd) written (KFOUT)
         if self.live:                               # cell pixel for every pinhole pixel of the map's size: 4:3 fisheye stretched to the cell
             x0, y0, w, h = self.rect; Km = self.K; self.lenses = []   # per camera definition: (the cell's map, the valid mask, its name)
             for cj in camjs:
@@ -233,6 +272,7 @@ class Stream:
                 qv = T(cv2.resize((cv2.erode(cv2.remap(osd, a1, a2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST)).bool()
                 self.lenses.append(((mx * w / W + x0, my * h / H + y0), qv, os.path.basename(cj)[:-5]))
             self.trial, self.want, self.waited, self.okrun, self.lens_t, self.again, self.recent = None, len(camjs) > 1, 0, 0, -1e9, LENS_AGAIN, collections.deque(maxlen=45)
+            self.cell, self.who, self.trials = os.path.basename(self.prefix), False, []   # who: the pilot the trials are for (False: not looked up this heat)
             self.set_lens(0)
             self.frames, self.arrive, self.arrive_wall = {0: np.zeros((RH, RW, 3), np.uint8)}, {}, {}; self.N = 1; self.signal, self.flip = None, 0   # a blank frame for the warm-up
             src = sources.setdefault(url, GridSource(url)); src.cells.append(self); self.src = src
@@ -245,18 +285,22 @@ class Stream:
         self.N = len(self.frames)
         print(f"{self.prefix}: {self.N} frames at {self.fps} fps, {len(self.m['pos'])} keyframes", flush=True)
     def push(self, n, full, t, tw):                  # reader thread: a new frame of the source
+        if self.src.first is None: self.src.first = (t, n)
         if SIGNAL:                                  # no picture in the cell: no frame, so a quiet cell costs only this test
             on = has_signal(full[self.rect[1]:self.rect[1] + self.rect[3], self.rect[0]:self.rect[0] + self.rect[2]])
             self.flip = self.flip + 1 if on != self.signal else 0   # logged once it has held 0.5 s; a weak signal flickers
             if self.flip >= self.fps / 2:
                 self.signal, self.flip = on, 0; print(f"{self.prefix}: signal {'on' if on else 'off'}", flush=True)
                 if len(self.lenses) > 1:                # a new heat: the pilot in this cell may have changed; a trial does not outlive the picture
-                    if on: self.want, self.waited, self.again, self.lens_t, self.okrun = True, 0, LENS_AGAIN, -1e9, 0; self.recent.clear()
+                    if on: self.want, self.waited, self.again, self.lens_t, self.okrun, self.who = True, 0, LENS_AGAIN, -1e9, 0, False; self.recent.clear()
                     elif self.trial is not None: self.set_lens(self.trial["was"]); self.trial = None
             if not on: return
         mx, my = self.cellmap
         self.frames[n] = cv2.cvtColor(cv2.remap(full, mx, my, cv2.INTER_LINEAR), cv2.COLOR_BGR2RGB)
-        if not self.arrive: self.t_base = t - n / self.fps   # when frame 0 would have arrived, even if it was lost
+        # when frame 0 would have arrived, even if it was lost - from the source's first frame, not this cell's first picture:
+        # the capture runs a little off its nominal fps, and cells whose pictures began minutes apart got time lines seconds
+        # apart (FDF 2026-10-17: R4 and R5 1.265 s, F1 and R2 38.6 s, for the same frames)
+        if not self.arrive: t0, n0 = self.src.first; self.t_base = t0 - n0 / self.fps
         self.arrive[n], self.arrive_wall[n] = t, tw; self.N = n + 1
         for k in [k for k in self.frames if k < n - 30]: del self.frames[k]   # codes skip on drops; 30 outlasts a slow cycle
     def set_lens(self, j): self.li = j; self.cellmap, self.qvalid = self.lenses[j][:2]
@@ -265,11 +309,19 @@ class Stream:
     def lens_step(self, inl):                        # main thread, after every processed frame: its inliers, 0 when it was not solved
         t = self.trial                                   # read once: the reader thread ends a trial when the picture goes
         if t is None:
+            who = pilot_names.get(self.cell) or None
+            if self.who is False or who != self.who:    # a new heat or a new name: that pilot's trials (none without a name)
+                self.who = who; self.trials = lens_mem.setdefault(who, []) if who else []
+                best, sure, m = lens_pick(self.trials)
+                if sure:
+                    self.want = False
+                    if best != self.li: self.set_lens(best)
+                    print(f"{self.prefix}: lens {self.lenses[best][2]} for {who} ({len(self.trials)} trials, {' / '.join(f'{x:.0f}' for x in m)} inliers)", flush=True)
             self.recent.append(inl); self.okrun = self.okrun + 1 if inl else 0
             if self.want and time.perf_counter() - self.lens_t > self.again:   # (not while a trial is cooling down)
                 self.waited += 1
                 if self.okrun >= 5: self.trial, self.want = dict(skip=0, was=self.li, got=[[] for _ in self.lenses], plan=self.lens_plan()), False
-                elif self.waited > 3 * self.fps: self.set_lens((self.li + 1) % len(self.lenses)); self.waited = 0
+                elif self.waited > 3 * self.fps and not lens_pick(self.trials)[1]: self.set_lens((self.li + 1) % len(self.lenses)); self.waited = 0
             elif time.perf_counter() - self.lens_t > self.again and len(self.recent) == self.recent.maxlen and np.mean(self.recent) < LENS_LOW:
                 self.trial = dict(skip=0, was=self.li, got=[[] for _ in self.lenses], plan=self.lens_plan())
             return
@@ -278,21 +330,28 @@ class Stream:
         if t["plan"][0][1] > 0 or self.trial is not t: return   # (ended by the reader meanwhile: it has put the lens back)
         t["plan"].pop(0)
         if t["plan"]: self.set_lens(t["plan"][0][0]); t["skip"] = LENS_SKIP; return
-        mean = [float(np.mean(g)) for g in t["got"]]; rank = sorted(range(len(mean)), key=mean.__getitem__, reverse=True); best = rank[0]
-        shown = ' / '.join(f'{m:.0f}' for m in mean); self.trial, self.lens_t = None, time.perf_counter(); self.recent.clear()
-        if mean[best] < 30 or mean[best] < 1.3 * mean[rank[1]]:   # nothing solved, or too close to call (76 / 84 once picked the wrong one): stay, try again once tracking
+        mean = [float(np.mean(g)) for g in t["got"]]; self.trial, self.lens_t = None, time.perf_counter(); self.recent.clear()
+        if max(mean) >= 30:                             # a trial that solved nothing (the track was lost) says nothing about the lens
+            self.trials.append(mean); del self.trials[:-LENS_KEEP]
+            if self.who and LENS_MEM: lens_save()
+        best, sure, m = lens_pick(self.trials)
+        shown = f"{' / '.join(f'{x:.0f}' for x in mean)} inliers; {len(self.trials)} trials{f' of {self.who}' if self.who else ''}: {' / '.join(f'{x:.0f}' for x in m)}"
+        if not lens_pick(self.trials, 1)[1]:            # nothing solved, or too close to call (76 / 84 once picked the wrong one): stay, try again once tracking
             if self.li != t["was"]: self.set_lens(t["was"])
-            self.again = min(max(5, self.again) * 2, 320); self.want, self.waited = True, 0   # again, once tracking and after the cool-down
-            print(f"{self.prefix}: lens? ({shown} inliers), stays {self.lenses[self.li][2]}", flush=True); return
-        self.again = LENS_AGAIN if best != t["was"] else min(self.again * 2, 320)
+            self.again = LENS_LEARN if len(self.trials) < LENS_KEEP else min(max(5, self.again) * 2, 320); self.want, self.waited = True, 0   # again, once tracking and after the cool-down
+            print(f"{self.prefix}: lens? ({shown}), stays {self.lenses[self.li][2]}", flush=True); return
+        # not sure yet: tried again every LENS_LEARN s; sure, the cool-down doubles while the trials keep agreeing
+        self.again = LENS_LEARN if not sure else min(self.again * 2, 320) if best == t["was"] else LENS_AGAIN; self.want, self.waited = not sure, 0
         if best != self.li: self.set_lens(best)
-        print(f"{self.prefix}: lens {self.lenses[best][2]} ({shown} inliers)", flush=True)
-    def nearest(self, R, p, n=None, max_ang=45, per_deg=15):   # keyframes near the predicted pose, looking about the same way
+        print(f"{self.prefix}: lens {self.lenses[best][2]} ({shown}{'' if sure else ', not sure yet'})", flush=True)
+    def nearest(self, R, p, n=None, max_ang=45, per_deg=15, real=False):   # keyframes near the predicted pose, looking about the same way
         d = np.linalg.norm(self.m["pos"] - p, axis=1); ang = np.degrees(np.arccos(np.clip(self.m["fwd"] @ R.as_matrix()[:, 2], -1, 1)))
         score = d / 1.5 + ang / per_deg; score[(d > 12) | (ang > max_ang)] = np.inf
+        if real: score[~self.m["real"] | (d > 4) | (ang > 30)] = np.inf   # RKF: only a real keyframe close enough to overlap
         return [int(k) for k in np.argsort(score)[:n or NKF] if np.isfinite(score[k])]
 streams = [Stream(s) for s in sys.argv[1:]]; RW, RH = streams[0].m["size"]
 assert all(s.m["size"] == [RW, RH] for s in streams), "all maps must share the render size"
+mem(f"maps ({len(maps)})")
 # ---- models
 xfeat = XFeat(top_k=TOPK)
 from modules.lighterglue import LighterGlue; LighterGlue.default_conf_xfeat["mp"] = False   # autocast fp16: d05 solved 1,630 -> 761 frames, not faster
@@ -313,12 +372,15 @@ if os.environ.get("XFEAT"):
     from rt_trt import Trt; xf = Trt(os.environ["XFEAT"])
 if dev != "cuda":                                   # both pick cuda-or-cpu themselves
     xfeat.dev = lg.dev = torch.device(dev); xfeat.net.to(dev); lg.net.to(dev)
+mem("XFeat, LighterGlue")
 dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14").to(dev).eval()
+mem("DINOv2")
 scene = None
 if RENDER:
     assert dev == "cuda" and SCENE, "RENDER needs cuda and SCENE=<the map's .ply>"
     from rt_render import Scene; scene = Scene(SCENE, RW, RH, RNEAR, TOPK, detect)
     scene.views([(Rot.identity(), np.zeros(3))] * len(streams), [s.K for s in streams])   # the first render compiles kernels: not on a tracked frame
+    mem("scene")
 MEAN, STD = T([0.485, 0.456, 0.406])[None, :, None, None], T([0.229, 0.224, 0.225])[None, :, None, None]
 SIZE = T([[RW, RH]])
 def features(batch):                                # [(stream, frame)] -> per frame (keypoints, descriptors[, mask]), and the tensor
@@ -402,10 +464,13 @@ def smooth(win):
     M = np.zeros((N, N)); Mv = M.reshape(n, 6, n, 6); k = np.arange(n); Mv[k, :, k, :] = Hs
     rhs = np.zeros((n, 6)); rhs[:] = np.einsum("nij,nj->ni", Hs[:, :, 3:], Pm)
     if n >= 3:
-        h1, h2 = t[1:-1] - t[:-2], t[2:] - t[1:-1]; hm = (h1 + h2) / 2; ok = (h1 > 0) & (h2 > 0) & (h1 <= 0.3) & (h2 <= 0.3)
+        h1, h2 = t[1:-1] - t[:-2], t[2:] - t[1:-1]; ok = (h1 > 0) & (h2 > 0) & (h1 <= 0.3) & (h2 <= 0.3)
+        # two answers at the same time (a 0 s step) are not tied either; the step is set to 1 before dividing, or its inf
+        # times ok's 0 is NaN and the solve fails (the tracker died on it: JDL R7 2026-10-24 replay, 13:40 heat)
+        h1, h2, dt = np.where(ok, h1, 1.0), np.where(ok, h2, 1.0), t[1:] - t[:-1]; dt = np.where(dt > 0, dt, 1.0); hm = (h1 + h2) / 2
         c = np.stack([1 / h1, -1 / h1 - 1 / h2, 1 / h2], 1) / hm[:, None] * ok[:, None]            # (n-2, 3): second difference over uneven steps
         Rrel = np.einsum("nji,njk->nik", Rm[:-1], Rm[1:])                                          # R_k^T R_{k+1}
-        w = Rot.from_matrix(Rrel).as_rotvec() / (t[1:] - t[:-1])[:, None]
+        w = Rot.from_matrix(Rrel).as_rotvec() / dt[:, None]
         e = (w[1:] - w[:-1]) / hm[:, None] / BA_ALPHA * ok[:, None]                                # angular acceleration in answer k's axes
         ne = np.linalg.norm(e, axis=1); sw = np.where(ne > 3.0, np.sqrt(3.0 / np.maximum(ne, 1e-12)), 1.0)   # Huber at 3 sigma
         m = n - 2; J = np.zeros((m, 6, n, 6)); r = np.zeros((m, 6)); j = np.arange(m); I3 = np.eye(3)
@@ -416,8 +481,16 @@ def smooth(win):
         r[:, :3] = e * sw[:, None]
         for a in range(3): J[j, 3:, j + a, 3:] = (c[:, a] / BA_ACC)[:, None, None] * I3            # linear acceleration (residual 0 at the unknowns)
         Jm = J.reshape(6 * m, N); M += Jm.T @ Jm; rhs -= (Jm.T @ r.reshape(-1)).reshape(n, 6)
-    x = np.linalg.solve(M + 1e-9 * np.eye(N), rhs.reshape(-1)).reshape(n, 6)
+    # a window the solve cannot take goes out as solved, unsmoothed: the tracker died on "Singular matrix" here after 3.9 h of
+    # the JDL R7 10/25 day replayed (2026-10-27; what made it singular is not known, the answers went with the crash)
+    try: x = np.linalg.solve(M + 1e-9 * np.eye(N), rhs.reshape(-1)).reshape(n, 6)
+    except np.linalg.LinAlgError: x = None
+    if x is None or not np.isfinite(x).all():
+        smooth.skipped += 1
+        if smooth.skipped in (1, 10, 100, 1000): print(f"BA: {smooth.skipped} window(s) left unsmoothed (the solve failed)", flush=True)
+        return Rot.from_matrix(Rm).as_quat(), Pm
     return (Rot.from_matrix(Rm) * Rot.from_rotvec(x[:, :3])).as_quat(), x[:, 3:]
+smooth.skipped = 0
 def predict(hist, i):                               # constant velocity from the last few solved frames (frame, Rot, pos)
     if len(hist) < 2: return hist[-1][1], hist[-1][2]
     fi = np.array([h[0] for h in hist], float); vel = np.polyfit(fi, np.array([h[2] for h in hist]), 1)[0]
@@ -452,7 +525,7 @@ def middle(c):                                      # plan from the answers so f
             pred = predict(s.hist, i)
             # with RENDER the render at the prediction replaces the keyframes, except right after a failed try, when the keyframes are
             # matched too: a bad prediction renders a view that barely overlaps the frame, and the keyframes' wider pick still finds it
-            ks = [] if scene and not (s.fails and RFALL) else s.nearest(*pred, NEAR_K, NEAR_ANG, 30) if NEAR and s.fails else s.nearest(*pred)
+            ks = (s.nearest(*pred, 1, real=True) if RKF else []) if scene and not (s.fails and RFALL) else s.nearest(*pred, NEAR_K, NEAR_ANG, 30) if NEAR and s.fails else s.nearest(*pred)
             plan.append(("track", pred, ks, s.hist[-1][0]))
         else: plan.append(("reloc", None, None, None)); lost.append(b)
     tr = [b for b, p in enumerate(plan) if p[0] == "track"] if scene else []
@@ -507,6 +580,7 @@ def solve(c, b):                                    # CPU: PnP for one stream ->
         if r and (best is None or r[2] > best[0][2]): best = (r, uv, X)
     return (best[0], "reloc", time.perf_counter(), carry(s, i, best[1], best[2], best[0], 0)) if best and best[0][2] >= RMIN else (None, None, time.perf_counter(), "drop")
 def land(c, out, t0, clock0):                       # apply the answers to the streams and record them
+    global KFOUT
     for b, ((s, i), (r, how, tf, fs)) in enumerate(zip(c["batch"], out)):
         done = (tf - s.t_base) if s.live else clock0 + (tf - t0)   # live: on the cell's own time line
         s.flow = None if fs == "drop" else fs if fs is not None else s.flow
@@ -522,12 +596,26 @@ def land(c, out, t0, clock0):                       # apply the answers to the s
             if len(s.win) >= 3:
                 qs, ps = smooth(s.win); win = {"win": [[w[1], *p_, *q_] for w, p_, q_ in zip(s.win, np.round(ps, 4).tolist(), np.round(qs, 5).tolist())]}
         s.recs.append(dict(i=i, done=done, plan=c["plan"][b][0], **lat, **win, **(dict(pos=r[1].tolist(), quat=r[0].as_quat().tolist(), inl=int(r[2]), how=how, **({"H": [float(f"{v:.6g}") for v in r[4][np.triu_indices(6)]]} if INFO and r[4] is not None else {})) if r else {"how": "none"})))
+        if KFOUT and r is not None and how == "track" and r[2] >= KF_MIN and c["q"][b] is not None:
+            try: keep_kf(s, i, r, c["q"][b], c["x"][c["row"][b]])
+            except Exception as e: KFOUT = None; print(f"KFOUT off: {type(e).__name__}: {e}", flush=True)   # a side output must not end the run
         if s.live and len(s.lenses) > 1: s.recs[-1]["lens"] = s.li; s.lens_step(int(r[2]) if r is not None else 0)
         if subs:
             m = json.dumps(dict(stream=os.path.basename(s.prefix), fps=s.fps, **s.recs[-1]))
             for q in list(subs):
                 if not q.full(): q.put_nowait(m)
     s_ = {k: c[k] * 1000 for k in ("feat", "match", "rend", "glue") if k in c}; cycles.append(dict(n=len(c["batch"]), pairs=c["pairs"], **s_))
+def keep_kf(s, i, r, q, img):                       # KFOUT: one tracked frame as a candidate real keyframe (rt_map_grow.py lifts it)
+    f, now = r[0].as_matrix()[:, 2], time.time()
+    if KF_WINDOW: s.kfs = [k for k in s.kfs if now - k[2] < KF_WINDOW]
+    if any(np.linalg.norm(r[1] - p) < KF_STEP and f @ g > np.cos(np.radians(KF_ROT)) for p, g, _ in s.kfs): return
+    s.kfs.append((r[1], f, now)); kp, d = (q[0][q[2]], q[1][q[2]]) if len(q) == 3 else q
+    with torch.no_grad(): g = torch.nn.functional.normalize(dino((torch.nn.functional.interpolate(img[None], (168, 224), mode="area") - MEAN) / STD), dim=1)[0]
+    os.makedirs(KFOUT, exist_ok=True)
+    out = f"{KFOUT}/{os.path.basename(s.prefix)}-{now * 1000:.0f}-{i:07d}.npz"
+    with open(out + ".part", "wb") as fh: np.savez(fh, kp=kp.float().cpu().numpy(), desc=d.half().cpu().numpy(), quat=r[0].as_quat(), pos=r[1],
+             g=g.float().cpu().numpy(), K=s.K, inl=int(r[2]), lens=getattr(s, "li", 0))
+    os.replace(out + ".part", out)                  # whole: rt_map_grow.py may read the folder mid-heat
 REAL = any(s.live for s in streams)
 # PACE=1 (recorded video): wait on the wall clock for the next frame instead of jumping to it, so the GPU idles between
 # frames as it does on a live feed. Without it a recording runs back to back - right for timings, wrong for power.
@@ -552,10 +640,47 @@ if REAL:                                            # the warm-up's blank frame 
     print("listening", flush=True)
 else: print("tracking", flush=True)
 cycles.clear(); clock, t_all, pending, steps = 0.0, time.time(), None, []
+swap, swap_lock = [], threading.Lock()             # MAPWATCH: (path, map) loaded on the watcher's thread, put in by the loop
+def mapwatch():
+    cur = streams[0].map_npz
+    while True:
+        time.sleep(2)
+        try: want = open(MAPWATCH).read().strip()
+        except OSError: continue
+        if not want or want == cur: continue
+        try:
+            m = load_map(want, gpu=False); cur = want   # read here, onto the GPU in the loop: never three maps there at once
+            if m["size"] != [RW, RH] or not np.allclose(m["K"], streams[0].K): print(f"map {want}: not the running map's camera, kept the old one", flush=True); continue
+            with swap_lock: swap.append((want, m))
+        except Exception as e: print(f"map {want}: {type(e).__name__}: {e}", flush=True); cur = want   # tried once; a new name tries again
+if MAPWATCH: threading.Thread(target=mapwatch, daemon=True).start()
+def pilotwatch():                                   # LENS_PILOTS: the names every 3 s; none while the heat manager is not answering
+    import urllib.request
+    while True:
+        try:
+            with urllib.request.urlopen(LENS_PILOTS, timeout=2) as f: r = json.loads(f.read(65536)) or {}
+            names = {} if r.get("stale") else {c: n for c, n in (r.get("cells") or {}).items() if n}
+        except Exception: names = {}
+        if names != pilot_names: pilot_names.clear(); pilot_names.update(names)
+        time.sleep(3)
+if LENS_PILOTS: threading.Thread(target=pilotwatch, daemon=True).start()
+mem.last = 0.0
 def loop():
   global clock, pending
   while True:
       t0, clock0 = time.perf_counter(), clock
+      if MEMLOG and t0 - mem.last > 60: mem.last = t0; mem("running")
+      if swap:                                        # between cycles: the matches in flight already hold their points, not map indices
+          with swap_lock: path, m = swap[-1]; swap.clear()   # only the newest: an older one left behind would swap back
+          # the new map onto the GPU, then the old one let go - the start's one in maps too, which was kept for good (with the
+          # running one and the one loading, three maps of 3.4 GB at 13k keyframes). Two only for the moment of the swap: the
+          # streams are read by other threads, so they never point at no map
+          m = to_gpu(m)
+          for s in streams: s.m, s.map_npz = m, path
+          maps.clear(); maps[path] = m
+          if dev == "cuda": torch.cuda.empty_cache()
+          print(f"map {path}: {len(m['pos'])} keyframes, {int(m['real'].sum())} real", flush=True)
+          mem(f"map swap ({len(maps)} cached)")
       futs = [pool.submit(solve, pending, b) for b in range(len(pending["batch"]))] if pending else None
       batch, live = pick(clock)
       if not batch and not futs:
@@ -630,11 +755,16 @@ def finish(s):
     if sol:
         fi = np.array([r["i"] for r in sol]); dn = np.array([r["done"] if LIVE else r["i"] / fps for r in sol]); AP = np.array([r["pos"] for r in sol])
         wt = np.sqrt(np.minimum([r["inl"] for r in sol], 400) / 200) / np.array([FLOW_SIG if r["how"] == "flow" else 1 for r in sol]); L, Wf = TRAIL_L * fps, TRAIL_W * fps
+        # only the answers within 2 windows of j can count (one farther is a gap over 2 windows: no trail there), so each
+        # frame looks at a slice found by bisection instead of every answer (JDL R7 10/25, a 6.7 h run: 4 min a cell -> seconds)
+        o = np.argsort(fi, kind="stable"); fi, dn, AP, wt, sol = fi[o], dn[o], AP[o], wt[o], [sol[k] for k in o]
+        lo, hi = np.searchsorted(fi, np.arange(N) - 2 * Wf, "left"), np.searchsorted(fi, np.arange(N) + 2 * Wf, "right")
         for j in range(N):
-            got = dn <= (j + L) / fps + 1e-9; m = got & (np.abs(fi - j) <= Wf)
-            ga = np.nonzero(got & (fi <= j))[0]; gb = np.nonzero(got & (fi >= j))[0]   # only answers that have arrived by then
+            s0, s1 = lo[j], hi[j]; f = fi[s0:s1]
+            got = dn[s0:s1] <= (j + L) / fps + 1e-9; m = got & (np.abs(f - j) <= Wf)
+            ga = np.nonzero(got & (f <= j))[0]; gb = np.nonzero(got & (f >= j))[0]   # only answers that have arrived by then
             if m.sum() < 4 or not len(ga) or not len(gb): trail.append(None); continue
-            a, b = ga[-1], gb[0]
+            a, b = s0 + ga[-1], s0 + gb[0]; m = np.nonzero(m)[0] + s0
             if fi[b] - fi[a] > 2 * Wf: trail.append(None); continue
             p = np.polyfit(fi[m] - j, AP[m], 2, w=wt[m])[-1]
             R = Rot.from_quat(sol[a]["quat"]) if a == b else Slerp([fi[a], fi[b]], Rot.from_quat([sol[a]["quat"], sol[b]["quat"]]))([j])[0]

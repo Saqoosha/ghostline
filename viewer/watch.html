@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g'><stop offset='0' stop-color='%23ff2e63'/><stop offset='.33' stop-color='%23f59e0b'/><stop offset='.67' stop-color='%2312b76a'/><stop offset='1' stop-color='%232f6bff'/></linearGradient></defs><rect width='32' height='32' rx='7' fill='%23f3f4f6'/><rect x='5' y='13' width='22' height='6' rx='3' fill='url%28%23g%29'/></svg>" />
+    <title>ghostline live</title>
+    <style>
+      /* a column, as the venue's 3D page: the scene over the run's progress (aud/progress.ts, always four rows tall), over
+         the footer; the progress never covers the scene. The header stays over the scene */
+      body.stage #c { inset: var(--head, 52px) auto auto 0; width: 100%; height: calc(100% - var(--head, 52px) - var(--foot, 34px) - 118px); }
+      #laps { position: fixed; left: 0; right: 0; bottom: var(--foot, 34px); z-index: 3; height: 118px; padding: 4px 20px; background: var(--paper); border-top: 1px solid var(--faint); }
+      #lapc { display: block; width: 100%; cursor: pointer; }
+      body .note { top: calc(var(--head, 52px) + (100vh - var(--head, 52px) - var(--foot, 34px) - 118px) / 2); transform: translate(-50%, -50%); }   /* the scene's middle */
+      @media (max-width: 720px) { #laps { padding: 4px 16px; } }
+    </style>
+  </head>
+  <body class="stage">
+    <canvas id="c"></canvas>
+    <header class="bar top">
+      <a id="home" class="mark" href="./"><span>ghost</span><i></i><span>line</span></a>
+      <span class="what" id="title"></span>
+      <span class="what" id="heat"></span>
+      <span class="live" id="live">NO HEAT</span>
+      <span class="what" id="load"></span>
+      <span class="grow"></span>
+      <span class="delay" title="配信に合わせて表示を遅らせる（名前・ヒートの切り替えも同じだけ遅れる）" data-en-title="Delay the view to match the broadcast (names and heat changes are delayed too)">DELAY
+        <button class="btn" id="dminus" aria-label="0.5 秒短く" data-en-aria="0.5 s shorter">−</button><output id="dv"></output><button class="btn" id="dplus" aria-label="0.5 秒長く" data-en-aria="0.5 s longer">＋</button>
+        <span class="seg" id="dp"></span></span>
+      <span class="seg" id="cams"></span>
+    </header>
+    <div id="laps"><canvas id="lapc"></canvas></div>
+    <div class="note" id="note" data-en="Connecting…">接続中…</div>
+    <footer class="bar foot">
+      <span data-en="Positions are estimated from each drone's DVR video and are not official results.">位置は<wbr>各機の DVR 映像から<wbr>推定したもので、<wbr>公式の記録では<wbr>ありません。</span>
+      <span class="grow"></span>
+      <a id="prev" hidden></a>
+    </footer>
+    <script type="module" src="/src/watch.ts"></script>
+  </body>
+</html>

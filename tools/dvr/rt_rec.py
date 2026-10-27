@@ -5,13 +5,21 @@ battery; only while it is recorded is its full stream received too, and the fram
 file is a fragmented mp4 and stays one (playable up to the last second if the box loses power; not remuxed at the venue,
 which would copy every file once more - for a browser that seeks it, later: ffmpeg -i x.mp4 -c copy -movflags +faststart y.mp4). The first ~0.5 s of a stretch is lost: the full stream connects after the picture is seen.
 env: REC (1; 0 = off), REC_DIR (rec/ beside this file), REC_FPS (0 = the source's own rate, the Event VRX's 60; 30 thins it),
-     REC_RATE (16M: about 7 GB an hour), REC_HOLD (5 s), REC_ENC (h264_nvenc; libx264 without the GPU)"""
-import glob, hashlib, json, os, re, subprocess, threading, time, traceback
+     REC_RATE (16M: about 7 GB an hour), REC_HOLD (5 s), REC_ENC (h264_nvenc; libx264 without the GPU),
+     REC_SKIP (sources whose name ends so are not recorded: "(ghostline 3D)", rt_ndiview.py's own picture),
+     REC_STALL (30 s: a source listed but sending no frame this long starts the process again)
+The recorders run as a process of their own (python rt_rec.py, RecProc starts it and starts it again when it ends): a sender
+carrying audio crashed every new NDI receiver in the SDK's audio thread, and froze the control page's own watcher for 74 minutes
+(JDL R7 2026-10-25, NDI SDK 6.1.1). The child writes what the /rec page needs to REC_DIR/.state.json every second."""
+import glob, hashlib, json, os, re, signal, subprocess, sys, threading, time, traceback
 HERE = os.path.dirname(os.path.abspath(__file__)); E = os.environ.get
 REC, REC_DIR, REC_FPS, REC_HOLD, REC_ENC = int(E("REC", 1)), os.path.expanduser(E("REC_DIR", HERE + "/rec")), float(E("REC_FPS", 0)), float(E("REC_HOLD", 5)), E("REC_ENC", "h264_nvenc")
-REC_RATE = E("REC_RATE", "16M")
+REC_RATE, REC_SKIP = E("REC_RATE", "16M"), E("REC_SKIP", "(ghostline 3D)")
+REC_STALL = float(E("REC_STALL", 30))
+REC_MATCH = re.compile(E("REC_MATCH", ""))          # only the sources whose name this matches (a venue's other feeds: PGM, SDI ...); empty = all
 STOPPING = threading.Event()                        # set by stop_all: a picture still on screen must not start a new file
 FILE = re.compile(r"[A-Za-z0-9_.-]+\.mp4")          # what /rec/<file> may serve
+STATE = REC_DIR + "/.state.json"                    # the child's: the files being written and the sources' cells (not *.json: not a recording)
 
 def receiver(highest):
     """a receiver kept for the life of its watcher: connected and disconnected, never dropped. Dropping one leaves its FrameSync
@@ -85,6 +93,7 @@ class Watcher:
     empty (or no frames) for REC_HOLD seconds, or the source leaving, stops it"""
     def __init__(self, finder, name):
         self.finder, self.name, self.writer, self.cells, self.began = finder, name, None, None, 0.0
+        self.seen = None                            # while connected: the last new frame (or the connection) - REC_STALL
         threading.Thread(target=self.run, daemon=True).start()
     def run(self):
         import numpy as np
@@ -93,13 +102,13 @@ class Watcher:
         while True:
             src = next((s for s in self.finder.iter_sources() if s.name == self.name), None)
             if src is None: time.sleep(2); continue
-            rx.set_source(src); last_on, last_ts, seen = 0.0, None, 0.0
+            rx.set_source(src); last_on, last_ts, seen = 0.0, None, 0.0; self.seen = time.time()
             try:
                 while self.name in self.finder.get_source_names():
                     rx.frame_sync.capture_video()
                     ts = vf.get_timestamp_posix() if vf.xres else None
                     if ts and ts != last_ts:
-                        last_ts, seen = ts, time.time(); w, h = vf.get_resolution(); self.cells = cells_on(np.asarray(vf.get_array()).reshape(h, w, 4))
+                        last_ts = ts; seen = self.seen = time.time(); w, h = vf.get_resolution(); self.cells = cells_on(np.asarray(vf.get_array()).reshape(h, w, 4))
                     elif time.time() - seen > 2: self.cells = None   # no new frame for 2 s (by this box's clock: the sender's may differ)
                     now = time.time(); wr = self.writer
                     if self.cells and any(self.cells): last_on = now
@@ -112,7 +121,7 @@ class Watcher:
                     time.sleep(0.2)
             except Exception: traceback.print_exc(); time.sleep(2)
             finally:
-                rx.disconnect(); self.cells = None
+                rx.disconnect(); self.cells = self.seen = None
                 if self.writer: self.writer.stop.set()   # the source went away (or the loop failed): cut now, nothing else would
 
 class Recorders:
@@ -123,32 +132,76 @@ class Recorders:
         while True:
             try:
                 for n in self.finder.get_source_names():
-                    if n not in self.watch: self.watch[n] = Watcher(self.finder, n); print(f"rec: watching {n}", flush=True)
+                    if n not in self.watch and REC_MATCH.search(n) and not (REC_SKIP and n.endswith(REC_SKIP)): self.watch[n] = Watcher(self.finder, n); print(f"rec: watching {n}", flush=True)
             except Exception: traceback.print_exc()
             time.sleep(3)
     def stop_all(self):                             # the service stops: cut every file and wait for it to be closed
         STOPPING.set(); ws = [w.writer for w in list(self.watch.values()) if w.writer and w.writer.thread.is_alive()]
         for wr in ws: wr.stop.set()
         for wr in ws: wr.thread.join(30)
+    def live(self):                                 # the files being written: stem -> what the list shows of them
+        return {w.writer.stem: dict(frames=w.writer.frames, cells=[round(n / w.writer.looks, 3) if w.writer.looks else None for n in w.writer.on])
+                for w in list(self.watch.values()) if w.writer and w.writer.thread.is_alive()}
+    def sources(self): return {n: dict(cells=w.cells, rec=bool(w.writer and w.writer.thread.is_alive())) for n, w in list(self.watch.items())}
+    def stalled(self, now): return [n for n, w in list(self.watch.items()) if w.seen is not None and now - w.seen > REC_STALL]
+
+def listing(live):                                  # the recordings on disk, live: Recorders.live() (the child's, through STATE)
+    out = []
+    for f in sorted(glob.glob(REC_DIR + "/*.json"), reverse=True):
+        stem = os.path.basename(f)[:-5]; mp4 = f"{REC_DIR}/{stem}.mp4"
+        if not os.path.exists(mp4): continue
+        try: m = json.load(open(f)); size = os.path.getsize(mp4)
+        except (OSError, ValueError): continue       # removed meanwhile (an empty stretch, a delete), or a broken .json
+        wr = live.get(stem); fps = m.get("fps") or REC_FPS or 30
+        out.append(dict(file=stem + ".mp4", source=m.get("source"), start=m.get("start"), size=m.get("size"), bytes=size,
+                        dur=round((wr["frames"] if wr else m.get("frames", 0)) / fps, 1), live=bool(wr), cells=wr["cells"] if wr else m.get("cells")))
+    try: st = os.statvfs(REC_DIR); free = st.f_bavail * st.f_frsize
+    except Exception: free = None
+    return dict(dir=REC_DIR, free=free, recs=out)
+
+class RecProc:
+    """the control page's side: the child (python rt_rec.py) started, and started again 2 s after it ends; what it wrote read back"""
+    def __init__(self, ndi):
+        self.on, self.p, self.stopping, self.restarts, self.ended = bool(REC) and ndi, None, False, 0, None
+        if self.on: os.makedirs(REC_DIR, exist_ok=True); threading.Thread(target=self.run, daemon=True).start()
+    def run(self):
+        while not self.stopping:
+            self.p = subprocess.Popen([sys.executable, "-u", os.path.abspath(__file__)], cwd=HERE)
+            code = self.p.wait()
+            if self.stopping: break
+            self.restarts += 1; self.ended = (time.time(), code); print(f"rec: the recorder ended ({code}), started again in 2 s", flush=True); time.sleep(2)
+    def child(self):                                # what the child last wrote, while it is fresh
+        try: s = json.load(open(STATE))
+        except (OSError, ValueError): return {}
+        return s if time.time() - s.get("t", 0) < 5 else {}
+    def recording(self): return len(self.child().get("live", {}))   # the control page's count
+    def state(self):
+        c = self.child(); ago = self.ended and time.time() - self.ended[0]
+        err = None if not self.on else "録画のプロセスが動いていない" if not c else f"録画のプロセスが {round(ago)} 秒前に落ちて立ち上げ直した（終了コード {self.ended[1]}）" if ago is not None and ago < 600 else None
+        return dict(listing(c.get("live", {})), on=self.on, sources=c.get("sources", {}), restarts=self.restarts, err=err)
     def delete(self, name):                         # the list page's delete: a finished recording and its .json
         if not isinstance(name, str) or not FILE.fullmatch(name) or not os.path.exists(f"{REC_DIR}/{name}"): raise ValueError("録画が見つからない")
-        if any(w.writer and w.writer.thread.is_alive() and w.writer.stem + ".mp4" == name for w in list(self.watch.values())): raise ValueError("録画中は消せない")
+        if name[:-4] in self.child().get("live", {}): raise ValueError("録画中は消せない")
         for f in (f"{REC_DIR}/{name}", f"{REC_DIR}/{name[:-4]}.json"):
             if os.path.exists(f): os.remove(f)
-    def recording(self): return sum(1 for w in list(self.watch.values()) if w.writer and w.writer.thread.is_alive())   # the control page's count
-    def state(self):
-        live = {w.writer.stem: w.writer for w in list(self.watch.values()) if w.writer and w.writer.thread.is_alive()}
-        out = []
-        for f in sorted(glob.glob(REC_DIR + "/*.json"), reverse=True):
-            stem = os.path.basename(f)[:-5]; mp4 = f"{REC_DIR}/{stem}.mp4"
-            if not os.path.exists(mp4): continue
-            try: m = json.load(open(f)); size = os.path.getsize(mp4)
-            except (OSError, ValueError): continue   # removed meanwhile (an empty stretch, a delete), or a broken .json
-            wr = live.get(stem); fps = m.get("fps") or REC_FPS or 30
-            out.append(dict(file=stem + ".mp4", source=m.get("source"), start=m.get("start"), size=m.get("size"), bytes=size,
-                            dur=round((wr.frames if wr else m.get("frames", 0)) / fps, 1), live=bool(wr),
-                            cells=[round(n / wr.looks, 3) if wr.looks else None for n in wr.on] if wr else m.get("cells")))
-        try: st = os.statvfs(REC_DIR); free = st.f_bavail * st.f_frsize
-        except Exception: free = None
-        return dict(on=bool(REC) and self.finder is not None, dir=REC_DIR, free=free, recs=out,
-                    sources={n: dict(cells=w.cells, rec=bool(w.writer and w.writer.thread.is_alive())) for n, w in list(self.watch.items())})
+    def stop_all(self):                             # the service stops: the child cuts and closes every file (Recorders.stop_all)
+        first, self.stopping, p = not self.stopping, True, self.p   # on_term calls it twice: one TERM (a second lands in the files' closing)
+        if p and p.poll() is None:
+            if first: p.send_signal(signal.SIGTERM)
+            try: p.wait(40)
+            except subprocess.TimeoutExpired: p.kill()
+
+def main():                                         # the child: every source watched, STATE written every second
+    from cyndilib.finder import Finder
+    f = Finder(); f.open(); r = Recorders(f); done = threading.Event()
+    def stop(*_): r.stop_all(); done.set()
+    signal.signal(signal.SIGTERM, stop); signal.signal(signal.SIGINT, stop)
+    print("rec: recorders on", flush=True)
+    while not done.wait(1):
+        now = time.time()
+        with open(STATE + ".tmp", "w") as o: json.dump(dict(t=now, pid=os.getpid(), live=r.live(), sources=r.sources()), o, ensure_ascii=False)
+        os.replace(STATE + ".tmp", STATE)
+        if (st := r.stalled(now)) and not done.is_set():   # connected and no frame: the frozen receiver of 2026-10-25. A new process gets new ones
+            print(f"rec: no frame from {', '.join(st)} for {REC_STALL:g} s, starting again", flush=True); r.stop_all(); os._exit(3)
+
+if __name__ == "__main__": main()
