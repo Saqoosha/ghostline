@@ -64,6 +64,7 @@
       #rlist { overflow-y: auto; overscroll-behavior: contain; }
       .ritem { display: grid; grid-template-columns: 58px 1fr auto; column-gap: 12px; align-items: center; width: 100%; text-align: left; background: #fff; border: 0; border-bottom: 1px solid var(--line); padding: 8px 12px; cursor: pointer; }
       .ritem:hover { background: #f6f1f1; }
+      .rsec { position: sticky; top: 0; z-index: 1; padding: 6px 12px 5px; background: #f0eded; border-bottom: 1px solid var(--line); font: 700 12px var(--cond); letter-spacing: .14em; text-transform: uppercase; color: var(--ink); }
       .ritem.on { background: #fbeaea; box-shadow: inset 4px 0 0 var(--red); }
       .ritem .rno { font: 400 34px/1 var(--display); color: var(--red); text-align: center; }
       .ritem .rno small { display: block; font: 700 9px var(--cond); letter-spacing: .12em; color: var(--muted); }
@@ -228,7 +229,7 @@
       <div id="board" role="list"></div>
     </div>
     <div id="rounds" class="panel" role="dialog" aria-label="rounds" hidden>
-      <header><b>Rounds</b><input id="rfilter" type="search" placeholder="Round or pilot" aria-label="filter rounds by number or pilot" /><button id="rclose" aria-label="close">×</button></header>
+      <header><b>Rounds</b><input id="rfilter" type="search" placeholder="Round, Main or pilot" aria-label="filter rounds by number or pilot" /><button id="rclose" aria-label="close">×</button></header>
       <div id="rlist"></div>
     </div>
     <div id="results" class="panel" role="dialog" aria-label="results" hidden>

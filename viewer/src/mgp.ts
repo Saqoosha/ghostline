@@ -108,7 +108,15 @@ function loadSceneTry(name: string) {
 const fetchJson = <T>(url: string): Promise<T> => fetch(url).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json() })
 const rounds: Rounds = await fetchJson<Rounds>(BASE + 'rounds.json').catch((e: Error) => { say(`could not load ${BASE}rounds.json: ${e.message}`); throw e })
 if (!rounds.rounds?.length) { say('rounds.json lists no rounds'); throw new Error('no rounds') }
-rounds.rounds.sort((a, b) => a.round - b.round)
+// the menu's sections, in the order they were raced: the qualifiers, then the Mains from E up to A, each Main's races and
+// then its final ("<X> Main · Race <n>" / "<X> Main · Final"); prev / next step through the same order
+const MAINS = ['E', 'D', 'C', 'B', 'A']
+function sectionOf(e: RoundEntry) {
+  const m = /^([A-E]) Main · (?:Race (\d+)|(Final))/.exec(e.label ?? '')
+  if (!m) return { name: 'Qualifiers', order: 0, no: String(e.round), unit: 'ROUND', key: e.round }
+  return { name: `${m[1]} Main`, order: 1 + MAINS.indexOf(m[1]), no: m[3] ? 'F' : m[2], unit: m[3] ? 'FINAL' : 'RACE', key: m[3] ? 1e6 : Number(m[2]) }
+}
+rounds.rounds.sort((a, b) => { const x = sectionOf(a), y = sectionOf(b); return (x.order - y.order) || (x.key - y.key) })
 $('series').textContent = rounds.title
 document.title = rounds.title.replace(/\s+—.*$/, '')
 
@@ -268,12 +276,15 @@ const rlist = $('rlist'), rfilter = $<HTMLInputElement>('rfilter'), roundsBox = 
 function buildRoundList() {
   const q = rfilter.value.trim().toUpperCase()
   const items = rounds.rounds.filter(e => !q || String(e.round) === q.replace(/^R(OUND)?\s*/, '') || (e.pilots ?? []).some(n => n.toUpperCase().includes(q)) || (e.label ?? '').toUpperCase().includes(q))
-  rlist.replaceChildren(...items.map(e => {
-    const b = el('button', 'ritem' + (R?.entry === e ? ' on' : '')); b.dataset.round = String(e.round)
-    const no = el('div', 'rno', String(e.round)); no.prepend(el('small', '', 'ROUND'))
+  let section = ''
+  rlist.replaceChildren(...items.flatMap(e => {
+    const sec = sectionOf(e), b = el('button', 'ritem' + (R?.entry === e ? ' on' : '')); b.dataset.round = String(e.round)
+    const no = el('div', 'rno', sec.no); no.prepend(el('small', '', sec.unit))
     const mid = el('div'); mid.append(el('div', 'rwhen', e.completed ?? ''), el('div', 'rpl', (e.pilots ?? []).join(' · ')))
     const fast = el('div', 'rfast'); if (e.fastest) { fast.append('fastest lap', el('b', '', e.fastest.lap.toFixed(3)), e.fastest.pilot) }
-    b.append(no, mid, fast); b.onclick = () => pick(e); return b
+    b.append(no, mid, fast); b.onclick = () => pick(e)
+    if (sec.name === section) return [b]
+    section = sec.name; return [el('div', 'rsec', sec.name), b]
   }))
   if (!items.length) { const none = el('div', '', 'No round matches.'); none.id = 'rempty'; rlist.append(none) }
 }
