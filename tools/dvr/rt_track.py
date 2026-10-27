@@ -450,8 +450,16 @@ def smooth(win):
         r[:, :3] = e * sw[:, None]
         for a in range(3): J[j, 3:, j + a, 3:] = (c[:, a] / BA_ACC)[:, None, None] * I3            # linear acceleration (residual 0 at the unknowns)
         Jm = J.reshape(6 * m, N); M += Jm.T @ Jm; rhs -= (Jm.T @ r.reshape(-1)).reshape(n, 6)
-    x = np.linalg.solve(M + 1e-9 * np.eye(N), rhs.reshape(-1)).reshape(n, 6)
+    # a window the solve cannot take goes out as solved, unsmoothed: the tracker died on "Singular matrix" here after 3.9 h of
+    # the JDL R7 10/25 day replayed (2026-10-27; what made it singular is not known, the answers went with the crash)
+    try: x = np.linalg.solve(M + 1e-9 * np.eye(N), rhs.reshape(-1)).reshape(n, 6)
+    except np.linalg.LinAlgError: x = None
+    if x is None or not np.isfinite(x).all():
+        smooth.skipped += 1
+        if smooth.skipped in (1, 10, 100, 1000): print(f"BA: {smooth.skipped} window(s) left unsmoothed (the solve failed)", flush=True)
+        return Rot.from_matrix(Rm).as_quat(), Pm
     return (Rot.from_matrix(Rm) * Rot.from_rotvec(x[:, :3])).as_quat(), x[:, 3:]
+smooth.skipped = 0
 def predict(hist, i):                               # constant velocity from the last few solved frames (frame, Rot, pos)
     if len(hist) < 2: return hist[-1][1], hist[-1][2]
     fi = np.array([h[0] for h in hist], float); vel = np.polyfit(fi, np.array([h[2] for h in hist]), 1)[0]
