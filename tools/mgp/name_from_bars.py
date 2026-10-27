@@ -1,9 +1,9 @@
 """Name a 4-up round's unnamed cells from the broadcast bar over each cell (pilot name, lap, time), read with macOS
 Vision: for cells that laps and elimination left open (no laps, one lap that fits several pilots, two of each left).
 One frame from the middle of the round's clip window (race.json source; a recording holding several races gives
-each its own window), the bar of each open cell (46 px over the 960x540 cell) OCR'd, and the closest still unplaced
+each its own window), the bar of each open cell (46 px over the 960x540 cell; 8-up 42 px over 640x360) OCR'd, and the closest still unplaced
 pilot of the round taken when the match is clear (similarity >= MIN, 0.6, and that pilot claimed by no other cell).
-usage (Mac, repo root): uv run --with ocrmac --with pillow python tools/mgp/name_from_bars.py <round>[=<recording>] ...
+usage (Mac, repo root; LAYOUT=8up for an 8-up qualifier): uv run --with ocrmac --with pillow python tools/mgp/name_from_bars.py <round>[=<recording>] ...
 env: MGP_HOST, MGP_DIR (as make_mgp_race.py)"""
 import difflib, glob, json, os, re, subprocess, sys, tempfile
 
@@ -12,6 +12,7 @@ from ocrmac import ocrmac
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOST, DIR = os.environ.get("MGP_HOST", "rt4090"), os.environ.get("MGP_DIR", "/mnt/data/mgp_studio")
 MIN = float(os.environ.get("MIN", 0.6))
+GRID, CW, CH, BAR = (3, 640, 360, 42) if os.environ.get("LAYOUT") == "8up" else (2, 960, 540, 46)   # LAYOUT=8up: an 8-up qualifier
 laps = json.load(open(f"{ROOT}/data/mgp/livefpv_laps.json")) + json.load(open(f"{ROOT}/data/mgp/livefpv_finals.json"))
 for arg in sys.argv[1:]:                                     # <round> or <round>=<recording> (no race.json yet)
     n = int(arg.split("=")[0]); off = next((x for x in laps if x["round"] == n), None)
@@ -35,8 +36,8 @@ for arg in sys.argv[1:]:                                     # <round> or <round
                            stdout=open(png, "wb"), check=True)
             im = Image.open(png)
             for s in free_cells:
-                r, c = divmod(s, 2)
-                bar = im.crop((c * 960, r * 540, (c + 1) * 960, r * 540 + 46)).resize((1920, 92))
+                r, c = divmod(s, GRID)
+                bar = im.crop((c * CW, r * CH, (c + 1) * CW, r * CH + BAR)).resize((CW * 2, BAR * 2))
                 texts[s] += " " + " ".join(w[0] for w in ocrmac.OCR(bar).recognize())
         for s in free_cells:
             text = re.sub(r"[^A-Z0-9_\-]", " ", texts[s].upper())

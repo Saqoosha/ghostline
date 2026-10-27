@@ -16,11 +16,14 @@ for im in rec.images.values():
 for feed, cam in seen.items():
     by_cell.setdefault(feed.rsplit("_s", 1)[1], []).append(np.array(cam.params, float))
 for d in ("qcam", "tmpl"): os.makedirs(f"{out}/{d}", exist_ok=True)
+W4 = 720   # the 4-up feeds' width in the night map
 for feed in feeds:
     cell = feed.rsplit("_s", 1)[1]
-    f, cx, cy, k = np.median(by_cell[cell], axis=0)
     names = sorted(n for n in os.listdir(f"sk/images/{feed}") if n.endswith(".jpg"))
     h, w = cv2.imread(f"sk/images/{feed}/{names[0]}").shape[:2]
+    if w == W4: f, cx, cy, k = np.median(by_cell[cell], axis=0)
+    else:   # an 8-up feed (480x360, nine cells): the same lenses, so the median over all cells, scaled to the width
+        f, cx, cy, k = np.median([c for v in by_cell.values() for c in v], axis=0); f *= w / W4; cell = f"all, x{w / W4:.3f}"
     cam = {"model": "OPENCV_FISHEYE", "width": w, "height": h, "params": [float(f), float(f), w / 2, h / 2, float(k), 0.0, 0.0, 0.0],
            "from": f"night map median of cell {cell}"}
     json.dump({"camera": {**cam, "model": "SIMPLE_RADIAL_FISHEYE", "params": [float(f), w / 2, h / 2, float(k)]}}, open(f"{out}/qcam/{feed}.json", "w"))
