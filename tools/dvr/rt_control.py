@@ -216,6 +216,8 @@ def start(c):
         k = CELLS.index(x["cell"]); specs.append(f"{c['map']},ndi://{src}|{k % 2 * (w // 2)}:{k // 2 * (h // 2)}:{w // 2}:{h // 2}|{c['cam']},live/{n}")
     env = dict(os.environ, PATH=f"{os.path.dirname(sys.executable)}:/usr/local/cuda-12.9/bin:{os.environ.get('PATH', '')}",
                SIGNAL="1", GRID=f"{w}x{h}", GRID_FPS=f"{cap:g}", PUSH=str(PUSH), **({"MAXFPS": f"{cap:g}"} if cap < fps else {}))
+    if PILOTS_URL and "+" in c["cam"]:               # the lens each pilot flies, learnt over the day's heats (LENS_* in rt_track.py)
+        env.update(LENS_PILOTS=f"http://127.0.0.1:{PORT}/api/pilots", LENS_MEM=f"live/lens-{time.strftime('%Y%m%d')}.json")
     for k, f in (("GLUE", "glue_mix.engine"), ("XFEAT", "xfeat_fp32.engine")):
         if os.path.exists(f"{HERE}/{ENG}/{f}"): env[k] = f"{ENG}/{f}"
     if c.get("render"):

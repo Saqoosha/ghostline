@@ -89,7 +89,24 @@ GRID, GRID_FPS, SEND_T0, FRAME_CODE = os.environ.get("GRID"), E("GRID_FPS", 30),
 # whose mean inliers are at least 1.3x the other's and 30 or more (an unsolved frame counts 0) - otherwise it stays and tries
 # later. Later means: the last 45 frames averaged under LENS_LOW, at most every LENS_AGAIN s, doubling (up to 320 s) when the trial
 # changes nothing. Not solving for 3 s' worth of frames after the picture came on: the other definition gets its turn.
+# One trial is 0.4 s of flight and scores where the drone happens to be: the same cell flipped 132 / 15, 61 / 184, 180 / 40 within
+# 4 minutes, and two runs of the 10/25 recordings ended on opposite lenses in 77 of 205 cells (71% solved; the better of the two
+# in each cell, 77%). So the decision is the mean over the last LENS_KEEP trials, and trials go on every LENS_LEARN s until
+# LENS_SURE of them agree. With LENS_PILOTS (the control page's /api/pilots) the trials are the pilot's, kept over heats in
+# LENS_MEM: a pilot already sure starts the next heat on that lens and is tried only when the inliers drop. Without a name, a cell's
+# trials begin anew each heat.
 LENS_N, LENS_SKIP, LENS_LOW, LENS_AGAIN = int(E("LENS_N", 12)), int(E("LENS_SKIP", 20)), E("LENS_LOW", 100), E("LENS_AGAIN", 20)
+LENS_KEEP, LENS_SURE, LENS_LEARN, LENS_PILOTS, LENS_MEM = int(E("LENS_KEEP", 8)), int(E("LENS_SURE", 3)), E("LENS_LEARN", 20), os.environ.get("LENS_PILOTS"), os.environ.get("LENS_MEM")
+pilot_names = {}                                     # cell -> pilot, from LENS_PILOTS
+try: lens_mem = json.load(open(LENS_MEM)) if LENS_MEM else {}   # pilot -> trials, each the mean inliers per lens
+except (OSError, ValueError): lens_mem = {}
+def lens_save():
+    with open(LENS_MEM + ".tmp", "w") as f: json.dump(lens_mem, f)
+    os.replace(LENS_MEM + ".tmp", LENS_MEM)
+def lens_pick(trials, need=LENS_SURE):              # the best lens over the trials, whether it is clear over `need` or more, the means
+    if not trials: return 0, False, []
+    m = np.mean(trials, axis=0); r = np.argsort(-m)
+    return int(r[0]), len(trials) >= need and m[r[0]] >= 30 and m[r[0]] >= 1.3 * m[r[1]], m.tolist()
 # MAXFPS (0 = all): an NDI source faster than this (the Event VRX sends 60 fps) is thinned to it by its timestamps. Every cycle takes the
 # newest frame, so a 60 fps feed would otherwise be processed at 43-54 Hz per cell for +35% GPU power (three cells 125 -> 172 W) and no
 # better dot (the page draws 100 ms late, interpolated). The caller passes GRID_FPS as the thinned rate (rt_control.py does).
@@ -255,6 +272,7 @@ class Stream:
                 qv = T(cv2.resize((cv2.erode(cv2.remap(osd, a1, a2, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0), np.ones((9, 9), np.uint8)) > 0).astype(np.uint8), (RW, RH), interpolation=cv2.INTER_NEAREST)).bool()
                 self.lenses.append(((mx * w / W + x0, my * h / H + y0), qv, os.path.basename(cj)[:-5]))
             self.trial, self.want, self.waited, self.okrun, self.lens_t, self.again, self.recent = None, len(camjs) > 1, 0, 0, -1e9, LENS_AGAIN, collections.deque(maxlen=45)
+            self.cell, self.who, self.trials = os.path.basename(self.prefix), False, []   # who: the pilot the trials are for (False: not looked up this heat)
             self.set_lens(0)
             self.frames, self.arrive, self.arrive_wall = {0: np.zeros((RH, RW, 3), np.uint8)}, {}, {}; self.N = 1; self.signal, self.flip = None, 0   # a blank frame for the warm-up
             src = sources.setdefault(url, GridSource(url)); src.cells.append(self); self.src = src
@@ -274,7 +292,7 @@ class Stream:
             if self.flip >= self.fps / 2:
                 self.signal, self.flip = on, 0; print(f"{self.prefix}: signal {'on' if on else 'off'}", flush=True)
                 if len(self.lenses) > 1:                # a new heat: the pilot in this cell may have changed; a trial does not outlive the picture
-                    if on: self.want, self.waited, self.again, self.lens_t, self.okrun = True, 0, LENS_AGAIN, -1e9, 0; self.recent.clear()
+                    if on: self.want, self.waited, self.again, self.lens_t, self.okrun, self.who = True, 0, LENS_AGAIN, -1e9, 0, False; self.recent.clear()
                     elif self.trial is not None: self.set_lens(self.trial["was"]); self.trial = None
             if not on: return
         mx, my = self.cellmap
@@ -291,11 +309,19 @@ class Stream:
     def lens_step(self, inl):                        # main thread, after every processed frame: its inliers, 0 when it was not solved
         t = self.trial                                   # read once: the reader thread ends a trial when the picture goes
         if t is None:
+            who = pilot_names.get(self.cell) or None
+            if self.who is False or who != self.who:    # a new heat or a new name: that pilot's trials (none without a name)
+                self.who = who; self.trials = lens_mem.setdefault(who, []) if who else []
+                best, sure, m = lens_pick(self.trials)
+                if sure:
+                    self.want = False
+                    if best != self.li: self.set_lens(best)
+                    print(f"{self.prefix}: lens {self.lenses[best][2]} for {who} ({len(self.trials)} trials, {' / '.join(f'{x:.0f}' for x in m)} inliers)", flush=True)
             self.recent.append(inl); self.okrun = self.okrun + 1 if inl else 0
             if self.want and time.perf_counter() - self.lens_t > self.again:   # (not while a trial is cooling down)
                 self.waited += 1
                 if self.okrun >= 5: self.trial, self.want = dict(skip=0, was=self.li, got=[[] for _ in self.lenses], plan=self.lens_plan()), False
-                elif self.waited > 3 * self.fps: self.set_lens((self.li + 1) % len(self.lenses)); self.waited = 0
+                elif self.waited > 3 * self.fps and not lens_pick(self.trials)[1]: self.set_lens((self.li + 1) % len(self.lenses)); self.waited = 0
             elif time.perf_counter() - self.lens_t > self.again and len(self.recent) == self.recent.maxlen and np.mean(self.recent) < LENS_LOW:
                 self.trial = dict(skip=0, was=self.li, got=[[] for _ in self.lenses], plan=self.lens_plan())
             return
@@ -304,15 +330,20 @@ class Stream:
         if t["plan"][0][1] > 0 or self.trial is not t: return   # (ended by the reader meanwhile: it has put the lens back)
         t["plan"].pop(0)
         if t["plan"]: self.set_lens(t["plan"][0][0]); t["skip"] = LENS_SKIP; return
-        mean = [float(np.mean(g)) for g in t["got"]]; rank = sorted(range(len(mean)), key=mean.__getitem__, reverse=True); best = rank[0]
-        shown = ' / '.join(f'{m:.0f}' for m in mean); self.trial, self.lens_t = None, time.perf_counter(); self.recent.clear()
-        if mean[best] < 30 or mean[best] < 1.3 * mean[rank[1]]:   # nothing solved, or too close to call (76 / 84 once picked the wrong one): stay, try again once tracking
+        mean = [float(np.mean(g)) for g in t["got"]]; self.trial, self.lens_t = None, time.perf_counter(); self.recent.clear()
+        if max(mean) >= 30:                             # a trial that solved nothing (the track was lost) says nothing about the lens
+            self.trials.append(mean); del self.trials[:-LENS_KEEP]
+            if self.who and LENS_MEM: lens_save()
+        best, sure, m = lens_pick(self.trials)
+        shown = f"{' / '.join(f'{x:.0f}' for x in mean)} inliers; {len(self.trials)} trials{f' of {self.who}' if self.who else ''}: {' / '.join(f'{x:.0f}' for x in m)}"
+        if not lens_pick(self.trials, 1)[1]:            # nothing solved, or too close to call (76 / 84 once picked the wrong one): stay, try again once tracking
             if self.li != t["was"]: self.set_lens(t["was"])
-            self.again = min(max(5, self.again) * 2, 320); self.want, self.waited = True, 0   # again, once tracking and after the cool-down
-            print(f"{self.prefix}: lens? ({shown} inliers), stays {self.lenses[self.li][2]}", flush=True); return
-        self.again = LENS_AGAIN if best != t["was"] else min(self.again * 2, 320)
+            self.again = LENS_LEARN if len(self.trials) < LENS_KEEP else min(max(5, self.again) * 2, 320); self.want, self.waited = True, 0   # again, once tracking and after the cool-down
+            print(f"{self.prefix}: lens? ({shown}), stays {self.lenses[self.li][2]}", flush=True); return
+        # not sure yet: tried again every LENS_LEARN s; sure, the cool-down doubles while the trials keep agreeing
+        self.again = LENS_LEARN if not sure else min(self.again * 2, 320) if best == t["was"] else LENS_AGAIN; self.want, self.waited = not sure, 0
         if best != self.li: self.set_lens(best)
-        print(f"{self.prefix}: lens {self.lenses[best][2]} ({shown} inliers)", flush=True)
+        print(f"{self.prefix}: lens {self.lenses[best][2]} ({shown}{'' if sure else ', not sure yet'})", flush=True)
     def nearest(self, R, p, n=None, max_ang=45, per_deg=15, real=False):   # keyframes near the predicted pose, looking about the same way
         d = np.linalg.norm(self.m["pos"] - p, axis=1); ang = np.degrees(np.arccos(np.clip(self.m["fwd"] @ R.as_matrix()[:, 2], -1, 1)))
         score = d / 1.5 + ang / per_deg; score[(d > 12) | (ang > max_ang)] = np.inf
@@ -623,6 +654,16 @@ def mapwatch():
             with swap_lock: swap.append((want, m))
         except Exception as e: print(f"map {want}: {type(e).__name__}: {e}", flush=True); cur = want   # tried once; a new name tries again
 if MAPWATCH: threading.Thread(target=mapwatch, daemon=True).start()
+def pilotwatch():                                   # LENS_PILOTS: the names every 3 s; none while the heat manager is not answering
+    import urllib.request
+    while True:
+        try:
+            with urllib.request.urlopen(LENS_PILOTS, timeout=2) as f: r = json.loads(f.read(65536)) or {}
+            names = {} if r.get("stale") else {c: n for c, n in (r.get("cells") or {}).items() if n}
+        except Exception: names = {}
+        if names != pilot_names: pilot_names.clear(); pilot_names.update(names)
+        time.sleep(3)
+if LENS_PILOTS: threading.Thread(target=pilotwatch, daemon=True).start()
 mem.last = 0.0
 def loop():
   global clock, pending
