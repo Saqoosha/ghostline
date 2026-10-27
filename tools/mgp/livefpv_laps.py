@@ -4,7 +4,7 @@ usage: livefpv_laps.py <out.json>"""
 import json, os, re, sys, urllib.request
 
 BASE = "https://mgp.livefpv.com/results/"
-get = lambda u: urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})).read().decode("utf-8", "replace")
+get = lambda u: urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"}), timeout=60).read().decode("utf-8", "replace")
 EVENT = os.environ.get("EVENT", "521396")   # 2026 MultiGP Championship (qualifiers); the bare results page shows whichever event is newest
 idx = get(f"{BASE}?p=view_event&id={EVENT}")
 rounds = re.findall(r"<th>(Qualifier Round (\d+))</th>.*?view_race_result&id=(\d+).*?<td>([^<]+)</td>", idx, re.S)

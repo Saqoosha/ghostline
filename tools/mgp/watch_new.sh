@@ -19,7 +19,7 @@ for x in sorted(r, key=lambda x: x["name"]):
     if not x["name"].startswith(day) or x["size"] < 20e6 or n in have: continue
     url = ("https://race-dvr-public.s3.us-east-1.amazonaws.com/" + x["key"].replace(" ", "%20")) if x.get("key") else \
           "https://race-dvr-public.s3.us-east-1.amazonaws.com/pilot-review/" + x["url"]
-    if subprocess.run(["curl", "-sS", "--retry", "3", "-o", f"raw/{n}.part", url]).returncode == 0:
+    if subprocess.run(["curl", "-fsS", "--retry", "3", "-o", f"raw/{n}.part", url]).returncode == 0:
         os.rename(f"raw/{n}.part", f"raw/{n}")
         open("urls.txt", "a").write(f"{url}\t{n}\n"); al[n] = x.get("alias", "").replace("Â", ""); json.dump(al, open("aliases.json", "w"), indent=0)
         open("new.log", "a").write(f"{n}\t{al[n]}\t{x['size']}\n"); print("got", n, al[n], flush=True)

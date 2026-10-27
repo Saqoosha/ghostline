@@ -5,7 +5,7 @@ each its own window), the bar of each open cell (46 px over the 960x540 cell; 8-
 pilot of the round taken when the match is clear (similarity >= MIN, 0.6, and that pilot claimed by no other cell).
 usage (Mac, repo root; LAYOUT=8up for an 8-up qualifier): uv run --with ocrmac --with pillow python tools/mgp/name_from_bars.py <round>[=<recording>] ...
 env: MGP_HOST, MGP_DIR (as make_mgp_race.py)"""
-import difflib, glob, json, os, re, subprocess, sys, tempfile
+import difflib, glob, json, os, re, shlex, subprocess, sys, tempfile
 
 from ocrmac import ocrmac
 
@@ -19,7 +19,7 @@ for arg in sys.argv[1:]:                                     # <round> or <round
     rj = f"{ROOT}/build/mgp/q{n:02d}/race.json"   # as round_mac.sh names them
     if os.path.exists(rj): src = json.load(open(rj))["source"]
     else:
-        rec = arg.split("=")[1]; d = float(subprocess.check_output(["ssh", "-n", HOST, f"ffprobe -v error -show_entries format=duration -of csv=p=0 {DIR}/raw/{rec}"]))
+        rec = arg.split("=")[1]; d = float(subprocess.check_output(["ssh", "-n", HOST, f"ffprobe -v error -show_entries format=duration -of csv=p=0 {shlex.quote(f'{DIR}/raw/{rec}')}"]))
         src = {"recording": rec, "clip_t0": 0.0, "clip_t1": d}
     q = f"{ROOT}/build/mgp/poses/q{n:02d}"
     named = {json.load(open(f))["pilot"]: json.load(open(f)).get("slot") for f in glob.glob(f"{q}/*.json")}
@@ -32,7 +32,7 @@ for arg in sys.argv[1:]:                                     # <round> or <round
         from PIL import Image
         for k, f in enumerate((0.25, 0.5, 0.75)):                 # the bar is not drawn all the time
             t = src["clip_t0"] + f * (src["clip_t1"] - src["clip_t0"]); png = f"{td}/f{k}.png"
-            subprocess.run(["ssh", "-n", HOST, f"ffmpeg -v error -y -ss {t:.2f} -i {DIR}/raw/{src['recording']} -frames:v 1 -f image2 -vcodec png -"],
+            subprocess.run(["ssh", "-n", HOST, f"ffmpeg -v error -y -ss {t:.2f} -i {shlex.quote(DIR + '/raw/' + src['recording'])} -frames:v 1 -f image2 -vcodec png -"],
                            stdout=open(png, "wb"), check=True)
             im = Image.open(png)
             for s in free_cells:

@@ -20,7 +20,7 @@ const QS = new URLSearchParams(location.search)
 const DATA_Q = QS.get('data'); const DATA = DATA_Q && /^[a-z0-9_-]+$/i.test(DATA_Q) ? DATA_Q : ''   // a folder name only: no path parts
 const BASE = import.meta.env.BASE_URL + (DATA || import.meta.env.VITE_MGP_DATA || 'mgp-dev') + '/'   // VITE_MGP_DATA: the published folder
 const TRAIL = 2, TRAIL_PX = 5                                       // seconds of trail behind each drone, its width
-const AUDIO_LEAD = 3                                                // audio.m4a starts 3 s before the clip: the countdown (as on the race page)
+const PRE_START = 5                                                 // s shown before the start: the countdown
 const FLASH = 2.5                                                   // seconds a finished lap's time stays on the board
 const canvas = $<HTMLCanvasElement>('c'), hline = $('hline')
 const say = (s: string) => { hline.textContent = s; hline.hidden = !s }   // a line in the round header: loading, a missing scan, an error
@@ -174,7 +174,7 @@ async function loadRound(entry: RoundEntry) {
   loadScene(/^[A-Za-z0-9._-]+$/.test(QS.get('scene') ?? '') ? QS.get('scene')! : race.scene)
   loadSky(/^[A-Za-z0-9._-]+$/.test(race.sky ?? '') ? race.sky! : 'sky.jpg')
   const P = race.pilots, FPS = race.fps
-  const T_END = Math.max(...P.map(p => p.end)), T0 = race.start - 2 - AUDIO_LEAD
+  const T_END = Math.max(...P.map(p => p.end)), T0 = race.start - PRE_START
   const root = new pc.Entity('round'); app.root.addChild(root)
   const drones: Drone[] = P.map(p => {
     // the dot: a small opaque sphere (0.12 m, as the live page's) in the opaque pass with depth, so the splats in front of
@@ -210,7 +210,8 @@ async function loadRound(entry: RoundEntry) {
   })()
   const trackS = trackPts.map((q, k) => k ? q.distance(trackPts[k - 1]) : 0); for (let k = 1; k < trackS.length; k++) trackS[k] += trackS[k - 1]
   const all = P.flatMap(p => p.pos), m = 10
-  const box = { min: [0, 1, 2].map(k => Math.min(...all.map(q => q[k])) - m), max: [0, 1, 2].map(k => Math.max(...all.map(q => q[k])) + (k === 1 ? 40 : m)) }
+  const lo = [0, 1, 2].map(k => all.reduce((a, q) => Math.min(a, q[k]), Infinity)), hi = [0, 1, 2].map(k => all.reduce((a, q) => Math.max(a, q[k]), -Infinity))   // not Math.min(...): a long round passes the engine's argument limit
+  const box = { min: lo.map(v => v - m), max: hi.map((v, k) => v + (k === 1 ? 40 : m)) }
   const topView = (() => {
     const cx = all.reduce((a, q) => a + q[0], 0) / all.length, cz = all.reduce((a, q) => a + q[2], 0) / all.length
     // laid out as MultiGP's official track map: the start pads bottom-left, the speed-trap straight along the bottom
@@ -222,7 +223,7 @@ async function loadRound(entry: RoundEntry) {
     for (let y = 0; y < 360; y += 0.5) { const r = new pc.Quat().setFromEulerAngles(-89.9, y, 0), rt = r.transformVector(new pc.Vec3(1, 0, 0), new pc.Vec3()), up = r.transformVector(new pc.Vec3(0, 1, 0), new pc.Vec3())
       const c = rt.dot(right) - up.dot(down); if (c > best) { best = c; yaw = y } }
     // cy: the course's ground level - the track line's median height (the lowest path point is a crash below the ground)
-    const ys = (race.track ?? []).map(q => q[1]).sort((a, b) => a - b), cy = ys.length ? ys[ys.length >> 1] : Math.min(...all.map(q => q[1]))
+    const ys = (race.track ?? []).map(q => q[1]).sort((a, b) => a - b), cy = ys.length ? ys[ys.length >> 1] : lo[1]
     return { cx, cz, cy, yaw, all, fit: null as null | { key: string; x: number; z: number; h: number } }
   })()
   // the gates: each opening's frame, 0.1 m apart along it so the ribbon turns only at the corners; the start / finish gate in red.
@@ -304,7 +305,7 @@ function roundFromUrl() { const n = Number(new URLSearchParams(location.search).
 // ---- the standings, broadcast style ----
 // live: laps done, then who crossed the line earlier; once every path has ended, the official place where there is one
 function standings(tc: number) {
-  const P = R!.P, over = P.every(p => tc > p.end)
+  const P = R!.P, over = P.every(p => tc >= p.end)   // the clock stops at the last path's end
   const rows = P.map(p => {
     const done = p.lap_ends.filter(x => x <= tc).length, d = doneAt(p), finished = d !== null && tc >= d, out = !finished && tc > p.end
     return { p, done, finished, out, last: done ? p.lap_ends[done - 1] : Infinity }
@@ -388,11 +389,11 @@ const speedSel = $<HTMLSelectElement>('speed'); speedSel.onchange = () => { spee
 const refreshSpeed = segment($('speedseg'), speedSel, o => [document.createTextNode(o.text + '×')]); refreshSpeed()
 const soundBtn = $<HTMLButtonElement>('soundbtn')
 soundBtn.onclick = () => { soundMuted = !soundMuted; if (R?.audio) R.audio.muted = soundMuted; $('snd-on').toggleAttribute('hidden', soundMuted); $('snd-off').toggleAttribute('hidden', !soundMuted); soundBtn.setAttribute('aria-pressed', String(!soundMuted)); soundBtn.blur() }
-const mediaTime = (v: HTMLMediaElement) => v === R!.audio ? t + AUDIO_LEAD : Math.max(0, t)   // the audio file starts AUDIO_LEAD s early
 function syncVideos() {
   for (const v of [...R!.videos, R!.audio]) {
     if (!v) continue
-    const mt = mediaTime(v), run = playing && !seeking && (v === R!.audio || t >= 0)   // videos hold their first frame before the clip
+    // audio.m4a and the clips are cut from the same window (make_clips); before it they hold their first frame
+    const mt = Math.max(0, t), run = playing && !seeking && t >= 0
     if (run) {
       v.playbackRate = speed; if (v.paused) v.play().catch(() => {})
       if (Math.abs(v.currentTime - mt) > 0.15 && !v.seeking) v.currentTime = mt

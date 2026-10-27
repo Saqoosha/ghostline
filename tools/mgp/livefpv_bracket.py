@@ -7,7 +7,7 @@ usage: livefpv_bracket.py <results page URL or saved .html | ids:7131418-7131431
 import json, os, re, sys, urllib.error, urllib.request
 
 BASE = "https://mgp.livefpv.com/results/"
-get = lambda u: urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})).read().decode("utf-8", "replace")
+get = lambda u: urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"}), timeout=60).read().decode("utf-8", "replace")
 src, out_path = sys.argv[1], sys.argv[2]
 if src.startswith("ids:"):
     span, event = src[4:].split(":")

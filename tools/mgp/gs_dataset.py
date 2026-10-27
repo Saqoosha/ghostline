@@ -15,7 +15,7 @@ for f in folders:
     for sub, root in (("images", iroot), ("masks", mroot)):
         link = f"{out}/{sub}/{f}"
         if not os.path.islink(link):
-            os.symlink(f"{root}/{disk(f)}", link)
+            os.symlink(os.path.abspath(f"{root}/{disk(f)}"), link)   # a relative target would resolve from out/<sub>/
 missing = [im for im in R.images.values() if not os.path.exists(f"{out}/images/{im.name}")]
 for im in missing:
     R.deregister_frame(im.frame_id)

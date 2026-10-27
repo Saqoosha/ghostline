@@ -20,7 +20,7 @@ OFFICIAL LAPS (LiveFPV): lap 1 is timed from the pilot's own HOLESHOT crossing o
 first row when the transponder missed it: same meaning, checked against Round 1 paths, offsets constant within 0.1 s),
 so total = sum of laps and race.json laps[0] = lap_ends[0] - holeshot_at, not - start.
 """
-import argparse, glob, json, os, re, subprocess, sys
+import argparse, glob, json, os, re, shlex, subprocess, sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
@@ -206,7 +206,7 @@ def build(a):
     if not P: sys.exit(f"no pose files for round {rnd} in {a.poses}")
     aliases = json.loads(subprocess.check_output(["ssh", MGP_HOST, f"cat {MGP_DIR}/aliases.json"]))
     vfile = a.video_file or video_file(rnd, aliases)
-    dur = float(subprocess.check_output(["ssh", MGP_HOST, f"ffprobe -v error -show_entries format=duration -of csv=p=0 {MGP_DIR}/raw/{vfile}"]))
+    dur = float(subprocess.check_output(["ssh", MGP_HOST, f"ffprobe -v error -show_entries format=duration -of csv=p=0 {shlex.quote(f'{MGP_DIR}/raw/{vfile}')}"]))
 
     # slot per pilot: --slots > the pose file's slot > the overlay OCR
     slots = {k: int(v) for k, v in (kv.split("=") for kv in a.slots.split(","))} if a.slots else {}
@@ -219,7 +219,7 @@ def build(a):
     crop_top = a.crop_top if a.crop_top is not None else (40 if has_overlay else 0)
     # 4-up: each cell's own picture rectangle (feed_rects.py on MGP_HOST); the feeds are not placed alike within the cells
     rects = {int(k): v for k, v in json.loads(subprocess.check_output(
-        ["ssh", MGP_HOST, f"~/mastenv/bin/python {MGP_DIR}/feed_rects.py {MGP_DIR}/raw/{vfile}"])).items()} if LAYOUT == "4up" else {}
+        ["ssh", MGP_HOST, f"~/mastenv/bin/python {MGP_DIR}/feed_rects.py {shlex.quote(f'{MGP_DIR}/raw/{vfile}')}"])).items()} if LAYOUT == "4up" else {}
 
     # holeshots in video time, from the poses alone
     t_lo = min(p["t"][0] for p in P.values()); t_hi = max(p["t"][-1] for p in P.values())
@@ -299,7 +299,7 @@ def make_clips(a, race, vfile, t0, t1, crop_top, rects):
         x, y, w, h = rects.get(p["slot"], (c * CELL_W + FEED_X, r * CELL_H + crop_top, FEED_W, CELL_H - crop_top))
         fc += f"[v{i}]crop={w}:{h}:{x}:{y}[o{i}];"
         maps += f" -map '[o{i}]' -c:v libx264 -threads {th} -preset veryfast -crf 24 -pix_fmt yuv420p -an -movflags +faststart {rd}/{p['video']}"
-    cmd = (f"mkdir -p {rd} && nice -n 10 ffmpeg -y -loglevel error -threads {th} -ss {t0:.3f} -t {t1 - t0:.3f} -i {MGP_DIR}/raw/{vfile} "
+    cmd = (f"mkdir -p {rd} && nice -n 10 ffmpeg -y -loglevel error -threads {th} -ss {t0:.3f} -t {t1 - t0:.3f} -i {shlex.quote(f'{MGP_DIR}/raw/{vfile}')} "
            f"-filter_threads {th} -filter_complex \"{fc.rstrip(';')}\"{maps} -map '0:a?' -c:a aac -b:a 96k -vn {rd}/audio.m4a")
     print(cmd); subprocess.check_call(["ssh", MGP_HOST, cmd])
     subprocess.check_call(["rsync", "-a", f"{MGP_HOST}:{rd}/", f"{a.out}/"])

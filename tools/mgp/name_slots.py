@@ -27,7 +27,7 @@ for f in sorted(os.listdir(src)):
     P = dict(t=t, c=c)
     n = int((t[-1] - t[0]) * fps) + 1
     pos = resample(P, t[0], fps, n)
-    cr = [t[0] + x for x in crossings(pos, fps, gate, 1.5, 3.0)]
+    cr = [t[0] + x for x in crossings(pos, fps, gate, 2.5, 10.0)]   # as round_mac.sh builds race.json
     cells[f[:-5]] = dict(file=f, laps=np.diff(cr).tolist(), cross=cr, slot=J.get("slot"))
 
 
