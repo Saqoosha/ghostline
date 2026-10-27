@@ -87,16 +87,28 @@ def _quat(R):
 
 
 # ---------------------------------------------------------------- laps
-def crossings(pos, fps, gate, margin, min_gap):
+END_REACH = 0.5   # s a path may be carried on past its last solved frame to reach the finish gate
+
+
+def crossings(pos, fps, gate, margin, min_gap, last=None):
     """Forward passes of the start/finish plane (travel direction = gate normal), within width + margin and height + 2 m.
-    Backward and wobble passes within min_gap s of the previous kept one are dropped. Clip times (s)."""
+    Backward and wobble passes within min_gap s of the previous kept one are dropped. Clip times (s).
+    last: index of the path's last solved frame (pos holds still after it). In the 4-up recordings the finish card covers
+    the feed the moment a pilot finishes, so the path often stops a few frames short of the finish gate: it is carried on
+    at its speed over the last 0.2 s for up to END_REACH s (the finishes found so agree with LiveFPV within 0.11 s)."""
     n = np.array(gate["normal"])[[0, 2]]; w = np.array(gate["width_dir"])[[0, 2]]; c = np.array(gate["centre"])
     rel = pos - c; s = rel[:, [0, 2]] @ n; lat = rel[:, [0, 2]] @ w; h = rel[:, 1]
+    inside = lambda la, hh: abs(la) < gate["half_width"] + margin and -1 < hh < gate["height"] + 2
     out = []
     for i in range(len(pos) - 1):
-        if s[i] < 0 <= s[i + 1] and abs(lat[i]) < gate["half_width"] + margin and -1 < h[i] < gate["height"] + 2:
+        if s[i] < 0 <= s[i + 1] and inside(lat[i], h[i]):
             tc = (i + s[i] / (s[i] - s[i + 1])) / fps
             if not out or tc - out[-1] >= min_gap: out.append(tc)
+    if last is not None and 0 < last < len(pos):
+        k = max(0, last - int(0.2 * fps)); v = (rel[last] - rel[k]) * fps / max(1, last - k); vs = v[[0, 2]] @ n
+        if s[last] < 0 < vs and -s[last] / vs <= END_REACH:
+            dt = -s[last] / vs; X = rel[last] + v * dt; tc = last / fps + dt
+            if inside(X[[0, 2]] @ w, X[1]) and (not out or tc - out[-1] >= min_gap): out.append(tc)
     return out
 
 
@@ -201,7 +213,7 @@ def build(a):
     # holeshots in video time, from the poses alone (3 s grid: crossings from a long pre-roll resample)
     t_lo = min(p["t"][0] for p in P.values()); t_hi = max(p["t"][-1] for p in P.values())
     nfull = int((t_hi - t_lo) * fps) + 1
-    cross_v = {n: [t_lo + c for c in crossings(resample(p, t_lo, fps, nfull), fps, gate, a.margin, a.min_gap)] for n, p in P.items()}
+    cross_v = {n: [t_lo + c for c in crossings(resample(p, t_lo, fps, nfull), fps, gate, a.margin, a.min_gap, int(round((p['t'][-1] - t_lo) * fps)))] for n, p in P.items()}
     # a recording with two heats in it (a restart, or the next round recorded on): name_slots.py wrote the run each pilot's
     # official laps matched in; only passes in that window count when there was a gap of minutes between passes
     runs = [p["run"] for p in P.values() if p.get("run")]
@@ -230,7 +242,7 @@ def build(a):
     for n in names:
         if n not in P or n not in slots: continue
         pos = resample(P[n], clip_t0, fps, nfr); pr = np.round(pos, 2)
-        cr = crossings(pr, fps, gate, a.margin, a.min_gap)
+        cr = crossings(pr, fps, gate, a.margin, a.min_gap, int(round((P[n]['t'][-1] - clip_t0) * fps)))
         hs = float(cr[0]) if cr else None; ends = [float(x) for x in cr[1:1 + L]]; ol = off[n]
         laps = [round(float(b - a_), 3) for a_, b in zip(([hs] if hs is not None else []) + ends[:-1], ends)] if hs is not None else []
         end = round(min(float(P[n]["t"][-1] - clip_t0), (nfr - 1) / fps), 3); fin = ends[L - 1] if len(ends) >= L else None

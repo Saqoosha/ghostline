@@ -24,8 +24,10 @@ uv run -q --with numpy python tools/mgp/name_slots.py "$N" "build/mgp/poses/${Q}
 CA=(--clips); [ "${CLIPS:-1}" = 0 ] && CA=()
 SA=(); [ -n "$SKY" ] && SA=(--sky "$SKY")                # a night round: SCENE=<night scan> SKY=<its sky in the data folder>
 CROP=40; [ "$LAYOUT" = 4up ] && CROP=46               # the overlay bar over each feed (4-up: 44 px at 960 x 540)
+# passes: 2.5 m beside the gate (the night map's paths miss it by up to 1.8 m), 10 s apart (no lap is under 17 s; a
+# quad taking off through the gate and back counted a lap of 3.6 s); measured over all 192 rounds, no pass added in error
 LAYOUT="${LAYOUT:-8up}" uv run -q --with numpy python tools/mgp/make_mgp_race.py build --round "$N" --poses "build/mgp/poses/$Q" --out "build/mgp/$Q" "${VFA[@]}" \
-  --fps 60 --margin 1.5 --min-gap 3 --ocr-dir /nonexistent --gates build/mgp/gates/gates_1404.json --crop-top "$CROP" \
+  --fps 60 --margin 2.5 --min-gap 10 --ocr-dir /nonexistent --gates build/mgp/gates/gates_1404.json --crop-top "$CROP" \
   --scene "${SCENE:-MGP-Champs-2026-unfold}" "${CA[@]}" "${SA[@]}" 2>&1 | grep -E "^round|diff"
 ln -sfn "../../../build/mgp/$Q" "viewer/public/mgp-dev/$Q"
 uv run -q python - "$N" "$Q" <<'PY'
