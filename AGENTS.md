@@ -14,7 +14,8 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 | `tools/dvr/` | 姿勢推定（CPR 照合 `cpr_track.py` → 束調整 `cpr_ba.py` → 2 周目 `cpr_rematch.py` → `takeoff.py`、評価 `eval_align.py`）、`make_race.py`（race.json） |
 | `tools/dvr/night_*`・`daysfm/` | 大会のあとの見返し：`night_heats.py`（DVR の切り出しと race.json）、`night_put.py`（rt4090 から Worker の口で直接上げる）、`mgp_fuse.py` と `daysfm/`（その日の DVR の SfM の地図で外れた選手を合わせ直し、ライブの答えと組み合わせて選ぶ。MGP の `sfm.py`・`localize.py` は rt4090 の `~/mgp`）。正本は [docs/night-rebuild.ja.md](docs/night-rebuild.ja.md) |
 | `tools/dvr/rt_*` | ライブの位置推定（`rt_map.py` で他の飛行からキーフレーム地図、`rt_track.py` で過去のフレームだけで追跡・複数人をバッチ・答えを SSE で配信（`PUSH`）・直近の答えの束調整（`BA`））、`rt_trt.py`（LighterGlue と XFeat を TensorRT のエンジンに）、`rt_render.py`（`RENDER=1`：予測姿勢でその場で 3DGS を描いて照合。キーフレームより精度が高い）、`rt_capture.sh`（USB キャプチャ → SRT、録画つき）、`rt_replay.sh`、`ndi_send.py`（録画を NDI で流す試験用）、`rt_power*`（電力の記録）、`rt_day_gate.py` → `rt_day_power.py`（大会の配信の録画から 1 日ぶんの電力量を見積もる）、`rt_linux_setup.sh`（会場用の Linux の環境作り）、`rt_gpu_idle.sh`（合間の GPU を 21 → 7 W に戻す見張り。rt4090 で常駐）、`rt_rec.py`（NDI の送り手を全部、どれかのマスに絵があるあいだ録画。一覧は操作ページの `/rec`、判定は `rt_signal.py` を tracker と共有）、`rt_control.py`＋`rt_control.html`（会場の操作ページ `http://rt4090:8080`：NDI の送り手とマスを選んで tracker を開始 / 停止、状態・届いた映像・上から見た軌跡の表示、レンズは「自動」で tracker が見分ける。rt4090 で常駐。真上からの絵は `rt_topview.py`、`/obs` は図だけのページ（OBS のブラウザソース用）、描く部分は `rt_topview.js` を両ページで共有）。`/view/` は 3D のページ（`viewer/live.html` のビルド、`~/rt/view/`）、`/api/pilots` は会場のヒート管理からマスごとの名前。入力は SRT のほか `ndi://<名前>` で NDI を直接受ける。`usb_ndi.py` は rt4090 に挿した USB キャプチャを NDI の送り手にする。`rt_ndiview.py` は 3D のページをヘッドレスの Chrome で描いて NDI（「ghostline 3D」）・SRT（`:9000`）の片方か両方で運営のスイッチャーへ出す（出力・大きさ・fps とカメラは操作ページの「配信」、`ghostline-ndiview.service`）。`rt_trackline.py` はライブの答えだけからコースの線（周回を DTW で平均）。`rt_replay_day.sh` は 1 日の録画を tracker に実時間で流し直す（`PUSH=8765` なら操作ページの 3D のページにそのまま出る。画面録画もこれで撮った）。比べは `rt_replay_compare.py`（解けた割合）・`rt_replay_accuracy.py`（コースの線からの距離）・`rt_replay_verify.py`（真値なしの検算：答えの姿勢でスキャンを描き、マスの絵と照合し直して、その姿勢で説明できる点を数える）。`rt_map_grow.py` はその日の実フレームを地図に足す（操作ページが描いて照合のときヒートの合間に自動、「今すぐ育てる」も。tracker は `RKF=1`・`MAPWATCH` で止まらず差し替え）。正本は [docs/realtime-tracking.ja.md](docs/realtime-tracking.ja.md) |
-| `viewer/` | Vite + PlayCanvas。`index.html` は 1 飛行のビューア（mark / pad の道具つき、`live` でライブの答えの再生：`src/live.ts` が 100 ms 遅らせた内挿で描く）、`race.html` はレースの再生、`live.html` はライブの表示と録画の再生（`?replay=`）：マスごとに 1 人、MGP のページと同じ球・軌跡・名前タグ・コースの線・カメラ（Orbit / Top / Free / Follow）。観客向けは `event.html`（大会の 1 日の入口、R2 では `index.html`）・`watch.html`（ライブ、中継の WebSocket、DELAY で配信に合わせる）・`heat.html`（ヒートの見返し：`heats/<id>/race.json` があれば DVR 付き、無ければ `live.json`）、共通部品は `src/aud/`（`bun test src/aud`） |
+| `tools/mgp/` | スキャン無しの通し：MultiGP の公開 8up 録画から SfM の地図（`extract.py` → `sfm.py` / `chain.sh`）、3DGS、全フレームの位置合わせ（`localize.py`）、ラップで pilot 名（`name_slots.py`）、race.json（`make_mgp_race.py`）。正本は [docs/mgp-champs-2026.ja.md](docs/mgp-champs-2026.ja.md) |
+| `viewer/` | Vite + PlayCanvas。`index.html` は 1 飛行のビューア（mark / pad の道具つき、`live` でライブの答えの再生：`src/live.ts` が 100 ms 遅らせた内挿で描く）、`race.html` はレースの再生、`mgp.html` は MultiGP の全 Round の再生（`rounds.json`、右に DVR の列）、`live.html` はライブの表示と録画の再生（`?replay=`）：マスごとに 1 人、MGP のページと同じ球・軌跡・名前タグ・コースの線・カメラ（Orbit / Top / Free / Follow）。観客向けは `event.html`（大会の 1 日の入口、R2 では `index.html`）・`watch.html`（ライブ、中継の WebSocket、DELAY で配信に合わせる）・`heat.html`（ヒートの見返し：`heats/<id>/race.json` があれば DVR 付き、無ければ `live.json`）、共通部品は `src/aud/`（`bun test src/aud`） |
 | `ios/GhostlineAR/` | iPhone の AR アプリ（XcodeGen）。ARKit の 1 フレームを `tools/dvr/rt_vps.py`（rt4090 の位置合わせサーバー、`ghostline-vps`）に送って部屋に合わせ、スキャンの点・飛行の軌跡・DVR を重ねる。真上の 3DGS の絵と、ドローンの目（DVR、3DGS を魚眼に曲げて着地）へ飛んで切り替え。正本は [docs/ar-iphone.ja.md](docs/ar-iphone.ja.md) |
 | `tools/theta/` | THETA V の 360 動画からシーンを作り、縮尺の無い SfM を前のスキャンに合わせ（形の一致 → MASt3R → Umeyama）、地図まで（rt4090）。手順は field-test 文書 |
 | `data/dvr/` | 結果の小さな JSON（姿勢・評価・pad・race.json）。映像と中間物は `build/dvr/`（git の外） |
@@ -52,6 +53,7 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 - **Python から ghostline.saqoo.sh に送るときは user-agent を名乗る。** urllib の既定の名前は Cloudflare が 403（error 1010）で弾き、会場の中継の書き込みが届かなかった（`rt_relay.py` は `ghostline-relay/1`）
 - **ピンホールの動画を tracker や `cpr_track.py` に入れるときは、カメラ定義の `source_fisheye` を同じ大きさにする。** 両方とも HDZero の OSD を消すマスクをそこから作り、別のカメラの魚眼（THETA の 1920 px）が入るとマスクが全面「使わない」になって 0 フレームしか解けない
 - **rt4090 で長い処理は `sudo systemd-run --uid=saqoosha ...` で回す。** ユーザーの systemd（`--user`）は ssh が切れると止まる（linger が切ってある）。`ghostline-control` を再起動すると子の tracker も止まる
+- **rt4090 で torch の DataLoader（作業プロセスあり）を回すあいだは、ssh のセッションを 1 本つなぎっぱなしにする。** logind の `RemoveIPC`（既定 yes）は、ユーザーの最後のセッションが閉じるたびにその人の `/dev/shm` を消す。見張りの ssh が出入りするたびに torch の共有メモリが消え、`could not unlink the shared memory file` で作業プロセスが落ちて親だけが待ち続けた（MGP の夜の予選 16 本のうち 3 本、2026-10-27）。落ちた回の `qglobal.h5` は書きかけで残るので、流し直す前に loc のフォルダを消す
 - **tracker が落ちると、その走りの答え（`live/<マス>.jsonl`）は書かれない。** 止めたら `live/archive/` に退避する。2026-10-17 に gsplat の中の 0 除算（SIGFPE、`gsplat_cuda.so`）で 2 回落ちた原因は、**視野で切った splat が 0 個のまま gsplat 1.5.3 に渡ったこと**（渡す数が 0 だと毎回落ちる。描いた結果が 0 個になるのは平気）。dmesg の `trap divide error` の位置が、0 個を渡す試験と同じ命令（`gsplat_cuda.so`+0xa955e）。`frustum.rasterize_culled` と `rt_render.py` の RBATCH の経路は、0 個なら不透明度 0 の splat を 1 つ渡して空の絵を返す
 - **地図の絵をその日の光に合わせる。** 晴れの朝のスキャンだけの地図は、雨の午後に解ける割合 65%（その日の実フレームを足して 90%）。スキャンはレースと同じ時間帯・天気で撮り、30,000 回まで学習する。実フレームを足すなら直前のヒートの分（時間帯の離れたフレームは逆効果）。10/25 は tracker が GPU を 22 GB まで持って育てを止め、決勝の雨に対応できなかった。原因は地図の大きさではなく、差し替えるたびに古い地図が GPU に残ったこと（直した。1.28 万枚の地図で 6.5 GB のまま）。手順と数字は realtime 文書の「地図とスキャンを当日の光に合わせる」
 - **その日の DVR の SfM の地図にヒートを足すとき、MGP の `register.py` をそのまま使わない。** データベースの全部の画像で地図を組むので、一晩で 30 ヒートの画像が入ると 1 本 45 分を超え、語彙の木の照合は土台に 0 枚しか乗せなかった。`tools/dvr/daysfm/register3.py`（組む画像を土台と新しいヒートに絞り、土台と直接照合）で 1 本 2〜7 分。シェルの `while read` の中で ffmpeg を呼ぶと、ffmpeg が標準入力の残りの行を食べる（`-nostdin` か `read -u 3`）。正本は [docs/night-rebuild.ja.md](docs/night-rebuild.ja.md)
@@ -62,6 +64,27 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 - **NDI の送り手に音声が乗ると、新しく作った受け手が NDI SDK 6.1.1 の中で落ちる**（`ndir:audio` の segfault）。操作ページの中にあった録画の見張りは落ちずに固まり、JDL R7 10/25 は 11:49〜13:03 を録画しなかった。いまの録画は操作ページの子プロセス（`rt_rec.py`）で、落ちても、つながったままフレームが 30 秒来なくても（`REC_STALL`）2 秒後に立ち上がり直し、`/rec` に赤字で出る。ただし音声が乗っている間は、新しい受け手が毎回落ちるので録れない。まず送り手（ZowieBox）の音声を切る。PGM は音声つきなので録画できない
 - **中継の 4 分割のマスは下 12 行が黒い**（640×360 のうち絵は 348 行）。オフラインの通しに入れるときは `crop=640:348:0:0` してから 960×720 に戻す
 - **rt4090 のヘッドレス Chrome は `--use-angle=gl-egl` でないと GPU を使わない。** 既定は SwiftShader（CPU）で 2 fps、Vulkan は GPU プロセスが落ちる。配信を止めるのに `Page.setWebLifecycleState` の frozen を使わない（戻してもページが hidden のまま描かない。ページの rAF を `ghostlineHold` で止める）。`rt_ndiview.py` の SRT の ffmpeg に `-fflags nobuffer` を付けると mjpeg のパイプの入力がほとんど通らず、絵が黒くなる（数字と OBS の設定は realtime 文書）
+- **同じ印刷のゲートが並ぶコースを何レースもまとめて SfM すると壊れる。** きれいな 1 レースの地図に `register.py` で 1 レースずつ足す。
+  地図で 1 周に 1 回 60 m 飛ぶのはゲートの取り違え（`mapfix.py`）。3DGS に見える薄い「写し」は本物のことがある（点の観測元で確かめる）
+- **隣り合う同じ絵柄（MGP の最後の列の幕 2 枚）は、地図に列の 2 組目を 1 枚ぶんずらして作る。** 濃く見えるほうがずれた組で、
+  薄い「ゴースト」が本物だった。片側の点を消して合わせ直しても画像は元の組に戻るだけで見分けられない。幕より上（ゲートの上段）の
+  点の観測で画像を分けて直す（`tools/mgp/mapfix_unfold.py`、経緯は `docs/mgp-champs-2026-threads.ja.md` の 2）
+- **別の時刻の映像は地図に乗りにくい**（同レース 98% → 3 時間半後 52〜62%）。レンズではなく影。時間帯の違うレースを地図に足す
+- **夜の映像の SfM は、誤差が小さくても位置が潰れていることがある。** GLOMAP は 1.15 px・向きも合うのに、カメラが 1 点のまわりに
+  星形に散った。魚眼の歪みを 4 つ自由にすると束調整も止まる。incremental と SIMPLE_RADIAL_FISHEYE で組み、地図ができるたびに
+  外れ値の検査（`night_model_check.py`）と真上の図（`night_model_plot.py`）で確かめる。手順は `docs/mgp-champs-2026.ja.md` の「夕方と夜の決勝」
+- **MASt3R の `fast_reciprocal_NNs` は遅い。** 8,192 行ずつの小さな塊で GPU に何千回も命令を出し、1 組 0.16〜0.27 秒（推論は 0.08 秒）。
+  GPU を複数の処理で分けると 1.4〜2.1 秒に膨らむ。`tools/mgp/cpr_gap_lib.reciprocal_nns` は同じ組を 0.07〜0.12 秒で出す
+- **描いて照合した 1 コマずつの姿勢は、SfM の姿勢よりぶれる**（MGP の夜の決勝で中点からのずれ 0.67 m 対 0.27 m）。位置の確かめに使い、
+  答えには SfM の姿勢を残す（`tools/mgp/night_keep.py`）
+- **`tools/mgp/publish_mgp.sh` に Round を並べると、上がる `rounds.json` がその Round だけになる**（ページの一覧から他が消える）。
+  差し替えは Round を並べずに全部で流す（変わったファイルだけが送られる）
+- **MGP のページで、DVR の動画を `<video>` に直接取らせると、同じ HTTP/3 の接続のほかの取得が止まる。** `<video>` は十分ためると
+  `bytes=0-` の取得を開いたまま読むのをやめ、読まれないデータが接続ごとの流量制御の枠を占める。スキャン（`.sog`）が毎回 13〜15 MB
+  （全体 23 MB）で止まって見張りの取り直しを待ち、昼 → 夜の Round の切り替えでは次の `race.json` が 12 秒届かなかった。curl では
+  再現しない。動画と音は `fetch` で最後まで読んで blob で渡し、スキャンが決まってから始め、Round を移ったら打ち切る
+  （`viewer/src/mgp.ts` の `loadMedia`・`whenScanSettled`）
+- **8up 録画の帯の名前は映像のマスとずれることがある。** マス→pilot はラップの並びで決める（`name_slots.py`）
 - **race ページの splat がぼやける**：PlayCanvas の CPU ソートは走行中の依頼を捨てる。カメラが止まったら `resortWhenIdle` がソートを頼み直す
   （PlayCanvas の内部フィールドを読んでいるので、上げたら確かめる）
 

@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>2026 MultiGP Championship</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Open+Sans:wght@400;600;700&family=Roboto+Condensed:ital,wght@0,500;0,700;0,800;1,800&family=Roboto+Mono:wght@500;700&display=swap" rel="stylesheet" />
+    <style>
+      /* MultiGP's own palette (multigp.com: #8B181B / #AB0E0E / #FF3137 reds, #030A18 near-black) and type (Roboto
+         Condensed headings, Bebas display, Open Sans body); the board rows follow the broadcast's per-pilot bar.
+         Layout: the 3D view fills the window and every panel floats over it - standings top-left, the DVR strip down the
+         right edge (a row above the bar under 1000 px), the bar across the bottom between them. */
+      :root {
+        --pad: 12px; --gap: 6px;
+        --ink: #030a18; --muted: #5d6472; --line: #d8dbe2; --panel: rgba(255, 255, 255, 0.92); --bg: #eceef2;
+        --red: #ab0e0e; --red-hi: #e1262c; --red-lo: #6e1113; --hot: #ff3137; --black: #05070c;
+        --display: "Bebas Neue", "Roboto Condensed", ui-sans-serif, system-ui, sans-serif;
+        --cond: "Roboto Condensed", ui-sans-serif, system-ui, sans-serif;
+        --ui: "Open Sans", ui-sans-serif, system-ui, sans-serif; --mono: "Roboto Mono", ui-monospace, monospace;
+        --leftw: 300px; --stripw: 0px;   /* the DVR column's width, set by the page as it changes */
+        --solid: #f4f5f8;   /* the column: the panel colour, opaque */
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 14px/1.4 var(--ui); overflow: hidden; }
+      #c { position: fixed; left: 0; top: 0; display: block; }   /* sized by the page to the window minus the column */
+      .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; backdrop-filter: blur(6px); box-shadow: 0 6px 24px rgba(3, 10, 24, 0.12); }
+      button { font: inherit; color: inherit; }
+
+      /* top-left: the round header, then the standings */
+      #left { position: fixed; z-index: 3; left: var(--pad); top: var(--pad); width: var(--leftw); display: flex; flex-direction: column; gap: var(--gap); }
+      #head { overflow: hidden; }
+      #series { background: var(--ink); color: #fff; font: 700 10px var(--cond); letter-spacing: .12em; text-transform: uppercase; padding: 5px 10px 4px; border-bottom: 3px solid var(--red); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #roundrow { display: flex; align-items: stretch; }
+      #roundbtn { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 5px 10px 6px; cursor: pointer; display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 6px; }
+      #roundbtn:hover #rname { color: var(--red); }
+      #rname { font: 400 26px/1 var(--display); letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-top: 2px; }
+      #rmeta { grid-column: 1; font: 500 11px var(--cond); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #rmeta .info { display: inline-grid; place-items: center; width: 13px; height: 13px; margin-left: 5px; border: 1px solid var(--muted); border-radius: 50%; font: 700 9px/1 var(--ui); cursor: help; vertical-align: -2px; }
+      #roundbtn .chev { grid-row: 1 / 3; grid-column: 2; color: var(--muted); }
+      .stepbtn { width: 30px; border: 0; border-left: 1px solid var(--line); background: none; cursor: pointer; color: var(--muted); font: 700 18px var(--cond); }
+      .stepbtn:hover:not(:disabled) { color: var(--red); background: #fff; }
+      .stepbtn:disabled { opacity: .3; cursor: default; }
+      #hline { font: 600 11px/1.3 var(--cond); color: var(--red); padding: 0 10px 6px; }   /* loading, a missing scan, an error */
+      #hline[hidden] { display: none; }
+      /* the scan's loading overlay, centred on the canvas */
+      #scanload { position: fixed; z-index: 3; left: calc((100vw - var(--stripw)) / 2); top: 50%; transform: translate(-50%, -50%); width: 260px; padding: 10px 12px 12px; text-align: center; }
+      #scanload[hidden] { display: none; }
+      #scantext { font: 700 12px var(--cond); letter-spacing: .06em; text-transform: uppercase; color: var(--ink); margin-bottom: 8px; }
+      #scantrack { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+      #scanbar { height: 100%; width: 0; background: linear-gradient(90deg, var(--red-hi), var(--red)); border-radius: 3px; transition: width .15s; }
+      #scanbar.busy { width: 40%; animation: scanbusy 1.2s ease-in-out infinite alternate; }
+      @keyframes scanbusy { from { margin-left: 0; } to { margin-left: 60%; } }
+
+      /* the round menu */
+      #rounds { position: fixed; z-index: 5; left: var(--pad); top: var(--pad); width: min(560px, calc(100vw - 2 * var(--pad))); max-height: calc(100vh - 2 * var(--pad)); display: flex; flex-direction: column; overflow: hidden; background: #fff; }
+      #rounds[hidden] { display: none; }
+      #rounds header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--ink); color: #fff; border-bottom: 3px solid var(--red); }
+      #rounds header b { font: 400 24px/1 var(--display); letter-spacing: .03em; flex: 1; padding-top: 2px; }
+      #rfilter { font: 500 13px var(--ui); border: 1px solid #3a4150; background: #121a2b; color: #fff; border-radius: 6px; padding: 5px 9px; width: 190px; }
+      #rfilter::placeholder { color: #8a93a5; }
+      #rclose { background: none; border: 0; color: #fff; font-size: 20px; cursor: pointer; width: 28px; }
+      #rlist { overflow-y: auto; overscroll-behavior: contain; }
+      .ritem { display: grid; grid-template-columns: 58px 1fr auto; column-gap: 12px; align-items: center; width: 100%; text-align: left; background: #fff; border: 0; border-bottom: 1px solid var(--line); padding: 8px 12px; cursor: pointer; }
+      .ritem:hover { background: #f6f1f1; }
+      .rsec { position: sticky; top: 0; z-index: 1; padding: 6px 12px 5px; background: #f0eded; border-bottom: 1px solid var(--line); font: 700 12px var(--cond); letter-spacing: .14em; text-transform: uppercase; color: var(--ink); }
+      .ritem.on { background: #fbeaea; box-shadow: inset 4px 0 0 var(--red); }
+      .ritem .rno { font: 400 34px/1 var(--display); color: var(--red); text-align: center; }
+      .ritem .rno small { display: block; font: 700 9px var(--cond); letter-spacing: .12em; color: var(--muted); }
+      .ritem .rwhen { font: 600 12px var(--cond); color: var(--muted); }
+      .ritem .rpl { font: 700 13px var(--cond); text-transform: uppercase; color: var(--ink); line-height: 1.3; }
+      .ritem .rfast { text-align: right; font: 500 11px var(--cond); color: var(--muted); white-space: nowrap; }
+      .ritem .rfast b { display: block; font: 700 17px var(--mono); color: var(--ink); }
+      #rempty { padding: 16px; color: var(--muted); }
+
+      /* the standings: one broadcast bar per pilot - white place box on black, red bar with flag and name, dark lap box */
+      #board { display: flex; flex-direction: column; gap: 3px; }
+      .lb { display: grid; grid-template-columns: 38px 1fr auto; height: 28px; background: var(--black); border-radius: 4px; overflow: hidden; cursor: pointer; padding: 0; border: 0; text-align: left; box-shadow: 0 2px 8px rgba(3,10,24,.25); }
+      .lb .place { margin: 3px; border-radius: 2px; background: #fff; color: var(--black); font: 800 italic 15px/22px var(--cond); text-align: center; letter-spacing: -.01em; }
+      .lb .place sup { font-size: 9px; vertical-align: 4px; margin-left: 1px; }
+      .lb .bar { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 8px 0 7px; background: linear-gradient(90deg, var(--red-hi) 0%, var(--red) 55%, var(--red-lo) 100%); position: relative; }
+      .lb .bar::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--c, transparent); }
+      .lb .flag { font-size: 14px; line-height: 1; flex: none; }
+      .lb .nm { font: 800 15px var(--cond); color: #fff; text-transform: uppercase; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .lb .lap { display: flex; align-items: center; gap: 6px; margin: 3px; padding: 0 7px; border-radius: 5px; background: #1b1f27; color: #fff; min-width: 112px; justify-content: space-between; }
+      .lb .lap i { font: 700 normal 10.5px var(--cond); letter-spacing: .06em; color: #b9bfcb; white-space: nowrap; }
+      .lb .lap b { font: 700 13px var(--mono); font-variant-numeric: tabular-nums; }
+      .lb .lap.flash { background: #fff; color: var(--black); }
+      .lb .lap.flash i { color: var(--red); }
+      .lb.out .bar { background: linear-gradient(90deg, #6b6f78, #4a4e57); }
+      .lb.out .nm { color: #d6d9df; }
+      .lb.sel { outline: 2px solid var(--hot); outline-offset: 1px; }
+      .lb:focus-visible { outline: 2px solid var(--ink); }
+
+      /* The DVR column takes the whole right edge, flush with the window, its tiles edge to edge (2 px apart) filling the
+         height; the 3D canvas is everything left of it, full height (the page sizes it; nothing renders under the
+         column). The round header, the standings and the control bar float over the canvas.
+         The DVR column: one column of equal tiles, sized by the page so the column fills its height exactly, at most a quarter of the window wide (--rows is
+         the tile count, --ah the clips' height over width); the followed pilot's tile is the same size, outlined, and
+         moves to the top. The CSS formula here is only the fallback */
+      #dvr { --rows: 1; --tilew: min(25vw, calc((100vh - (var(--rows) - 1) * 2px) / var(--rows) / var(--ah, 0.75)));
+        position: fixed; z-index: 2; right: 0; top: 0; bottom: 0; padding: 0; background: var(--solid); border-left: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-end; gap: 2px; overflow: hidden; }   /* the tiles are sized to fit: a scrollbar from a rounding overflow would widen the column */
+      #dvr[hidden], #dvr:empty { display: none; }
+      .tile { position: relative; width: var(--tilew); flex: none; overflow: hidden; background: #000; cursor: pointer; transition: width .25s; }
+      .tile.sel { outline: 2px solid var(--hot); outline-offset: -2px; }   /* the followed pilot's */
+      .tile video { display: block; width: 100%; height: auto; aspect-ratio: var(--ar, 4 / 3); object-fit: cover; }
+      .tile .kmh { position: absolute; right: 5px; bottom: 4px; font: 700 11px var(--mono); color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.9); white-space: pre; }
+      .tile .nm { position: absolute; left: 0; bottom: 0; display: flex; align-items: center; gap: 4px; height: 17px; padding: 0 6px 0 4px; font: 800 10px var(--cond); text-transform: uppercase; color: #fff; background: linear-gradient(90deg, var(--red-hi), var(--red)); border-left: 3px solid; border-top-right-radius: 4px; max-width: 60%; white-space: nowrap; overflow: hidden; }
+      .tile .lt { position: absolute; left: 4px; bottom: 21px; font: 700 10px var(--cond); letter-spacing: .04em; color: #fff; background: rgba(5, 7, 12, .8); padding: 2px 5px; border-radius: 4px; white-space: nowrap; }
+      .tile .lt:empty { display: none; }
+      .tile .lt.flash { background: #fff; color: var(--black); }
+
+      /* bottom: the bar (the controls, and the timeline opening upward from them) floating at the bottom-left of the
+         canvas, as wide as its controls; under 1000 px the DVR row sits above it */
+      #bottom { position: fixed; z-index: 2; left: var(--pad); bottom: var(--pad); max-width: calc(100vw - var(--stripw) - 2 * var(--pad)); display: flex; flex-direction: column; gap: var(--gap); }
+      #bar { padding: 6px 10px 8px; display: flex; flex-direction: column; min-width: min(760px, 100%); }
+      #row1 { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; row-gap: 5px; }
+      #play { font: 700 12px var(--cond); letter-spacing: .04em; text-transform: uppercase; background: var(--red); color: #fff; border: 0; border-radius: 6px; padding: 0 12px; cursor: pointer; min-width: 76px; height: 30px; }
+      #play:hover { background: var(--red-hi); }
+      .iconbtn { display: inline-grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); cursor: pointer; }
+      .iconbtn:hover { border-color: var(--ink); }
+      .iconbtn[hidden] { display: none; }
+      svg[hidden] { display: none; }   /* the hidden attribute alone does not hide an svg */
+      .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #fff; height: 30px; }
+      .seg button { height: 100%; font: 700 11px var(--cond); letter-spacing: .03em; text-transform: uppercase; color: var(--muted); background: #fff; border: 0; padding: 0 9px; cursor: pointer; white-space: nowrap; }
+      .seg button + button { border-left: 1px solid var(--line); }
+      .seg button:hover { color: var(--ink); }
+      .seg button.on { background: var(--ink); color: #fff; }
+      .toggle { display: inline-flex; align-items: center; gap: 6px; height: 30px; font: 700 11px var(--cond); letter-spacing: .03em; text-transform: uppercase; color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 0 9px; cursor: pointer; white-space: nowrap; }
+      .toggle:hover { color: var(--ink); }
+      .toggle.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+      .toggle[hidden] { display: none; }
+      #clock { font: 700 20px var(--mono); min-width: 104px; font-variant-numeric: tabular-nums; }
+      #clock small { font: 500 12px var(--cond); color: var(--muted); margin-left: 3px; }
+      #follow { font: 700 11px var(--cond); text-transform: uppercase; color: var(--red); letter-spacing: .04em; }
+      #tl { display: block; width: 100%; order: -1; margin-bottom: 8px; cursor: pointer; touch-action: none; }   /* above the controls */
+      #tl[hidden] { display: none; }
+
+      /* official results */
+      #results { position: fixed; z-index: 4; left: calc(var(--leftw) + 2 * var(--pad)); top: var(--pad); width: min(640px, calc(100vw - 2 * var(--pad))); max-height: calc(100vh - 2 * var(--pad) - 160px); overflow: auto; background: #fff; }
+      #results[hidden] { display: none; }
+      #results header { display: flex; align-items: center; padding: 8px 12px; background: var(--ink); color: #fff; border-bottom: 3px solid var(--red); font: 400 22px/1 var(--display); letter-spacing: .03em; }
+      #results header span { flex: 1; padding-top: 2px; }
+      #results header button { background: none; border: 0; color: #fff; font-size: 20px; cursor: pointer; }
+      #results table { width: 100%; border-collapse: collapse; }
+      #results th { font: 700 10px var(--cond); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+      #results td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; font: 500 13px var(--cond); }
+      #results td.pos { font: 800 italic 18px var(--cond); width: 40px; }
+      #results td.who { font: 800 14px var(--cond); text-transform: uppercase; white-space: nowrap; }
+      #results td.who i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+      #results td.num { font: 700 13px var(--mono); white-space: nowrap; text-align: right; }
+      #results td.laps { font: 500 12px var(--mono); color: var(--muted); }
+      #results td.laps b { color: var(--red); font-weight: 700; }
+      #results .src { padding: 8px 12px 10px; font: 400 11px/1.45 var(--ui); color: var(--muted); }
+
+      .tag { position: fixed; z-index: 1; transform: translate(-50%, -135%); pointer-events: none; display: flex; align-items: center; height: 22px; font: 800 13px var(--cond); text-transform: uppercase; color: #fff; padding: 0 7px 0 0; border-radius: 3px; white-space: nowrap; background: var(--black); box-shadow: 0 2px 6px rgba(0,0,0,.3); overflow: hidden; }
+      .tag b { align-self: stretch; display: grid; place-items: center; min-width: 20px; padding: 0 4px; margin-right: 6px; color: #fff; }
+      .tag small { font-weight: 700; color: #b9bfcb; margin-left: 6px; }
+
+      /* the primary target is a full-HD window (1920 x 950..1080): everything a size up, 8 tiles at about 280 px */
+      @media (min-width: 1800px) {
+        :root { --leftw: 340px; --pad: 14px; --gap: 8px; }
+        #series { font-size: 11px; padding: 6px 12px 5px; }
+        #rname { font-size: 30px; }
+        #rmeta { font-size: 12px; }
+        #hline { font-size: 12px; }
+        .lb { grid-template-columns: 44px 1fr auto; height: 32px; }
+        .lb .place { font-size: 17px; line-height: 26px; }
+        .lb .flag { font-size: 16px; }
+        .lb .nm { font-size: 17px; }
+        .lb .lap { min-width: 130px; padding: 0 9px; }
+        .lb .lap i { font-size: 12px; }
+        .lb .lap b { font-size: 15px; }
+        .tile .nm { height: 20px; font-size: 12px; padding: 0 7px 0 5px; }
+        .tile .lt { font-size: 12px; padding: 3px 6px; bottom: 24px; }
+        .tile .kmh { font-size: 13px; }
+        #bar { padding: 8px 12px 10px; }
+        #row1 { gap: 8px; }
+        #play, .iconbtn, .seg, .toggle { height: 32px; }
+        #play { font-size: 13px; min-width: 84px; }
+        .seg button, .toggle { font-size: 12px; }
+        #clock { font-size: 22px; min-width: 116px; }
+        .tag { height: 24px; font-size: 14px; }
+      }
+      /* under 1000 px the strip is a row above the bar, scrolled sideways */
+      @media (max-width: 999px) {
+        #dvr { --tilew: 128px; position: static; flex-direction: row; align-items: flex-end; overflow-x: auto; overflow-y: hidden; border-left: 0; background: none; }
+      }
+      @media (max-width: 720px) {
+        :root { --pad: 8px; --gap: 5px; --leftw: calc(100vw - 2 * var(--pad)); }
+        #rname { font-size: 22px; }
+        #board { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
+        .lb { grid-template-columns: 28px 1fr auto; height: 24px; }
+        .lb .place { font-size: 12px; line-height: 18px; }
+        .lb .place sup { display: none; }
+        .lb .bar { padding: 0 4px 0 6px; gap: 4px; }
+        .lb .flag { font-size: 12px; }
+        .lb .nm { font-size: 12px; }
+        .lb .lap { min-width: 0; padding: 0 5px; border-radius: 4px; gap: 4px; }
+        .lb .lap i { display: none; }
+        .lb .lap b { font-size: 11px; }
+        #dvr { --tilew: 96px; }
+        .tile .kmh, .tile .lt { display: none; }   /* a 96 px tile holds the name chip and nothing else */
+        #clock { font-size: 18px; min-width: 84px; }
+        #bar { padding: 6px 8px 8px; }
+        #results { left: var(--pad); top: auto; bottom: var(--pad); max-height: 60vh; }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div id="scanload" class="panel" hidden><div id="scantext">Loading scan…</div><div id="scantrack"><div id="scanbar"></div></div></div>
+    <div id="left">
+      <div id="head" class="panel">
+        <div id="series"></div>
+        <div id="roundrow">
+          <button id="roundbtn" aria-haspopup="dialog" aria-controls="rounds" title="choose a round">
+            <span id="rname">—</span><span id="rmeta">loading…</span>
+            <svg class="chev" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="18" height="18" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
+          </button>
+          <button class="stepbtn" id="prevbtn" title="previous round ( [ )" aria-label="previous round">‹</button>
+          <button class="stepbtn" id="nextbtn" title="next round ( ] )" aria-label="next round">›</button>
+        </div>
+        <div id="hline">loading…</div>
+      </div>
+      <div id="board" role="list"></div>
+    </div>
+    <div id="rounds" class="panel" role="dialog" aria-label="rounds" hidden>
+      <header><b>Rounds</b><input id="rfilter" type="search" placeholder="Round, Main or pilot" aria-label="filter rounds by number or pilot" /><button id="rclose" aria-label="close">×</button></header>
+      <div id="rlist"></div>
+    </div>
+    <div id="results" class="panel" role="dialog" aria-label="results" hidden>
+      <header><span>Results</span><button id="resclose" aria-label="close">×</button></header>
+      <div id="restable"></div>
+    </div>
+    <div id="bottom">
+    <div id="dvr" title="click a feed to follow that pilot"></div>
+    <div id="bar" class="panel">
+      <div id="row1">
+        <!-- icons: Heroicons v2 outline (MIT, github.com/tailwindlabs/heroicons) -->
+        <button id="soundbtn" class="iconbtn" title="the broadcast's sound" aria-label="sound on or off" aria-pressed="true" hidden>
+          <svg id="snd-on" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" width="18" height="18" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424" /><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" /></svg>
+          <svg id="snd-off" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" width="18" height="18" aria-hidden="true" hidden><path stroke-linecap="round" stroke-linejoin="round" d="M17.25 9.75 19.5 12m0 0 2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25" /><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" /></svg>
+        </button>
+        <button id="resetbtn" class="iconbtn" title="reset: time, camera and speed" aria-label="reset time, camera and speed">
+          <svg fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" width="18" height="18" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
+        </button>
+        <button id="play">▶ Play</button>
+        <div id="clock">0.000<small>s</small></div>
+        <select id="speed" hidden><option>0.25</option><option>0.5</option><option selected>1</option></select>
+        <div class="seg" id="speedseg" title="playback speed"></div>
+        <div class="seg" id="camseg" title="camera (keys 1-3; a pilot's row or keys 4+ follow that pilot)"></div>
+        <button class="toggle on" id="trackbtn" title="the track line and the gates" aria-pressed="true">Track</button>
+        <button class="toggle" id="dvrbtn" title="the pilots' DVR feeds" aria-pressed="false">DVR</button>
+        <button class="toggle" id="tlbtn" title="the lap timeline" aria-pressed="false">Timeline</button>
+        <button class="toggle" id="resbtn" title="official results" aria-pressed="false" hidden>Results</button>
+      </div>
+      <canvas id="tl"></canvas>
+    </div>
+    </div>
+    <script type="module" src="./src/mgp.ts"></script>
+  </body>
+</html>

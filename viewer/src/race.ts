@@ -3,6 +3,7 @@
 // time (from KANATA's official total), the finish gate and the laps.
 import * as pc from 'playcanvas'
 import { bakeSky } from './sky'
+import { ribbon, ribbonMesh, segment, resortWhenIdle } from './racekit'
 
 type Pilot = { name: string; color: string; video: string; end: number; crashed: boolean; finish: number | null; lap_ends: number[]; laps: number[]; total: number; holeshot: number; holeshot_at: number
   official: { pos: number; laps: number; time: string; gap: string }; pos: number[][] }
@@ -86,38 +87,8 @@ function syncVideos() {
   }
 }
 
-// trails: a ribbon per pilot, turned to face the camera and a constant few pixels wide, fading to nothing at its old
-// end (WebGL lines are one pixel, and the immediate-mode ones cannot be transparent - fading them meant mixing in
-// white, which drew white lines over the scan)
 const TRAIL_PX = 4
-function ribbonMesh() {
-  // created with a triangle of every stream: the material's shader is built from the mesh's first streams, and an
-  // empty mesh gave one without vertex colours (white, never fading)
-  const mesh = new pc.Mesh(app.graphicsDevice); mesh.clear(true, false)
-  mesh.setPositions([0, 0, 0, 0, 0, 0, 0, 0, 0]); mesh.setNormals([0, 1, 0, 0, 1, 0, 0, 1, 0]); mesh.setColors(new Array(12).fill(0)); mesh.setIndices([0, 1, 2]); mesh.update(pc.PRIMITIVE_TRIANGLES)
-  const mat = new pc.StandardMaterial(); mat.useLighting = false; mat.diffuse = new pc.Color(0, 0, 0); mat.cull = pc.CULLFACE_NONE
-  mat.emissiveVertexColor = true; mat.emissive = new pc.Color(1, 1, 1); mat.opacityVertexColor = true; mat.opacityVertexColorChannel = 'a'
-  mat.blendType = pc.BLEND_NORMAL; mat.depthWrite = false; mat.depthTest = false; mat.update()
-  const e = new pc.Entity('ribbon'); e.addComponent('render', { meshInstances: [new pc.MeshInstance(mesh, mat)], layers: [pc.LAYERID_IMMEDIATE] }); app.root.addChild(e)   // after the splats
-  return mesh
-}
-// a band through pts, turned to face the eye and widthPx pixels wide wherever it is; alpha per point
-function ribbon(mesh: pc.Mesh, pts: pc.Vec3[], c: pc.Color, alpha: (k: number) => number, eye: pc.Vec3, pxWorld: number, widthPx: number, closed = false) {
-  if (pts.length < 2) { mesh.setPositions([0, 0, 0, 0, 0, 0, 0, 0, 0]); mesh.setNormals([0, 1, 0, 0, 1, 0, 0, 1, 0]); mesh.setColors(new Array(12).fill(0)); mesh.setIndices([0, 1, 2]); mesh.update(pc.PRIMITIVE_TRIANGLES); return }
-  const pos: number[] = [], col: number[] = [], nrm: number[] = [], idx: number[] = [], n = pts.length
-  const tan = new pc.Vec3(), view = new pc.Vec3(), side = new pc.Vec3()
-  pts.forEach((q, k) => {
-    const a_ = closed ? pts[(k - 1 + n) % n] : pts[Math.max(0, k - 1)], b_ = closed ? pts[(k + 1) % n] : pts[Math.min(n - 1, k + 1)]
-    tan.sub2(a_, b_).normalize(); view.sub2(eye, q)
-    const w = widthPx / 2 * pxWorld * view.length(); side.cross(tan, view.normalize()).normalize().mulScalar(w); const al = alpha(k)
-    pos.push(q.x + side.x, q.y + side.y, q.z + side.z, q.x - side.x, q.y - side.y, q.z - side.z)
-    col.push(c.r, c.g, c.b, al, c.r, c.g, c.b, al); nrm.push(0, 1, 0, 0, 1, 0)
-    if (k) { const i = 2 * k; idx.push(i - 2, i - 1, i, i - 1, i + 1, i) }
-  })
-  if (closed) { const i = 2 * n; idx.push(i - 2, i - 1, 0, i - 1, 1, 0) }
-  mesh.setPositions(pos); mesh.setNormals(nrm); mesh.setColors(col); mesh.setIndices(idx); mesh.update(pc.PRIMITIVE_TRIANGLES)
-}
-const trails = drones.map(() => ribbonMesh())
+const trails = drones.map(() => ribbonMesh(app))
 function updateTrail(mesh: pc.Mesh, p: Pilot, tc: number, c: pc.Color, eye: pc.Vec3, pxWorld: number) {
   // the last TRAIL seconds of the path up to its end, faded by age: after a crash it drains away instead of staying
   const n = Math.round(TRAIL * FPS), pts: pc.Vec3[] = [], age: number[] = []
@@ -133,7 +104,7 @@ const trackPts = (() => {
   for (let i = 0; i < n; i++) { const a = sm[i], b = sm[(i + 1) % n], L = a.distance(b); if (L < 1e-6) continue; let d = carry; for (; d < L; d += 0.25) out.push(new pc.Vec3().lerp(a, b, d / L)); carry = d - L }
   return out
 })()
-const trackMesh = ribbonMesh(), trackCol = new pc.Color(1, 1, 1)
+const trackMesh = ribbonMesh(app), trackCol = new pc.Color(1, 1, 1)
 const trackAlpha = (k: number) => ((k * 0.25) % 2 < 1.25 ? 0.18 : 0)
 const showTrack = $<HTMLInputElement>('showtrack'), trackBtn = $<HTMLButtonElement>('trackbtn')
 trackBtn.onclick = () => { showTrack.checked = !showTrack.checked; trackBtn.classList.toggle('on', showTrack.checked); trackBtn.setAttribute('aria-pressed', String(showTrack.checked)); trackBtn.blur() }
@@ -234,13 +205,6 @@ cam.camera!.calculateProjection = (m: pc.Mat4) => {
 // camera modes: orbit (the planned turn), top (the whole course from above), free, or following one pilot; keys 1-6
 const mode = $<HTMLSelectElement>('cammode')
 mode.replaceChildren(new Option('Orbit', 'orbit'), new Option('Top', 'top'), new Option('Free', 'free'), ...P.map((p, k) => new Option(p.name, 'p' + k)))   // p<k>: follow pilot k
-// the controls as button groups over the hidden select / checkbox (the code reads those as before)
-function segment(host: HTMLElement, sel: HTMLSelectElement, label: (o: HTMLOptionElement, i: number) => Node[]) {
-  const btns = Array.from(sel.options).map((o, i) => { const b = document.createElement('button'); b.append(...label(o, i))
-    b.onclick = () => { sel.selectedIndex = i; sel.onchange?.(new Event('change')); b.blur() }; return b })
-  host.replaceChildren(...btns)
-  return () => btns.forEach((b, i) => b.classList.toggle('on', i === sel.selectedIndex))
-}
 const camLabel = (o: HTMLOptionElement) => { if (o.value[0] !== 'p') return [document.createTextNode(o.text)]
   const dot = document.createElement('i'); dot.style.background = P[Number(o.value.slice(1))].color; return [dot, document.createTextNode(o.text)] }
 const refreshCam = segment($('camseg'), mode, camLabel)
@@ -355,19 +319,9 @@ const tmpA = new pc.Vec3(), tmpB = new pc.Vec3()
 const BLEND = 0.7, blendFrom = { pos: new pc.Vec3(), rot: new pc.Quat() }
 let blendT = BLEND
 function startBlend() { blendFrom.pos.copy(cam.getPosition()); blendFrom.rot.copy(cam.getRotation()); blendT = 0 }
-// PlayCanvas's CPU splat sort drops a request made while the previous one is still running, yet records the view as
-// sorted; a camera that then stays still (top, paused) keeps the order of an earlier pose, which smears dark haze over
-// the ground. So once the camera settles, one more sort is asked for directly, on a frame when the sorter is idle (so it
-// is not dropped too). Turning the camera to trigger it showed as a shake.
+// the splats re-sorted once the camera settles (resortWhenIdle, racekit.ts)
 const lastPos = new pc.Vec3(), lastRot = new pc.Quat()
 let stillFor = 0, resorted = false
-function resortWhenIdle() {
-  let sent = false
-  ;(app.renderer as any).gsplatDirector?.camerasMap.forEach((cd: any) => cd.layersMap.forEach((ld: any) => {
-    const m = ld.gsplatManager; if (m && (!m.cpuSorter || m.cpuSorter.jobsInFlight === 0)) { m.sortNeeded = true; sent = true }
-  }))
-  return sent
-}
 app.on('update', (dt: number) => {
   if (playing && !seeking) { t += dt * speed; if (t >= T_END) { t = T_END; setPlaying(false) } }
   if (measureFree()) plan()                                             // the layout settled or the window changed
@@ -379,7 +333,7 @@ app.on('update', (dt: number) => {
   const moved = cam.getPosition().distance(lastPos) > 1e-4 || Math.abs(Math.abs(cam.getRotation().dot(lastRot)) - 1) > 1e-9
   lastPos.copy(cam.getPosition()); lastRot.copy(cam.getRotation())
   stillFor = moved ? 0 : stillFor + dt; if (moved) resorted = false
-  if (!resorted && stillFor >= 0.2) resorted = resortWhenIdle()
+  if (!resorted && stillFor >= 0.2) resorted = resortWhenIdle(app)
   const eye = cam.getPosition(), pxWorld = 2 * Math.tan(FOV * Math.PI / 360) / free.h   // world size of one pixel at unit distance
   ribbon(trackMesh, showTrack.checked ? trackPts : [], trackCol, trackAlpha, eye, pxWorld, 6, true)
   for (const [n, d] of drones.entries()) {
