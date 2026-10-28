@@ -41,11 +41,14 @@ print(" ".join(r["data"] for r in j["rounds"]))
 PY
 FOLDERS="$(python3 -c 'import json,sys;print(" ".join(r["data"] for r in json.load(open(sys.argv[1]))["rounds"]))' "$UP/rounds.json")"
 [ -n "$FOLDERS" ] || { echo "no rounds selected" >&2; exit 1; }
+# a clip not here is left as it is in the bucket (rclone copy removes nothing): the clips live on rt4090
+# (/mnt/data/mgp_studio/clips/) once published; a round cut again has its new clips here
+AWAY=0
 for RD in $FOLDERS; do
   SRC="$DATA/$RD"; DST="$UP/$RD"; mkdir -p "$DST"
+  cp -L "$SRC/race.json" "$DST/race.json"
   VS="$(python3 -c 'import json,sys;print(" ".join(p["video"] for p in json.load(open(sys.argv[1]))["pilots"] if p.get("video")))' "$SRC/race.json")"
-  for f in race.json $VS; do cp -L "$SRC/$f" "$DST/$f"; done
-  [ -e "$SRC/audio.m4a" ] && cp -L "$SRC/audio.m4a" "$DST/audio.m4a"
+  for f in $VS audio.m4a; do if [ -e "$SRC/$f" ]; then cp -L "$SRC/$f" "$DST/$f"; else AWAY=$((AWAY + 1)); fi; done
   SCN="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["scene"])' "$SRC/race.json")"
   [ -e "$DATA/scene/$SCN.sog" ] && cp -L "$DATA/scene/$SCN.sog" "$UP/scene/"
   SKY="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("sky", ""))' "$SRC/race.json")"
@@ -56,7 +59,7 @@ for SCN in ${EXTRA_SCENES:-}; do
   [[ "$SCN" =~ ^[A-Za-z0-9._-]+$ ]] && [ -e "$DATA/scene/$SCN.sog" ] && cp -L "$DATA/scene/$SCN.sog" "$UP/scene/"
 done
 [ -e "$DATA/sky.jpg" ] && cp -L "$DATA/sky.jpg" "$UP/sky.jpg"
-du -sh "$UP"
+du -sh "$UP"; [ "$AWAY" -gt 0 ] && echo "$AWAY clips / audio not here: left as they are in the bucket"
 export "RCLONE_CONFIG_${UC}_ACCESS_KEY_ID=$AK" "RCLONE_CONFIG_${UC}_SECRET_ACCESS_KEY=$SK"; unset AK SK   # after the build, for rclone only
 rclone --s3-no-check-bucket copy --checksum --progress "$UP" "$REMOTE:$BUCKET/dvr/$NAME/data/"
 
