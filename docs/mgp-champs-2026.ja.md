@@ -211,6 +211,9 @@ ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash too
   クリップと `round_mac.sh` の loc JSON はそこを読む（`MGP_HOST`・`MGP_DIR`、`LOC_HOST`・`LOC_DIR` で替えられる）。Studio 用の台本
   （`extract.py`、`localize.py` など）の中の `~/mgp` は書き換えていない。Studio で回すなら場所を戻すか引数で渡す。
   片付けで消したもの：60 fps の切り出し `all60`、各 Round の画像（録画から作り直せる）、フライスルーと地図の途中の版。
+- 公開した Round のクリップと音（1,092 本、15 GB）は 2026-10-28 に Mac の `build/mgp/q*/` から rt4090 の `/mnt/data/mgp_studio/clips/` へ移した。
+  Mac には race.json だけが残る。`publish_mgp.sh` は手元に無いクリップを飛ばし、R2 にあるものをそのまま使う（rclone の copy は何も消さない）。
+  新しい名前で公開するときは、先に clips/ から `build/mgp/` へ戻す。
   手で付けた錨などの小物は `/mnt/data/mgpwork/studio_archive/`。
 - **Mac・Studio から rt4090 への大きな転送は LAN のアドレス（10.0.0.64）で。** 名前の `rt4090` は Tailscale のアドレスに解決され、
   同じ LAN の中でも暗号化トンネルを通って毎秒 35 MB で頭打ちになる（LAN なら 134 MB、rt4090 は 2.5 GbE）。Mac の tar は `._*` を
