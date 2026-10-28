@@ -80,6 +80,7 @@ uv run --with numpy python tools/mgp/make_mgp_race.py build --round 44 --poses b
 env/bin/python fullres_frames.py raw/<mp4> <extract.py の out> <out> <fps>
 # rt4090（~/mastenv、hloc）：照合（GPU）→ 地図（CPU）
 python night_sfm_hloc.py sk/sfm sk/images sk/masks <feed>[:<n 枚に 1 枚>] ...
+python night_db_srf.py sk/sfm database_v1.db database_srf.db      # カメラを SIMPLE_RADIAL_FISHEYE にした複製（下の「カメラのモデル」）
 MAPPER=incremental REUSE_DB=1 DB=database_srf.db BA_RATIO=1.4 PRUNE_BA=1 SNAPSHOT=600 [INPUT=<途中保存>] python night_sfm_hloc.py ...
 python night_model_check.py <model>; python night_model_plot.py <model> <out.jpg> <feed> ...    # 外れ値の検査、真上の図
 QCAM_FROM=dayloc/rounds/fd_loc NRET=20 python night_localize.py sk/sfm <model> sk/images sk/masks sk/loc_fd fd_s0:3 ...   # 基準点
@@ -104,7 +105,7 @@ ID=fa VF=<mp4> LAYOUT=4up SCENE=MGP-Champs-2026-night SKY=sky-night.jpg bash too
 - **つなぎ**：10/17 の 18:58〜22:54 の 9 本（B・A 決勝を含む）と 10/16 の E 決勝を 1 つの地図に入れる。となりの録画どうしは明るさが近く、
   30 点以上一致する組が 1,000〜7,000 ある。昼 12:30 の D 決勝のフレームも、この地図に 96% 登録できた。
 - **カメラのモデル**：OPENCV_FISHEYE の歪み 4 つをマスごとに自由にすると、夜は遠くの照明ばかりで決まらない。束調整が線形ソルバの失敗を
-  繰り返し、1 回に 55 分はまった。SIMPLE_RADIAL_FISHEYE（焦点と歪み 1 つ、f 320・k 0 から）にする。
+  繰り返し、1 回に 55 分はまった。SIMPLE_RADIAL_FISHEYE（焦点と歪み 1 つ、f 320・k 0 から）にする（`night_db_srf.py`）。
 - **GLOMAP は使わない**：誤差 1.15 px で向きも合うのに、どのマスのカメラも 1 点のまわりに星形に潰れた（2 回）。1 枚ずつ足す方式
   （incremental）に、全体の束調整の間引き（BA_RATIO 1.4、`ba_global_ignore_redundant_points3D`）を付ける。途中保存から続けると
   （`input_path`）、地図は `models/0/` でなく出力先の直下に書かれる。
