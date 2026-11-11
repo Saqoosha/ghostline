@@ -25,6 +25,10 @@ https://github.com/Saqoosha/VDGS ）から切り出した。スキャン（`.ply
 重い処理（MASt3R・gsplat の描画・束調整）は win4090 の WSL（`~/mastenv`）で回す。向こうの作業フォルダは
 `C:\Users\saqoosha\VDGS\dvr` と `VDGS\tools`（歴史的な名前。スクリプトがこのパスを直に書いている）。
 同じ機械の WD SN850X 2TB（NVMe、2026-10-19 に 750 EVO から移した）に会場用の Ubuntu 24.04（`ssh rt4090`、作業場所 `~/rt`）も入っていて、ライブの tracker はこちらのほうが速く電力も低い。
+rt4090 の root（1.8 TB）は埋まりやすい。終わった作業は Studio の USB ディスク `/Volumes/Storage/Keep/rt4090/ghostline/` に移す（2026-11-11 に MGP・FDF 10/17・古い spirula のシーン・会場の録画を約 250 GB。
+作り直せる `.h5`・`.jpg`・`.png`・`.db`・ckpt は移さずに消した）。`Storage` の隣の `TM-8TB` は Time Machine なので置かない。Studio から引くときは、Studio の `rt4090` の名前は Tailscale に向く（約 60 MB/s）ので
+LAN のアドレス（DHCP、`ip -4 addr`）を `ssh -o HostKeyAlias=rt4090 -o ControlMaster=yes -o ControlPath=<パス> -o ControlPersist=yes -fN` で先に開く（約 115 MB/s）。Studio の ssh は 1Password の承認が要り、裏で走る rsync は承認を待って固まるので、Saqoosha が承認したこの接続を使い回す。
+Studio の rsync は openrsync（`--info=progress2` が無く、`-n --stats` は量を出さない）。家にいる MBP を中継にしない（rt4090 と Studio はオフィスの同じ LAN）。
 起動は rEFInd の画面で 5 秒待つと Linux、矢印キーで Windows（Windows から Linux に入るのも rEFInd で選ぶ）。画面と電源は JetKVM（app.jetkvm.com、ATX の Reset あり）。
 
 ## 踏むと高くつくこと
