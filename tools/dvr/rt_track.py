@@ -142,6 +142,14 @@ FRESH, KQ, BLEND, TRAIL_L, TRAIL_W = E("FRESH", 0.1), E("KQ", 1e4), E("BLEND", 0
 T = lambda a: torch.tensor(a, dtype=torch.float32, device=dev)
 def sync(): torch.cuda.synchronize() if dev == "cuda" else torch.mps.synchronize() if dev == "mps" else None
 MEMLOG = int(E("MEMLOG", 0))                        # 1: the GPU memory after each load, at a map swap and every minute (what holds the 24 GB)
+# FRAME_JPEG=1: a video file's frames are held JPEG-encoded (quality 98) and decoded when read. The whole video is read
+# up front, and 20,180 frames at 640x480 are 18 GB raw: sixteen trackers on one machine ran out of its 251 GB (UDGP 2026 R3)
+FRAME_JPEG = int(E("FRAME_JPEG", 0))
+class JpegFrames:
+    def __init__(self): self.b = []
+    def append(self, im): self.b.append(cv2.imencode(".jpg", cv2.cvtColor(im, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 98])[1])
+    def __len__(self): return len(self.b)
+    def __getitem__(self, i): return cv2.cvtColor(cv2.imdecode(self.b[i], cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
 def mem(tag):
     if MEMLOG and dev == "cuda": print(f"mem {tag}: allocated {torch.cuda.memory_allocated() / 2**30:.2f} GB, reserved {torch.cuda.memory_reserved() / 2**30:.2f} GB, "
                                        f"peak {torch.cuda.max_memory_allocated() / 2**30:.2f} GB", flush=True)
@@ -277,7 +285,7 @@ class Stream:
             self.frames, self.arrive, self.arrive_wall = {0: np.zeros((RH, RW, 3), np.uint8)}, {}, {}; self.N = 1; self.signal, self.flip = None, 0   # a blank frame for the warm-up
             src = sources.setdefault(url, GridSource(url)); src.cells.append(self); self.src = src
             print(f"{self.prefix}: live cell {rect} of {url}, {len(self.m['pos'])} keyframes", flush=True); return
-        cap = cv2.VideoCapture(self.video); self.frames = []
+        cap = cv2.VideoCapture(self.video); self.frames = JpegFrames() if FRAME_JPEG else []
         while True:
             ok, fr = cap.read()
             if not ok or (NMAX and len(self.frames) >= NMAX): break

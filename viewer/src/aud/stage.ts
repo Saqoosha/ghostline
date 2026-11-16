@@ -5,6 +5,7 @@ import * as pc from 'playcanvas'
 import { L } from './i18n'
 import { loadHQ, pickScan, saveHQ, sceneBlob } from './scan'
 import { bakeSky } from '../sky'
+import { RoomOcclusion, type Room } from '../occlude'
 
 export type Slot = 'tl' | 'tr' | 'bl' | 'br'
 export const SLOTS: Slot[] = ['tl', 'tr', 'bl', 'br']
@@ -53,6 +54,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   // top looks straight down; follow sits behind and above one pilot. Drag turns and tilts, the wheel zooms; a switch glides.
   const view = { yawOffset: 30, topYaw: 0, pitch: innerHeight > innerWidth ? PITCH_TALL : PITCH0, zoom: 1 }
   const home = { target: new pc.Vec3(), dist: 70 }, orb = { target: new pc.Vec3(), dist: 70, init: false }
+  let orbitMin = 12                                   // the orbit's nearest (m) while it holds pilots or the course (index.json "orbitMin")
   const blendFrom = { pos: new pc.Vec3(), rot: new pc.Quat() }; let blendT = BLEND
   let course: pc.Vec3[] = [], line: pc.Vec3[] = [], lineS: number[] = []
   let drag: { x: number; y: number } | null = null
@@ -96,7 +98,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
     const goal = course.length ? home.target : up.length ? up.reduce((a, b) => a.clone().add(b), new pc.Vec3()).mulScalar(1 / up.length) : home.target
     orb.target.lerp(orb.target, goal, 1 - Math.exp(-dt / 1.5))
     const tanV = Math.tan(30 * Math.PI / 180) * 0.85, tanH = tanV * canvas.clientWidth / Math.max(1, canvas.clientHeight)
-    let need = course.length || up.length ? 12 : home.dist
+    let need = course.length || up.length ? orbitMin : home.dist
     for (const q of course.length ? course.concat(up) : up) { const v = q.clone().sub(orb.target), a = v.dot(right), b = v.dot(upv), c = v.dot(dir); need = Math.max(need, Math.abs(a) / tanH + c, Math.abs(b) / tanV + c) }
     need *= view.zoom; orb.dist += (need - orb.dist) * (1 - Math.exp(-dt / (need > orb.dist ? 1.0 : 2.5)))
     cam.setPosition(r.transformVector(new pc.Vec3(0, 0, orb.dist), new pc.Vec3()).add(orb.target)); cam.setRotation(r)
@@ -180,10 +182,33 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
     }
   }
 
+  // --- an indoor venue (index.json "room" and "cut", the page frame): the room's near walls and roof between the camera and
+  // the room are not drawn (occlude.ts, as the live page's), and an upper floor hides the floor below it from above, so
+  // splats over the cut fade out. The cut is the lowest of "cut" over everyone shown (the followed pilot alone in FOLLOW),
+  // none when someone is higher, and glides there once that has held CUT_HOLD s (no flicker as a pilot crosses)
+  const CUT_ROOM = 0.3, CUT_HOLD = 0.5, CUT_GLIDE = 0.35, CUT_NONE = 40
+  const cut = { levels: [] as number[], y: NaN, goal: NaN, held: 0 }
+  let room: Room | null = null, occ: { e: pc.Entity; o: RoomOcclusion } | null = null
+  function roomAt(dt: number) {
+    const g = shown?.e.gsplat
+    if (!room || !g || !shown) return
+    if (occ?.e !== shown.e) { occ = { e: shown.e, o: new RoomOcclusion(g, room) }; cut.y = NaN }
+    occ.o.update(cam.getPosition())
+    if (!cut.levels.length) return
+    const follow = stage.mode[0] === 'p' ? pilots.get(stage.mode.slice(1)) : undefined
+    const ys = (follow ? [follow] : [...pilots.values()]).filter(p => p.pos && p.state === 'flying').map(p => (p.pos as pc.Vec3).y)
+    const high = ys.length ? Math.max(...ys) + CUT_ROOM : Infinity
+    const goal = cut.levels.find(l => l > high) ?? CUT_NONE
+    if (goal !== cut.goal) { cut.goal = goal; cut.held = 0 } else cut.held += dt
+    if (Number.isNaN(cut.y)) cut.y = goal
+    else if (cut.held >= CUT_HOLD) cut.y += (goal - cut.y) * (1 - Math.exp(-dt / CUT_GLIDE))
+    occ.o.setCut(cut.y >= CUT_NONE - 0.5 ? Infinity : cut.y)
+  }
+
   let t = 0, at = canvas.getBoundingClientRect()
   app.on('update', (dt: number) => {
     if (!SHOT.has('still')) t += dt   // ?still: the orbit stays at its first angle (screenshots from one view)
-    cameraAt(t, dt)
+    cameraAt(t, dt); roomAt(dt)
     if (blendT < BLEND) { blendT = Math.min(BLEND, blendT + dt); const u = blendT / BLEND, k = u * u * (3 - 2 * u)
       cam.setPosition(new pc.Vec3().lerp(blendFrom.pos, cam.getPosition(), k)); cam.setRotation(new pc.Quat().slerp(blendFrom.rot, cam.getRotation(), k)) }
     const eye = cam.getPosition(), pxWorld = 2 * Math.tan(30 * Math.PI / 180) / Math.max(1, canvas.clientHeight)
@@ -237,6 +262,15 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
       ix = await json(base + 'index.json'); prog = progress
       // the orbit's middle: the course line's when it is in (whichever of the two files arrives last), else index.json's
       if (ix.orbit?.target && !course.length) { home.target.set(ix.orbit.target[0], ix.orbit.target[1], ix.orbit.target[2]); home.dist = ix.orbit.dist ?? home.dist; orb.init = false }
+      // an indoor venue (UDGP 2026 R3) looks down over its walls: the default pitch sees only the nearest wall from outside
+      if (typeof ix.orbitPitch === 'number') view.pitch = ix.orbitPitch
+      // ?yaw= / ?pitch= (degrees): the orbit's angle, for screenshots from chosen views (with ?still)
+      if (SHOT.has('yaw')) view.yawOffset = Number(SHOT.get('yaw'))
+      if (SHOT.has('pitch')) view.pitch = Number(SHOT.get('pitch'))
+      if (ix.room) room = ix.room as Room
+      // indoors the orbit stays far enough to be over the roof (outside the room, so its near walls and roof go)
+      if (typeof ix.orbitMin === 'number') orbitMin = ix.orbitMin
+      if (Array.isArray(ix.cut)) cut.levels = ix.cut.filter((v: unknown) => typeof v === 'number').sort((a: number, b: number) => a - b)
       if (ix.sky && !SHOT.get('nosky')) loadSky(base + ix.sky)   // beside the scan, not waited for
       await showScan(scanName())
       return { title: ix.title }
