@@ -5,7 +5,7 @@ import * as pc from 'playcanvas'
 import { L } from './i18n'
 import { loadHQ, pickScan, saveHQ, sceneBlob } from './scan'
 import { bakeSky } from '../sky'
-import { RoomOcclusion, type Room } from '../occlude'
+import { insetPolygon, RoomOcclusion, type Room } from '../occlude'
 
 export type Slot = 'tl' | 'tr' | 'bl' | 'br'
 export const SLOTS: Slot[] = ['tl', 'tr', 'bl', 'br']
@@ -20,7 +20,10 @@ export interface Stage { app: pc.Application; mode: Mode; onMode: (m: Mode) => v
 
 const css = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim()
 const hex = (h: string) => new pc.Color(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255)
-const TRAIL_PX = 5, LINE_W = 0.12, LINE_DASH = 1.0, LINE_GAP = 0.7, LINE_A = 0.22, PITCH0 = -18, TURN = 6, BLEND = 0.7
+// PULL: the trail, the line and the dots are drawn this far nearer the eye along the line of sight (the same place on screen):
+// a splat is depth-tested at its centre alone, so a large floor splat whose centre is nearer than a line 1 m over the floor
+// would cover it; an upper floor 5 m over it still does
+const PULL = 1.5, TRAIL_PX = 5, LINE_W = 0.12, LINE_DASH = 1.0, LINE_GAP = 0.7, LINE_A = 0.3, LINE_XRAY = 0.15, TRAIL_XRAY = 0.35, PITCH0 = -18, TURN = 6, BLEND = 0.7
 const cLost = new pc.Color(0.55, 0.57, 0.6)
 // a phone gets the light scan (index.json "lite", tools/publish-event.sh) unless ?q=full; a tall screen looks down more steeply,
 // or the orbit, backing off to hold the course across the narrow width, ends up inside the trees round it
@@ -56,7 +59,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   const home = { target: new pc.Vec3(), dist: 70 }, orb = { target: new pc.Vec3(), dist: 70, init: false }
   let orbitMin = 12                                   // the orbit's nearest (m) while it holds pilots or the course (index.json "orbitMin")
   const blendFrom = { pos: new pc.Vec3(), rot: new pc.Quat() }; let blendT = BLEND
-  let course: pc.Vec3[] = [], line: pc.Vec3[] = [], lineS: number[] = []
+  let course: pc.Vec3[] = [], line: pc.Vec3[] = [], lineS: number[] = [], low = -Infinity   // low: the course line's lowest point (the orbit stays over it)
   let drag: { x: number; y: number } | null = null
   // two fingers pinch the zoom (as the wheel) and do not turn; lifting one does not start a drag
   const touches = new Map<number, { x: number; y: number }>(); let pinch: { d: number; zoom: number } | null = null
@@ -75,7 +78,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
     if (!drag) return
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY
     if (stage.mode === 'top') view.topYaw -= dx * 0.3
-    else { view.yawOffset -= dx * 0.3; view.pitch = Math.max(-85, Math.min(-5, view.pitch - dy * 0.3)) }
+    else { view.yawOffset -= dx * 0.3; view.pitch = Math.max(-85, Math.min(15, view.pitch - dy * 0.3)) }
   })
   canvas.addEventListener('wheel', e => { setZoom(view.zoom * Math.exp(e.deltaY * 0.001)); e.preventDefault() }, { passive: false })
 
@@ -101,7 +104,9 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
     let need = course.length || up.length ? orbitMin : home.dist
     for (const q of course.length ? course.concat(up) : up) { const v = q.clone().sub(orb.target), a = v.dot(right), b = v.dot(upv), c = v.dot(dir); need = Math.max(need, Math.abs(a) / tanH + c, Math.abs(b) / tanV + c) }
     need *= view.zoom; orb.dist += (need - orb.dist) * (1 - Math.exp(-dt / (need > orb.dist ? 1.0 : 2.5)))
-    cam.setPosition(r.transformVector(new pc.Vec3(0, 0, orb.dist), new pc.Vec3()).add(orb.target)); cam.setRotation(r)
+    // dragged up to look slightly upwards (15 deg), the orbit stays 0.3 m over the course's lowest point, so it does not go through the floor
+    const eyeAt = r.transformVector(new pc.Vec3(0, 0, orb.dist), new pc.Vec3()).add(orb.target); eyeAt.y = Math.max(eyeAt.y, low + 0.3)
+    cam.setPosition(eyeAt); cam.lookAt(orb.target)
   }
 
   // --- the trail (as livepage.ts): an opaque, depth-writing band facing the camera, before the splats, thinning to its old
@@ -109,6 +114,18 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   const trailMat = new pc.StandardMaterial()
   { const m = trailMat; m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.cull = pc.CULLFACE_NONE; m.emissiveVertexColor = true; m.emissive = new pc.Color(1, 1, 1)
     m.blendType = pc.BLEND_NONE; m.depthWrite = true; m.depthTest = true; m.opacityVertexColor = true; m.opacityVertexColorChannel = 'a'; if (PHONE) m.opacityDither = pc.DITHER_BLUENOISE; else m.alphaToCoverage = true; m.update() }
+  // and again after the splats, in another colour, where splats hide it (under an upper floor, behind a wall): every splat
+  // fragment that passes the depth test - in front of whatever was drawn before the splats - counts up the stencil, and the
+  // x-ray passes draw only where XRAY_SPLATS or more lie in front (a floor's thick layer of splats, not a thin haze), so
+  // not over the parts that show (?xs=<n> tries another count)
+  const XRAY_SPLATS = Math.max(1, Math.min(255, Number(SHOT.get('xs')) || 12))
+  const STENCIL_MARK = new pc.StencilParameters({ func: pc.FUNC_ALWAYS, ref: 0, readMask: 255, writeMask: 255, fail: pc.STENCILOP_KEEP, zfail: pc.STENCILOP_KEEP, zpass: pc.STENCILOP_INCREMENT })
+  const STENCIL_HIDDEN = new pc.StencilParameters({ func: pc.FUNC_LESSEQUAL, ref: XRAY_SPLATS, readMask: 255, writeMask: 0, fail: pc.STENCILOP_KEEP, zfail: pc.STENCILOP_KEEP, zpass: pc.STENCILOP_KEEP })
+  app.systems.gsplat!.on('material:created', (m: pc.Material) => { m.stencilFront = m.stencilBack = STENCIL_MARK; m.update() })
+  const xray = (o: number, tint: pc.Color) => { const m = new pc.StandardMaterial(); m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.cull = pc.CULLFACE_NONE
+    m.emissiveVertexColor = true; m.emissive = tint; m.opacityVertexColor = true; m.opacityVertexColorChannel = 'a'; m.opacity = o
+    m.blendType = pc.BLEND_NORMAL; m.depthWrite = false; m.depthTest = false; m.stencilFront = m.stencilBack = STENCIL_HIDDEN; m.update(); return m }
+  const trailXray = xray(TRAIL_XRAY, new pc.Color(0.55, 0.55, 0.55))   // the pilot's colour, darker
   function drawTrail(mesh: pc.Mesh, pts: (number[] | null)[], c: pc.Color, eye: pc.Vec3, pxWorld: number, full = false) {
     const pos: number[] = [], col: number[] = [], nrm: number[] = [], idx: number[] = [], n = pts.length
     const tan = new pc.Vec3(), vw = new pc.Vec3(), side = new pc.Vec3(), a = new pc.Vec3(), b = new pc.Vec3(), q = new pc.Vec3(); let run = 0
@@ -118,7 +135,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
       q.set(p[0], p[1], p[2]); a.set(pa[0], pa[1], pa[2]); b.set(pb[0], pb[1], pb[2])
       tan.sub2(a, b); if (tan.lengthSq() < 1e-12) tan.set(1, 0, 0); tan.normalize(); vw.sub2(eye, q)
       const al = full ? 0.25 : k / Math.max(1, n - 1), w = (1 + (TRAIL_PX - 1) * al) / 2 * pxWorld * vw.length()
-      side.cross(tan, vw.normalize()); if (side.lengthSq() < 1e-12) side.set(0, 1, 0); side.normalize().mulScalar(w)
+      side.cross(tan, vw.normalize()); if (side.lengthSq() < 1e-12) side.set(0, 1, 0); side.normalize().mulScalar(w); q.add(vw.mulScalar(PULL))
       pos.push(q.x + side.x, q.y + side.y, q.z + side.z, q.x - side.x, q.y - side.y, q.z - side.z); col.push(c.r, c.g, c.b, al, c.r, c.g, c.b, al); nrm.push(0, 1, 0, 0, 1, 0)
       if (run) { const i = pos.length / 3 - 2; idx.push(i - 2, i - 1, i, i - 1, i + 1, i) }
       run++
@@ -127,18 +144,21 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
     mesh.setPositions(pos); mesh.setNormals(nrm); mesh.setColors(col); mesh.setIndices(idx); mesh.update(pc.PRIMITIVE_TRIANGLES)
   }
 
-  // --- the course line (as livepage.ts): a faint white dashed band, blended over the splats without depth
+  // --- the course line: a white dashed band, written with depth before the splats as the trail (the splats in front of it
+  // cover it), and an x-ray of it after them, so a stretch under an upper floor or behind a wall shows faintly
   const lineMesh = new pc.Mesh(app.graphicsDevice); lineMesh.clear(true, false); emptyMesh(lineMesh)
   { const m = new pc.StandardMaterial(); m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.cull = pc.CULLFACE_NONE; m.emissiveVertexColor = true; m.emissive = new pc.Color(1, 1, 1)
-    m.opacityVertexColor = true; m.opacityVertexColorChannel = 'a'; m.blendType = pc.BLEND_NORMAL; m.depthWrite = false; m.depthTest = false; m.update()
-    const e = new pc.Entity('course'); e.addComponent('render', { meshInstances: [new pc.MeshInstance(lineMesh, m)], layers: [pc.LAYERID_IMMEDIATE] }); app.root.addChild(e) }
+    m.opacityVertexColor = true; m.opacityVertexColorChannel = 'a'; m.opacity = LINE_A; m.blendType = pc.BLEND_NONE; m.depthWrite = true; m.depthTest = true
+    if (PHONE) m.opacityDither = pc.DITHER_BLUENOISE; else m.alphaToCoverage = true; m.update()
+    const e = new pc.Entity('course'); e.addComponent('render', { meshInstances: [new pc.MeshInstance(lineMesh, m)] }); app.root.addChild(e)
+    const x = new pc.Entity('course-xray'); x.addComponent('render', { meshInstances: [new pc.MeshInstance(lineMesh, xray(LINE_XRAY, new pc.Color(0.45, 0.85, 1)))], layers: [pc.LAYERID_IMMEDIATE] }); app.root.addChild(x) }
   function drawLine(eye: pc.Vec3) {
     const n = line.length; if (!n) { emptyMesh(lineMesh); return }
     const pos: number[] = [], col: number[] = [], nrm: number[] = [], idx: number[] = [], tan = new pc.Vec3(), vw = new pc.Vec3(), side = new pc.Vec3()
     for (let k = 0; k < n; k++) {
-      const q = line[k]; tan.sub2(line[(k - 1 + n) % n], line[(k + 1) % n]).normalize(); vw.sub2(eye, q)
-      side.cross(tan, vw.normalize()).normalize().mulScalar(LINE_W / 2)
-      const al = lineS[k] % (LINE_DASH + LINE_GAP) < LINE_DASH ? LINE_A : 0
+      tan.sub2(line[(k - 1 + n) % n], line[(k + 1) % n]).normalize(); vw.sub2(eye, line[k])
+      side.cross(tan, vw.normalize()).normalize().mulScalar(LINE_W / 2); const q = vw.mulScalar(PULL).add(line[k])
+      const al = lineS[k] % (LINE_DASH + LINE_GAP) < LINE_DASH ? 1 : 0
       pos.push(q.x + side.x, q.y + side.y, q.z + side.z, q.x - side.x, q.y - side.y, q.z - side.z); col.push(1, 1, 1, al, 1, 1, 1, al); nrm.push(0, 1, 0, 0, 1, 0)
       const i = 2 * k, j = 2 * ((k + 1) % n); idx.push(i, i + 1, j, i + 1, j + 1, j)
     }
@@ -148,34 +168,38 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   // --- a pilot: sphere, trail and tag; drawn each frame from what the page last showed
   class Pilot implements StagePilot {
     line = false; color: string; col: pc.Color; pos: pc.Vec3 | null = null; state: PilotState = 'nopic'; fwd = new pc.Vec3(0, 0, -1); prev: pc.Vec3 | null = null
-    mat = new pc.StandardMaterial(); dot = new pc.Entity('dot'); trail: pc.Mesh; trailE = new pc.Entity('trail'); pts: (number[] | null)[] = []; tag = document.createElement('div'); label = ''; sx = 0; sy = 0; order = 0; lift = 0
+    mat = new pc.StandardMaterial(); dot = new pc.Entity('dot'); trail: pc.Mesh; trailE = new pc.Entity('trail'); trailX = new pc.Entity('trail-xray'); dotX = new pc.Entity('dot-xray'); matX = new pc.StandardMaterial(); pts: (number[] | null)[] = []; tag = document.createElement('div'); label = ''; sx = 0; sy = 0; order = 0; lift = 0
     constructor(public stream: string, public slot: Slot) {
       this.color = css('--' + slot) || '#5b4bff'; this.col = hex(this.color)
       const m = this.mat; m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.emissive = this.col; m.update()
       this.dot.addComponent('render', { type: 'sphere', material: m, castShadows: false }); this.dot.setLocalScale(0.14, 0.14, 0.14); this.dot.enabled = false; app.root.addChild(this.dot)
       this.trail = new pc.Mesh(app.graphicsDevice); this.trail.clear(true, false); emptyMesh(this.trail)
       this.trailE.addComponent('render', { meshInstances: [new pc.MeshInstance(this.trail, trailMat)] }); app.root.addChild(this.trailE)
+      this.trailX.addComponent('render', { meshInstances: [new pc.MeshInstance(this.trail, trailXray)], layers: [pc.LAYERID_IMMEDIATE] }); app.root.addChild(this.trailX)
+      const mx = this.matX; mx.useLighting = false; mx.diffuse = new pc.Color(0, 0, 0); mx.emissive = this.col; mx.opacity = 0.35; mx.blendType = pc.BLEND_NORMAL; mx.depthWrite = false; mx.depthTest = false; mx.stencilFront = mx.stencilBack = STENCIL_HIDDEN; mx.update()
+      this.dotX.addComponent('render', { type: 'sphere', material: mx, castShadows: false, layers: [pc.LAYERID_IMMEDIATE] }); this.dotX.setLocalScale(0.14, 0.14, 0.14); this.dotX.enabled = false; app.root.addChild(this.dotX)
       this.tag.className = 'tag'; this.tag.style.setProperty('--c', this.color); this.tag.hidden = true; document.body.appendChild(this.tag)
     }
     show(pos: number[], trail: (number[] | null)[], state: PilotState, label: { name: string; flag: string; note: string }) {
       const now = new pc.Vec3(pos[0], pos[1], pos[2]), flat = new pc.Vec3(pos[0], 0, pos[2])
       if (this.prev) { const v = flat.clone().sub(this.prev); if (v.length() > 0.02) this.fwd.lerp(this.fwd, v.normalize(), 0.08).normalize() }
       this.prev = flat; this.pos = now; this.state = state; this.pts = trail
-      this.dot.enabled = true; this.dot.setPosition(now)
+      this.dot.enabled = this.dotX.enabled = true; this.dot.setPosition(now); this.dotX.setPosition(now)
       const key = [state, label.flag, label.name, label.note].join('|')
       if (key === this.label) return; this.label = key                 // the material and the tag only when they change
-      this.mat.emissive = state === 'flying' ? this.col : cLost; this.mat.update()
+      this.mat.emissive = this.matX.emissive = state === 'flying' ? this.col : cLost; this.mat.update(); this.matX.update()
       const b = document.createElement('b'); b.textContent = label.name ? '' : this.stream   // the audience knows pilots by name: the cell only when there is none
       const who = Object.assign(document.createElement('span'), { textContent: (label.flag + ' ' + label.name).trim() })
       const note = Object.assign(document.createElement('small'), { textContent: label.note })
       this.tag.classList.toggle('lost', state !== 'flying'); this.tag.replaceChildren(b, ...(label.name ? [who] : []), ...(label.note ? [note] : []))
     }
-    destroy() { this.dot.destroy(); this.trailE.destroy(); this.tag.remove() }
-    hide() { this.pos = null; this.state = 'nopic'; this.pts = []; this.prev = null; this.dot.enabled = false; this.tag.hidden = true; emptyMesh(this.trail) }
+    destroy() { this.dot.destroy(); this.dotX.destroy(); this.trailE.destroy(); this.trailX.destroy(); this.tag.remove() }
+    hide() { this.pos = null; this.state = 'nopic'; this.pts = []; this.prev = null; this.dot.enabled = this.dotX.enabled = false; this.tag.hidden = true; emptyMesh(this.trail) }
     draw(eye: pc.Vec3, pxWorld: number): boolean {               // true: its tag is on screen, at sx, sy
       if (!this.pos) return false
       drawTrail(this.trail, this.pts, this.state === 'flying' ? this.col : cLost, eye, pxWorld, this.line)
-      if (this.line) { this.dot.enabled = false; this.tag.hidden = true; return false }
+      const pulled = eye.clone().sub(this.pos).normalize().mulScalar(PULL).add(this.pos); this.dot.setPosition(pulled); this.dotX.setPosition(pulled)
+      if (this.line) { this.dot.enabled = this.dotX.enabled = false; this.tag.hidden = true; return false }
       const s = cam.camera!.worldToScreen(this.pos, new pc.Vec3()), behind = cam.forward.dot(this.pos.clone().sub(eye)) < 0
       this.sx = s.x + at.left; this.sy = s.y + at.top                   // the canvas's own place on the page (below the header)
       this.tag.hidden = behind; this.tag.style.left = this.sx + 'px'; return !behind
@@ -189,11 +213,31 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   const CUT_ROOM = 0.3, CUT_HOLD = 0.5, CUT_GLIDE = 0.35, CUT_NONE = 40
   const cut = { levels: [] as number[], y: NaN, goal: NaN, held: 0 }
   let room: Room | null = null, occ: { e: pc.Entity; o: RoomOcclusion } | null = null
+  // ?room: the room's shape on screen - the splats it hides painted red instead (occlude.ts OCC_DEBUG), the floor plan as
+  // given (white) and pulled in by the margin (yellow, the prism the test uses) from its floor up to its top (the roof
+  // planes', sampled every metre along each wall)
+  const ROOM_DEBUG = SHOT.has('room')
+  function drawRoom(r: Room, o: RoomOcclusion) {
+    if (!r.polygon) return
+    const m = r.margin ?? 0.25
+    const plan = (P: [number, number][], c: pc.Color, y0: number, up: number) => P.forEach(([x, z], i) => {
+      const [nx, nz] = P[(i + 1) % P.length], k = Math.max(1, Math.ceil(Math.hypot(nx - x, nz - z)))
+      app.drawLine(new pc.Vec3(x, y0, z), new pc.Vec3(nx, y0, nz), c, false)
+      app.drawLine(new pc.Vec3(x, y0, z), new pc.Vec3(x, o.top(x, z) + up, z), c, false)
+      for (let j = 0; j < k; j++) {
+        const ax = x + (nx - x) * j / k, az = z + (nz - z) * j / k, bx = x + (nx - x) * (j + 1) / k, bz = z + (nz - z) * (j + 1) / k
+        app.drawLine(new pc.Vec3(ax, o.top(ax, az) + up, az), new pc.Vec3(bx, o.top(bx, bz) + up, bz), c, false)
+      }
+    })
+    plan(r.polygon, pc.Color.WHITE, r.y0, m)
+    plan(insetPolygon(r.polygon, m), pc.Color.YELLOW, r.y0 + m, 0)
+  }
   function roomAt(dt: number) {
     const g = shown?.e.gsplat
     if (!room || !g || !shown) return
-    if (occ?.e !== shown.e) { occ = { e: shown.e, o: new RoomOcclusion(g, room) }; cut.y = NaN }
+    if (occ?.e !== shown.e) { occ = { e: shown.e, o: new RoomOcclusion(g, room, ROOM_DEBUG) }; cut.y = NaN }
     occ.o.update(cam.getPosition())
+    if (ROOM_DEBUG) drawRoom(room, occ.o)
     if (!cut.levels.length) return
     const follow = stage.mode[0] === 'p' ? pilots.get(stage.mode.slice(1)) : undefined
     const ys = (follow ? [follow] : [...pilots.values()]).filter(p => p.pos && p.state === 'flying').map(p => (p.pos as pc.Vec3).y)
@@ -279,11 +323,11 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
     hq: loadHQ(),
     async setHQ(on) { stage.hq = on; saveHQ(on); if (ix) await showScan(scanName()) },
     setCourse(track) {                                       // the course line; it may come later or be replaced during the day
-      if (!track?.length) { course = []; line = []; lineS = []; return }
+      if (!track?.length) { course = []; line = []; lineS = []; low = -Infinity; return }
       course = track.filter((_, k) => k % 8 === 0).map(q => new pc.Vec3(q[0], q[1], q[2]))
       line = track.map(q => new pc.Vec3(q[0], q[1], q[2])); lineS = [0]; for (let k = 1; k < line.length; k++) lineS.push(lineS[k - 1] + line[k].distance(line[k - 1]))
       const mid = (k: number) => { const v = track.map(q => q[k]); return (Math.min(...v) + Math.max(...v)) / 2 }, ys = track.map(q => q[1]).sort((a, b) => a - b)
-      home.target.set(mid(0), ys[ys.length >> 1], mid(2)); orb.init = false
+      home.target.set(mid(0), ys[ys.length >> 1], mid(2)); low = ys[0]; orb.init = false
     },
     pilot(stream, slot) { let p = pilots.get(stream); if (!p || p.slot !== slot) { p?.destroy(); p = new Pilot(stream, slot); pilots.set(stream, p) } return p },
     setMode(m) { if (m === stage.mode) return; blendFrom.pos.copy(cam.getPosition()); blendFrom.rot.copy(cam.getRotation()); blendT = 0; stage.mode = m; stage.onMode(m) },

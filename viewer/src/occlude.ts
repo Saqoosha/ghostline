@@ -7,6 +7,9 @@
 // through it, carried on past it, enters the plan's prism anywhere beyond it.
 // that the walls' own splats (and the scan's few centimetres of error) lie outside it. With the camera inside the room
 // every line of sight starts inside it, and nothing is hidden.
+// With a floor plan the top may follow a pitched roof ("roof": planes, each y = p.y + g[0] (x - p.x) + g[1] (z - p.z), optionally
+// only over x in [xr] and z in [zr]): the prism's top is the lowest of y1 and the planes over each point, lowered by the margin
+// (UDGP 2026 R3: the long hall's gable and the side hall's single slope, 12.5 m at the ridge down to 6.7 m at the eaves).
 // Also a cut (setCut): splats above a height fade out, wherever the camera is - an indoor venue's upper floor hides the
 // floor below it from above (UDGP 2026 R3, the audience pages' stage.ts). The work buffer takes one modifier, so the cut lives here.
 // The test runs where the splats are written to PlayCanvas' work buffer, so the buffer is rewritten when the camera moves
@@ -15,7 +18,9 @@ import * as pc from 'playcanvas'
 
 // "room" in a flight's index.json, in the scene's frame (y up)
 export type Room = { x0?: number; z0?: number; y0: number; y1: number; x1?: number; z1?: number; circle?: [number, number, number]; margin?: number
-  polygon?: [number, number][] }
+  polygon?: [number, number][]; roof?: RoofPlane[] }
+export type RoofPlane = { p: [number, number, number]; g: [number, number]; xr?: [number, number]; zr?: [number, number] }
+const MAX_ROOF = 8
 
 const GLSL = /* glsl */ `
 uniform vec4 uOccCam;   // xyz the camera, w its distance to the room (0 inside)
@@ -24,6 +29,19 @@ uniform vec4 uOccDisk;   // cx, cz, r (pulled in), 1 if the circle is used
 uniform vec4 uOccFar;    // x1, z1 (pulled in; 1e30 without), the cut's height (1e30 without), its fade (m either side)
 uniform vec4 uOccPoly[16];   // the floor plan's corners (x, z), two to a vec4
 uniform float uOccPolyN;     // how many (0: the box)
+uniform vec4 uOccRoof[8];    // the roof planes (a, gx, gz): y = a + gx x + gz z, already lowered by the margin
+uniform vec4 uOccRoofBox[8]; // where each applies: x0, x1, z0, z1
+uniform float uOccRoofN;
+float occTop(vec2 q) {                   // the prism's top over q
+    float y = uOccBox.w;
+    for (int i = 0; i < 8; i++) {
+        if (float(i) >= uOccRoofN) break;
+        vec4 b = uOccRoofBox[i];
+        if (q.x < b.x || q.x > b.y || q.y < b.z || q.y > b.w) continue;
+        vec4 r = uOccRoof[i]; y = min(y, r.x + r.y * q.x + r.z * q.y);
+    }
+    return y;
+}
 vec2 occV(int i) { vec4 q = uOccPoly[i / 2]; return (i % 2 == 0) ? q.xy : q.zw; }
 bool occInPoly(vec2 q) {                 // even-odd
     int n = int(uOccPolyN); bool c = false;
@@ -43,12 +61,23 @@ bool occPolyBeyond(vec3 cam, vec3 d) {
         float det = e.x * d.z - d.x * e.y;
         if (abs(det) < 1e-9) continue;
         float t = (e.x * w.y - w.x * e.y) / det, s = (d.x * w.y - d.z * w.x) / det;
-        if (t > 1.0 && s >= 0.0 && s <= 1.0) { float y = cam.y + t * d.y; if (y > uOccBox.z && y < uOccBox.w) return true; }
+        if (t > 1.0 && s >= 0.0 && s <= 1.0) { float y = cam.y + t * d.y; if (y > uOccBox.z && y < occTop(cam.xz + t * d.xz)) return true; }
     }
     if (abs(d.y) > 1e-7) {
         float ta = (uOccBox.z - cam.y) / d.y, tb = (uOccBox.w - cam.y) / d.y;
         if (ta > 1.0 && occInPoly(cam.xz + ta * d.xz)) return true;
-        if (tb > 1.0 && occInPoly(cam.xz + tb * d.xz)) return true;
+        if (tb > 1.0) { vec2 q = cam.xz + tb * d.xz; if (occInPoly(q) && uOccBox.w <= occTop(q) + 1e-3) return true; }
+    }
+    // through a roof plane, where that plane is the top
+    for (int i = 0; i < 8; i++) {
+        if (float(i) >= uOccRoofN) break;
+        vec4 r = uOccRoof[i];
+        float den = d.y - r.y * d.x - r.z * d.z;
+        if (abs(den) < 1e-7) continue;
+        float t = (r.x + r.y * cam.x + r.z * cam.z - cam.y) / den;
+        if (t <= 1.0) continue;
+        vec2 q = cam.xz + t * d.xz; float y = cam.y + t * d.y;
+        if (y > uOccBox.z && y <= occTop(q) + 1e-3 && occInPoly(q)) return true;
     }
     return false;
 }
@@ -58,7 +87,7 @@ void occSlab(float o, float d, float lo, float hi, inout float t0, inout float t
     t0 = max(t0, min(a, b)); t1 = min(t1, max(a, b));
 }
 bool occInside(vec3 p) {
-    if (uOccPolyN > 0.5) return p.y > uOccBox.z && p.y < uOccBox.w && occInPoly(p.xz);
+    if (uOccPolyN > 0.5) return p.y > uOccBox.z && p.y < occTop(p.xz) && occInPoly(p.xz);
     return p.x > uOccBox.x && p.z > uOccBox.y && p.x < uOccFar.x && p.z < uOccFar.y && p.y > uOccBox.z && p.y < uOccBox.w &&
         (uOccDisk.w < 0.5 || distance(p.xz, uOccDisk.xy) < uOccDisk.z);
 }
@@ -102,7 +131,8 @@ void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout ve
 void modifySplatColor(vec3 center, inout vec4 color) {
     color.a *= 1.0 - smoothstep(uOccFar.z - uOccFar.w, uOccFar.z + uOccFar.w, center.y);
 #ifdef OCC_DEBUG
-    if (occHit) color.rgb = vec3(1.0, 0.0, 0.0);
+    // the colour-only rewrite (the camera still) skips the geometry pass, so the test runs again here
+    if (occHidden(center, 0.0)) color.rgb = vec3(1.0, 0.0, 0.0);
 #endif
 }
 `
@@ -130,6 +160,7 @@ export class RoomOcclusion {
   private camArr = [0, 0, 0, 0]
   private on = false
   private box: number[]; private disk: number[]; private far: number[]; private poly: [number, number][] = []
+  private roof: number[][] = []   // a, gx, gz, x0, x1, z0, z1 (lowered by the margin)
   constructor(private gs: pc.GSplatComponent, room: Room, private debug = false) {
     const m = room.margin ?? 0.25
     this.box = [(room.x0 ?? -1e30) + m, (room.z0 ?? -1e30) + m, room.y0 + m, room.y1 - m]
@@ -143,6 +174,15 @@ export class RoomOcclusion {
     this.poly = poly
     gs.setParameter('uOccPoly[0]', buf)
     gs.setParameter('uOccPolyN', poly.length)
+    if ((room.roof?.length ?? 0) > MAX_ROOF) throw new Error(`room roof: at most ${MAX_ROOF} planes`)
+    const rp = new Float32Array(4 * MAX_ROOF), rb = new Float32Array(4 * MAX_ROOF)
+    this.roof = (poly.length ? room.roof ?? [] : []).map(({ p, g, xr, zr }, i) => {
+      const r = [p[1] - g[0] * p[0] - g[1] * p[2] - m, g[0], g[1], xr?.[0] ?? -1e30, xr?.[1] ?? 1e30, zr?.[0] ?? -1e30, zr?.[1] ?? 1e30]
+      rp.set(r.slice(0, 3), i * 4); rb.set(r.slice(3), i * 4); return r
+    })
+    gs.setParameter('uOccRoof[0]', rp)
+    gs.setParameter('uOccRoofBox[0]', rb)
+    gs.setParameter('uOccRoofN', this.roof.length)
     gs.setParameter('uOccDisk', this.disk)
     gs.setParameter('uOccCam', this.camArr)
     this.enabled = true
@@ -156,7 +196,14 @@ export class RoomOcclusion {
   // a lower bound of the camera's distance to the room: the largest of its distances outside each of the room's limits
   private distance(p: pc.Vec3) {
     const [x0, z0, y0, y1] = this.box, [cx, cz, r, useDisk] = this.disk, [x1, z1] = this.far
-    if (this.poly.length) return Math.max(this.planDistance(p.x, p.z), y0 - p.y, p.y - y1, 0)
+    if (this.poly.length) {
+      // above the roof: the distance to each plane that holds everywhere (the room is below all of them); a plane over a
+      // part only is left out, so this stays a lower bound
+      let up = p.y - y1
+      for (const [a, gx, gz, rx0, rx1, rz0, rz1] of this.roof)
+        if (rx0 < -1e29 && rx1 > 1e29 && rz0 < -1e29 && rz1 > 1e29) up = Math.max(up, (p.y - a - gx * p.x - gz * p.z) / Math.hypot(1, gx, gz))
+      return Math.max(this.planDistance(p.x, p.z), y0 - p.y, up, 0)
+    }
     let d = Math.max(x0 - p.x, z0 - p.z, p.x - x1, p.z - z1, y0 - p.y, p.y - y1)
     if (useDisk) d = Math.max(d, Math.hypot(p.x - cx, p.z - cz) - r)
     return Math.max(d, 0)
@@ -166,6 +213,12 @@ export class RoomOcclusion {
     const v = Number.isFinite(y) ? y : 1e30
     if (Math.abs(v - this.far[2]) < 1e-3 && fade === this.far[3]) return
     this.far = [this.far[0], this.far[1], v, fade]; this.gs.setParameter('uOccFar', this.far)
+  }
+  // the prism's top over (x, z), as occTop
+  top(x: number, z: number) {
+    let y = this.box[3]
+    for (const [a, gx, gz, x0, x1, z0, z1] of this.roof) if (x >= x0 && x <= x1 && z >= z0 && z <= z1) y = Math.min(y, a + gx * x + gz * z)
+    return y
   }
   // how far (x, z) lies outside the floor plan (0 inside): to its nearest edge
   private planDistance(x: number, z: number) {
