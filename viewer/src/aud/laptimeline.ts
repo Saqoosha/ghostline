@@ -3,7 +3,7 @@
 // HS at the holeshot and L<n> <time> at each pass, a dashed line 90 s after the pilot's own holeshot when the axis reaches it, and
 // the playhead. The passes are the official ones: the venue's timing (Speedhive) put into race.json / live.json as
 // "official" by tools/dvr/official_laps.py. A lap the decoder missed a pass in is one long lap there; it is labelled with
-// the laps it holds (L2-4), counted against the pilot's typical lap and capped by the official count (lapNumbers).
+// the laps it holds (L2-4), counted against the pilot's fastest lap up to the official count (lapNumbers).
 export type Official = { session: string; cells: Record<string, { name: string; laps: number[]; ends: number[]; holeshot: number; laps_driven?: number; best?: string }> }
 export type LapRow = { cell: string; name: string; color: string; hs: number; ends: number[]; laps: number[]; num: number[] }   // times in seconds from the replay's start; num: the lap count at each pass
 export const RACE = 90
@@ -15,14 +15,17 @@ export function lapRows(off: Official | undefined, start: number, colorOf: (cell
     .map(([cell, c]) => ({ cell, name: c.name, color: colorOf(cell), hs: (c.holeshot - start) / 1000, ends: c.ends.map(e => (e - start) / 1000), laps: c.laps, num: lapNumbers(c.laps, c.laps_driven) }))
 }
 
-// a lap holds as many laps as it is long against the pilot's typical (median) lap, but never more in all than the official
-// count: RotorHazard's equals its passes, so a slow lap stays one; Speedhive's can be higher with no long lap (then none is
-// split). Over the count, the laps whose last extra lap is least borne out by their length give it back first
+// the laps missed (the official count less the passes: Speedhive's laps_driven includes them, RotorHazard's equals its
+// passes) go one at a time to the lap with the most room, l / fastest - (laps it holds), and only while that is at least
+// SPLIT: a lap of under 1.75 fastest laps is a slow lap, never split, and a count with no long lap to match splits none.
+// Without a count, the same rule with no limit
+const SPLIT = 0.75
 export function lapNumbers(laps: number[], driven?: number): number[] {
-  const typical = [...laps].sort((a, b) => a - b)[Math.floor(laps.length / 2)] ?? 1
-  const k = laps.map(l => Math.max(1, Math.round(l / typical)))
-  for (let over = k.reduce((a, b) => a + b, 0) - Math.max(driven ?? Infinity, laps.length); over > 0; over--) {
-    let j = -1; laps.forEach((l, i) => { if (k[i] > 1 && (j < 0 || l / typical - k[i] < laps[j] / typical - k[j])) j = i }); k[j]--
+  const fastest = Math.min(...laps), k = laps.map(() => 1)
+  let missed = typeof driven === 'number' ? driven - laps.length : laps.length * 4
+  for (; missed > 0 && fastest > 0; missed--) {
+    let j = -1; laps.forEach((l, i) => { if (l / fastest - k[i] >= SPLIT && (j < 0 || l / fastest - k[i] > laps[j] / fastest - k[j])) j = i })
+    if (j < 0) break; k[j]++
   }
   let n = 0; return k.map(x => (n += x))
 }

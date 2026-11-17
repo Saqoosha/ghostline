@@ -15,7 +15,11 @@ test('the official count bounds the missed laps', () => {
   expect(lapNumbers([20, 20, 20, 60, 40], 8)).toEqual([1, 2, 3, 6, 8])        // Speedhive: 3 missed, in the long laps
   expect(lapNumbers([20, 20, 61], 4)).toEqual([1, 2, 4])                      // fewer missed than the lap's length says
   expect(lapNumbers([16.691, 16.226, 16.448, 16.165], 6)).toEqual([1, 2, 3, 4])   // a higher count with no long lap splits none (JDL 10/24 h4)
-  expect(lapNumbers([20, 20, 41])).toEqual([1, 2, 4])                              // no count: by length
+  expect(lapNumbers([20, 41], 3)).toEqual([1, 3])                             // two passes: the long one is the missed lap
+  expect(lapNumbers([40, 40, 40, 20, 20], 8)).toEqual([2, 4, 6, 7, 8])        // most laps missed a pass
+  expect(lapNumbers([16, 16, 24, 16], 6)).toEqual([1, 2, 3, 4])               // a slow lap (1.5x) is not split
+  expect(lapNumbers([0, 0, 5], 3)).toEqual([1, 2, 3])                         // a zero lap: no split, no hang
+  expect(lapNumbers([20, 20, 41])).toEqual([1, 2, 4])                            // no count: by length
 })
 
 test('standings at the playhead show only the passes made by then', () => {
