@@ -25,7 +25,8 @@ const css = (v: string) => getComputedStyle(document.documentElement).getPropert
 const hex = (h: string) => new pc.Color(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255)
 // PULL: the trail, the line and the dots are drawn this far nearer the eye along the line of sight (the same place on screen):
 // a splat is depth-tested at its centre alone, so a large floor splat whose centre is nearer than a line 1 m over the floor
-// would cover it; an upper floor 5 m over it still does
+// would cover it; an upper floor 5 m over it still does. Never more than half the way to the eye (Free flies close)
+const pullOf = (dist: number) => Math.min(PULL, dist / 2)
 const PULL = 1.5, TRAIL_PX = 5, LINE_W = 0.12, LINE_DASH = 1.0, LINE_GAP = 0.7, LINE_A = 0.3, LINE_XRAY = 0.15, TRAIL_XRAY = 0.35, PITCH0 = -18, TURN = 6, BLEND = 0.7
 const cLost = new pc.Color(0.55, 0.57, 0.6)
 // a phone gets the light scan (index.json "lite", tools/publish-event.sh) unless ?q=full; a tall screen looks down more steeply,
@@ -74,7 +75,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   const cam = new pc.Entity('cam'); cam.addComponent('camera', { clearColor: hex(css('--paper') || '#f3f4f6'), fov: 60, nearClip: 0.1, farClip: 600 }); app.root.addChild(cam)
 
   // --- camera (as livepage.ts): orbit turns slowly round the course's middle, as near as holds the course and everyone up;
-  // top looks straight down; follow sits behind and above one pilot. Drag turns and tilts, the wheel zooms; a switch glides.
+  // top looks straight down; follow sits behind and above one pilot. Drag turns and tilts, the wheel zooms (Free: freecam.ts); a switch glides.
   const view = { yawOffset: 30, topYaw: 0, pitch: innerHeight > innerWidth ? PITCH_TALL : PITCH0, zoom: 1 }
   const home = { target: new pc.Vec3(), dist: 70 }, orb = { target: new pc.Vec3(), dist: 70, init: false }
   let orbitMin = 12                                   // the orbit's nearest (m) while it holds pilots or the course (index.json "orbitMin")
@@ -85,7 +86,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   // as in the orbit: from outside, those in front of the inside; with the camera in the room, none
   const free = new FreeCam()
   let drag: { x: number; y: number; pan: boolean; touch: boolean } | null = null
-  // two fingers pinch the zoom (as the wheel) and do not turn; lifting one does not start a drag
+  // two fingers pinch the zoom (as the wheel; Free pans and flies) and do not turn; lifting one does not start a drag
   const touches = new Map<number, { x: number; y: number }>(); let pinch: { d: number; zoom: number; mx: number; my: number } | null = null
   const spread = () => { const [a, b] = [...touches.values()]; return Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)) }
   const setZoom = (z: number) => { view.zoom = Math.max(0.4, Math.min(3, z)) }
@@ -171,8 +172,8 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
       const pa = pts[k - 1] ?? p, pb = pts[k + 1] ?? p
       q.set(p[0], p[1], p[2]); a.set(pa[0], pa[1], pa[2]); b.set(pb[0], pb[1], pb[2])
       tan.sub2(a, b); if (tan.lengthSq() < 1e-12) tan.set(1, 0, 0); tan.normalize(); vw.sub2(eye, q)
-      const al = full ? 0.25 : k / Math.max(1, n - 1), w = (1 + (TRAIL_PX - 1) * al) / 2 * pxWorld * vw.length()
-      side.cross(tan, vw.normalize()); if (side.lengthSq() < 1e-12) side.set(0, 1, 0); side.normalize().mulScalar(w); q.add(vw.mulScalar(PULL))
+      const L = vw.length(), al = full ? 0.25 : k / Math.max(1, n - 1), w = (1 + (TRAIL_PX - 1) * al) / 2 * pxWorld * L
+      side.cross(tan, vw.normalize()); if (side.lengthSq() < 1e-12) side.set(0, 1, 0); side.normalize().mulScalar(w); q.add(vw.mulScalar(pullOf(L)))
       pos.push(q.x + side.x, q.y + side.y, q.z + side.z, q.x - side.x, q.y - side.y, q.z - side.z); col.push(c.r, c.g, c.b, al, c.r, c.g, c.b, al); nrm.push(0, 1, 0, 0, 1, 0)
       if (run) { const i = pos.length / 3 - 2; idx.push(i - 2, i - 1, i, i - 1, i + 1, i) }
       run++
@@ -194,8 +195,8 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
     const n = line.length; if (!n) { emptyMesh(lineMesh); return }
     const pos: number[] = [], col: number[] = [], nrm: number[] = [], idx: number[] = [], tan = new pc.Vec3(), vw = new pc.Vec3(), side = new pc.Vec3()
     for (let k = 0; k < n; k++) {
-      tan.sub2(line[(k - 1 + n) % n], line[(k + 1) % n]).normalize(); vw.sub2(eye, line[k])
-      side.cross(tan, vw.normalize()).normalize().mulScalar(LINE_W / 2); const q = vw.mulScalar(PULL).add(line[k])
+      tan.sub2(line[(k - 1 + n) % n], line[(k + 1) % n]).normalize(); vw.sub2(eye, line[k]); const L = vw.length()
+      side.cross(tan, vw.normalize()).normalize().mulScalar(LINE_W / 2); const q = vw.mulScalar(pullOf(L)).add(line[k])
       const al = lineS[k] % (LINE_DASH + LINE_GAP) < LINE_DASH ? 1 : 0
       pos.push(q.x + side.x, q.y + side.y, q.z + side.z, q.x - side.x, q.y - side.y, q.z - side.z); col.push(1, 1, 1, al, 1, 1, 1, al); nrm.push(0, 1, 0, 0, 1, 0)
       const i = 2 * k, j = 2 * ((k + 1) % n); idx.push(i, i + 1, j, i + 1, j + 1, j)
@@ -236,7 +237,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
     draw(eye: pc.Vec3, pxWorld: number): boolean {               // true: its tag is on screen, at sx, sy
       if (!this.pos) return false
       drawTrail(this.trail, this.pts, this.state === 'flying' ? this.col : cLost, eye, pxWorld, this.line)
-      const pulled = eye.clone().sub(this.pos).normalize().mulScalar(PULL).add(this.pos); this.dot.setPosition(pulled); this.dotX.setPosition(pulled)
+      const v = eye.clone().sub(this.pos), L = v.length(), pulled = v.normalize().mulScalar(pullOf(L)).add(this.pos); this.dot.setPosition(pulled); this.dotX.setPosition(pulled)
       if (this.line) { this.dot.enabled = this.dotX.enabled = false; this.tag.hidden = true; return false }
       const s = cam.camera!.worldToScreen(this.pos, new pc.Vec3()), behind = cam.forward.dot(this.pos.clone().sub(eye)) < 0
       this.sx = s.x + at.left; this.sy = s.y + at.top                   // the canvas's own place on the page (below the header)
@@ -246,7 +247,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
 
   // --- an indoor venue (index.json "room" and "cut", the page frame): the room's near walls and roof between the camera and
   // the room are not drawn (occlude.ts, as the live page's), and an upper floor hides the floor below it from above, so
-  // splats over the cut fade out. The cut is the lowest of "cut" over everyone shown (the followed pilot alone in FOLLOW),
+  // splats over the cut fade out. The cut is the lowest of "cut" over everyone flying (the followed pilot alone in FOLLOW),
   // none when someone is higher, and glides there once that has held CUT_HOLD s (no flicker as a pilot crosses)
   const CUT_ROOM = 0.3, CUT_HOLD = 0.5, CUT_GLIDE = 0.35, CUT_NONE = 40
   const cut = { levels: [] as number[], y: NaN, goal: NaN, held: 0 }

@@ -6,9 +6,12 @@
 set -euo pipefail
 IN="$1"; OUT="$2"; T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 ffmpeg -nostdin -v error -i "$IN.mp4" -f segment -segment_time 10 -reset_timestamps 1 -c:v libx264 -preset fast -crf 8 -pix_fmt yuv444p "$T/s%04d.mp4"
-# the pieces in parallel (env P, 8): one piece alone took the 5.6 min video 8.4 min
+# the pieces in parallel (env P, 8)
 ls "$T"/s*.mp4 | xargs -P "${P:-8}" -I{} sh -c 'ffmpeg -nostdin -v error -i "$1" -vf reverse -c:v libx264 -preset fast -crf 8 -pix_fmt yuv444p "${1%.mp4}r.mp4"' _ {}
 ls "$T"/s*r.mp4 | sort -r | sed "s/^/file '/; s/$/'/" > "$T/list.txt"
 ffmpeg -nostdin -v error -y -f concat -safe 0 -i "$T/list.txt" -c copy "$OUT.mp4"
 cp "$IN.json" "$OUT.json"
-echo "$OUT.mp4 $(ffprobe -v error -count_packets -select_streams v:0 -show_entries stream=nb_read_packets -of csv=p=0 "$OUT.mp4") frames, $(ffprobe -v error -count_packets -select_streams v:0 -show_entries stream=nb_read_packets -of csv=p=0 "$IN.mp4") in"
+frames() { ffprobe -v error -count_packets -select_streams v:0 -show_entries stream=nb_read_packets -of csv=p=0 "$1"; }
+n_out=$(frames "$OUT.mp4"); n_in=$(frames "$IN.mp4")
+[ "$n_out" = "$n_in" ] || { echo "$OUT.mp4: $n_out frames, $IN.mp4 $n_in (the merge needs them equal)" >&2; exit 1; }
+echo "$OUT.mp4 $n_out frames"

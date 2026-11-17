@@ -12,7 +12,8 @@ only = {int(x) for x in sys.argv[3:]}
 J, FPS = os.environ.get("J", "12"), os.environ.get("FPS", "30")
 env = dict(os.environ, MEDIAN="3", RELOC_R="20", VIEW_W="15")
 os.makedirs(f"{out}/loc", exist_ok=True)
-slots, todo, jobs = {}, [], []
+slots = json.load(open(f"{out}/slots.json")) if os.path.exists(f"{out}/slots.json") else {}   # other heats' entries stay
+todo, jobs = [], []
 for l in open("rec/heats-20261115.jsonl"):
     h = json.loads(l)
     if not h.get("rec") or (only and h["id"] not in only): continue
@@ -39,4 +40,4 @@ with ThreadPoolExecutor(4) as ex:
 json.dump(slots, open(f"{out}/slots.json", "w"), ensure_ascii=False, indent=1)
 print("localize", len(todo), "feeds", flush=True)
 if todo:
-    subprocess.run(["env/bin/python", "tools/mgp/localize.py", mp, f"{out}/loc"] + [f"{out}/frames/images/{f}" for f in todo] + ["-j", J], env=env)
+    subprocess.run(["env/bin/python", "tools/mgp/localize.py", mp, f"{out}/loc"] + [f"{out}/frames/images/{f}" for f in todo] + ["-j", J], env=env, check=True)

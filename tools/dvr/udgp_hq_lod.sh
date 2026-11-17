@@ -32,7 +32,9 @@ with open(src, "rb") as f:
             o.write(f"element vertex {b - a}\n".encode() if line.startswith(b"element vertex") else line)
         left = (b - a) * nprop * 4
         while left:
-            buf = f.read(min(left, 1 << 26)); o.write(buf); left -= len(buf)
+            buf = f.read(min(left, 1 << 26))
+            if not buf: sys.exit(f"{src}: truncated")
+            o.write(buf); left -= len(buf)
 P
   $ST -q -w "${b}_raw.ply" -N -r -90,0,0 "${b}_l0.ply"
   rm "${b}_raw.ply"
@@ -43,7 +45,7 @@ P
   echo "chunk $i done $(date +%H:%M:%S)"
 }
 export -f one; export IN OUT CHUNK LEVELS ST
-seq 0 $((K - 1)) | xargs -P "$JOBS" -I{} bash -c 'one {}'
+seq 0 $((K - 1)) | xargs -P "$JOBS" -I{} bash -c 'set -euo pipefail; one {}'   # a failed chunk fails xargs (exported functions run without -e)
 
 args=()
 for k in $(seq 0 "$LEVELS"); do

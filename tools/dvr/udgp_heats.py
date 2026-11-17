@@ -22,7 +22,7 @@ ans_dir = f"{out}/answers"
 
 
 def clean(t, P):
-    """drop answers that need more than VMAX to reach both neighbours (a lone wrong pose), and ones off the floor plan"""
+    """drop answers that need more than VMAX to reach both neighbours (a lone wrong pose), and ones outside z -1..15 m"""
     keep = np.ones(len(t), bool)
     for _ in range(3):
         i = np.flatnonzero(keep)

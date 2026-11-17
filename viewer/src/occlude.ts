@@ -2,21 +2,21 @@
 // splats outside the room that stand between the camera and the room are not drawn (occHidden below); the far walls,
 // the floor and what shows through the far windows stay. The room is convex: x0 <= x <= x1, z0 <= z <= z1 (x1 and z1
 // optional, the office has none), y0 <= y <= y1, and optionally inside a circle in x-z (the office's curved facade), each pulled in by the margin so
+// that the walls' own splats (and the scan's few centimetres of error) lie outside it. With the camera inside the room
+// nothing is hidden.
 // Or a floor plan ("polygon": [[x, z], ...], up to 32 corners, convex or not, drawn along the walls and pulled in by the margin too - an indoor
 // venue's L-shaped hall, UDGP 2026 R3) between y0 and y1: then a splat outside it goes when the line from the camera
 // through it, carried on past it, enters the plan's prism anywhere beyond it.
-// that the walls' own splats (and the scan's few centimetres of error) lie outside it. With the camera inside the room
-// every line of sight starts inside it, and nothing is hidden.
 // With a floor plan the top may follow a pitched roof ("roof": planes, each y = p.y + g[0] (x - p.x) + g[1] (z - p.z), optionally
 // only over x in [xr] and z in [zr]): the prism's top is the lowest of y1 and the planes over each point, lowered by the margin
 // (UDGP 2026 R3: the long hall's gable and the side hall's single slope, 12.5 m at the ridge down to 6.7 m at the eaves).
 // Also a cut (setCut): splats above a height fade out, wherever the camera is - an indoor venue's upper floor hides the
 // floor below it from above (UDGP 2026 R3, the audience pages' stage.ts). The work buffer takes one modifier, so the cut lives here.
-// The test runs where the splats are written to PlayCanvas' work buffer, so the buffer is rewritten when the camera moves
-// (setParameter marks it dirty) and not while it stays still.
+// The test runs where the splats are written to PlayCanvas' work buffer, so the buffer is rewritten when the camera or the
+// cut moves (setParameter marks it dirty).
 import * as pc from 'playcanvas'
 
-// "room" in a flight's index.json, in the scene's frame (y up)
+// "room" in index.json, in the scene's frame (y up)
 export type Room = { x0?: number; z0?: number; y0: number; y1: number; x1?: number; z1?: number; circle?: [number, number, number]; margin?: number
   polygon?: [number, number][]; roof?: RoofPlane[] }
 export type RoofPlane = { p: [number, number, number]; g: [number, number]; xr?: [number, number]; zr?: [number, number] }
@@ -95,7 +95,7 @@ bool occInside(vec3 p) {
 // the room does, or when its line of sight from the camera, carried on past it (t = 1 at p), enters the room - grown by
 // the sphere's size as seen at the room's distance, so a large splat beside the line still counts - only beyond p.
 bool occHidden(vec3 p, float rad) {
-    if (occInside(p)) return false;
+    if (occInside(p) || uOccCam.w <= 0.0) return false;   // the camera in the room: nothing (a non-convex plan would hide its own walls)
     vec3 d = p - uOccCam.xyz;
     float dist = length(d);
     if (dist - rad < uOccCam.w) return true;
@@ -129,7 +129,7 @@ void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout ve
 #endif
 }
 void modifySplatColor(vec3 center, inout vec4 color) {
-    color.a *= 1.0 - smoothstep(uOccFar.z - uOccFar.w, uOccFar.z + uOccFar.w, center.y);
+    if (uOccFar.z < 1e29) color.a *= 1.0 - smoothstep(uOccFar.z - uOccFar.w, uOccFar.z + uOccFar.w + 1e-3, center.y);   // equal edges are undefined
 #ifdef OCC_DEBUG
     // the colour-only rewrite (the camera still) skips the geometry pass, so the test runs again here
     if (occHidden(center, 0.0)) color.rgb = vec3(1.0, 0.0, 0.0);
@@ -138,7 +138,7 @@ void modifySplatColor(vec3 center, inout vec4 color) {
 `
 
 // the floor plan moved m inwards: every edge shifted along its inward normal, each corner where its two edges now meet
-// (a simple polygon, either winding; a corner whose edges are parallel stays put)
+// (a simple polygon, either winding)
 export function insetPolygon(P: [number, number][], m: number): [number, number][] {
   const n = P.length; if (!m || n < 3) return P
   let area = 0; for (let i = 0; i < n; i++) { const [ax, az] = P[i], [bx, bz] = P[(i + 1) % n]; area += ax * bz - bx * az }

@@ -2,7 +2,7 @@
 // 71ee1ae, 2026-11-16), its numbers and its damping. The camera turns in place and flies where it looks:
 // - mouse: left drag looks (yaw / pitch), right drag pans 1:1 at 1 m, the wheel moves forward / back
 // - keys: WASD fly along the view (W follows the pitch), Q / E down / up along the camera's up; shift 4x, ctrl 1/4
-// - touch: one finger looks (grabbing the scene, so inverted), two fingers pan, spreading them moves forward
+// - touch: one finger looks (grabbing the scene, so inverted); on the audience pages two fingers pan, spreading them moves forward
 // Turning eases toward where the input points, and the keys' speed eases in and out, both frame-rate independent.
 import * as pc from 'playcanvas'
 
@@ -50,6 +50,7 @@ export class FreeCam {
   pinch(spread: number) { this.offset(0, 0, spread * PINCH_SPEED * DISPLACEMENT_SCALE) }     // touch.ts:128-131: spreading moves forward
   // (WASD QE and shift / ctrl; not the arrows: the replay pages seek with them)
   key(e: KeyboardEvent, down: boolean) {
+    if (e.metaKey) { if (down) this.keys.clear(); return false }   // a Cmd shortcut: macOS sends no keyup for its letter
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key
     if (!['w', 'a', 's', 'd', 'q', 'e', 'Shift', 'Control'].includes(k)) return false
     if (down) this.keys.add(k); else this.keys.delete(k); return k !== 'Shift' && k !== 'Control'

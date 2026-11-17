@@ -28,6 +28,7 @@ while True:
     if len(buf) < fb: break
     fr = np.frombuffer(buf, np.uint8).reshape(1080, 1920, 3)
     enc.stdin.write(cv2.remap(fr, mx, my, cv2.INTER_LINEAR).tobytes()); i += 1
-enc.stdin.close(); enc.wait(); dec.wait()
+enc.stdin.close()
+if enc.wait() or dec.wait() or i == 0: sys.exit(f"{out}: ffmpeg failed (decode {dec.returncode}, encode {enc.returncode}) after {i} frames")
 json.dump(dict(cam, fps=fps, source=src, start_s=t0, slot=slot), open(out + ".json", "w"), indent=1)
 print(out, i, "frames at", round(fps, 3), "fps")

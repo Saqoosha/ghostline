@@ -1,11 +1,9 @@
 // Seeing the drones through what stands in front of them, two effects in the splats' render pass (not the work buffer):
 // - cutaway (on by default, ?cutaway=0 off; ?cutaway=<degrees>[,<alpha kept>[,<depth margin m>]] tunes it): only what stands between the camera and a drone in the air fades:
 //   splats within <degrees> of the line of sight to it (a window of about the same size on screen at any distance, soft
-//   edge), more than <margin> nearer than it and higher than it (world y). The deck a drone flies over, anything level with
-//   or behind it, and anything below it stays: a window by angle alone still opened the deck under a drone seen from far
-//   above (a first version cut a cone 8 m wide at the drone and erased the floor under it). Default 10 deg (4 left too small a hole
-//   once the deck's large splats round it are drawn), 0 (a floor is many
-//   splats deep: 0.1 each adds back up to nearly opaque), 2 m
+//   edge), more than <margin> nearer than it and higher than it (world y): the deck a drone flies over and anything level
+//   with, behind or below it stays. Default 10 deg, 0 (a floor is many splats deep: 0.1 each adds back up to nearly
+//   opaque), 2 m
 // - ?xray=<k>: every splat's opacity times k (Blender's X-ray: the whole scan see-through)
 // Both run in the gsplat render material's modifySplatColor (chunk gsplatModifyVS), which the vertex shader calls every
 // frame for every splat, so they follow the camera (Free included) and the drones with no work-buffer rewrite. The room

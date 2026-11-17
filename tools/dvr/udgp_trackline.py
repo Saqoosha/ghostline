@@ -29,9 +29,9 @@ for f in sorted(glob.glob(src + '/*/race.json')):
     race = json.load(open(f)); fps = race.get('fps', 60)
     for pilot in race['pilots']:
         rows = [(i / fps, q) for i, q in enumerate(pilot['pos']) if q]
-        if not rows: continue
+        if len(rows) < 3: continue
         t = np.array([r[0] for r in rows]); P = np.array([r[1] for r in rows])
-        keep = np.ones(len(t), bool)                  # as udgp_heats.clean(): a lone pose both neighbours need > VMAX to reach
+        keep = np.ones(len(t), bool)                  # like udgp_heats.clean(): a lone pose both neighbours need > VMAX to reach
         for _ in range(5):
             i = np.flatnonzero(keep); v = np.linalg.norm(np.diff(P[i], axis=0), axis=1) / np.maximum(np.diff(t[i]), 1e-3)
             bad = np.r_[v[0] > VMAX, (v[:-1] > VMAX) & (v[1:] > VMAX), v[-1] > VMAX]
@@ -47,6 +47,7 @@ for f in sorted(glob.glob(src + '/*/race.json')):
             laps += [Q[i:j + 1] for i, j in zip(ps[:-1], ps[1:])]
 if not laps: sys.exit('no lap through the gate')
 T = np.array([len(q) / FPS for q in laps]); both = np.array([q[:, 1].min() < 2.0 and q[:, 1].max() > 6.0 for q in laps])
+if not both.any(): sys.exit('no lap through both floors')
 ok = both & (np.abs(T / np.median(T[both]) - 1) < 0.2)
 print(f'{len(laps)} laps, {both.sum()} through both floors, median {np.median(T[both]):.1f} s')
 A = np.concatenate(ALL); lo, hi = A.min(0), A.max(0); key = lambda p: tuple(((p - lo) / 0.5).astype(int).T)

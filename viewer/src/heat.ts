@@ -81,8 +81,8 @@ async function load() {
   document.body.classList.toggle('with-dvr', !$('dvr').hidden)
   // the official laps (race.json / live.json "official"), under the scene: each cell in its place's colour (look.css --tl ...)
   const css = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim()
-  document.documentElement.style.setProperty('--rows', String(Math.max(1, rp.pilots.length)))   // the laps band's rows (a phone sizes it by them)
   laps = lapRows(rp.official, rp.start, cell => css('--' + (SLOTS[rp!.order.indexOf(cell)] ?? 'tl')) || '#5b4bff', rp.order)
+  document.documentElement.style.setProperty('--rows', String(Math.max(1, laps.length || rp.pilots.length)))   // the laps band's rows (a phone sizes it by them)
   // the broadcast's sound, when the heat has it (aud/broadcast.ts): on or off as the viewer last left it (this browser only;
   // off at first). Left on, but the browser wants a click before any sound: shown off, the setting kept for the next visit
   const b: Broadcast | null = await get('broadcast.json').catch(() => null)
