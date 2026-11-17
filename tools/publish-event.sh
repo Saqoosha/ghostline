@@ -88,11 +88,12 @@ img = f"{url}og.jpg?v={hashlib.sha1(jpg).hexdigest()[:8]}"   # a new image is a 
 for f in ("index.html", "heat.html", "watch.html", "compare.html"):   # og:url on the entry only: a heat's link keeps its ?h=
     s = open(f"{page}/{f}").read()
     meta = (f'<meta property="og:type" content="website"><meta property="og:site_name" content="ghostline">'
-            f'<meta property="og:title" content="{t}"><meta property="og:description" content="{html.escape(d)}">'
+            f'<meta property="og:title" content="{t} · ghostline"><meta property="og:description" content="{html.escape(d)}">'
             + (f'<meta property="og:url" content="{url}">' if f == "index.html" else "") + f'<meta property="og:image" content="{img}">'
             f'<meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">'
             f'<meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="{img}">')
-    assert s.count("</head>") == 1, f
+    assert s.count("</head>") == 1 and s.count("<title>ghostline") == 1, f
+    s = s.replace("<title>ghostline", f"<title>{t} · ghostline")   # the tab and the shared link name the day
     open(f"{page}/{f}", "w").write(s.replace("</head>", meta + "</head>"))
 PY
     fi
