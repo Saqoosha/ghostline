@@ -4,6 +4,7 @@
 #        day's data from the folder: index.json (its "title" set when given), scene/<scene>.sog, and sky.jpg, track.json,
 #        countries.json when there. heats.json is created empty only if the day has none (the relay writes it).
 #        Also scene/<scene>-lite.sog for phones: the folder's own, else made from the .sog (env LITE: splats, 800000)
+#        and og.jpg, the link preview, when the folder has one (tools/og_unlabel.py, then tools/og_image.py)
 #   tools/publish-event.sh <event> --track <file>           the course line alone ({"track": [[x, y, z], ...]}, rt_trackline.py
 #        or make_race.py), as track.json: the live page reads it again every minute
 #   tools/publish-event.sh <event> --night <folder>         the night rebuild (tools/dvr/night_heats.py): <folder>/<heat id>/
@@ -69,6 +70,32 @@ case "$WHAT" in
     for f in sky.jpg track.json countries.json; do [ -e "$SCENE/$f" ] && cp -L "$SCENE/$f" "$PAGE/$f"; done
     # the sky (a scan trained without it, tools/x6/jdl-r7-sky.sh): stage.ts draws it as the skybox when index.json names it
     [ -e "$PAGE/sky.jpg" ] && python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["sky"]="sky.jpg"; json.dump(j, open(sys.argv[1], "w"))' "$PAGE/index.json"
+    # the link preview: og.jpg (1200x630) in the folder goes up, and every page names it with the day's title (absolute URLs)
+    if [ -e "$SCENE/og.jpg" ]; then
+      cp -L "$SCENE/og.jpg" "$PAGE/og.jpg"
+      python3 - "$PAGE" "$EV" <<'PY'
+import hashlib, html, json, struct, sys
+page, ev = sys.argv[1:3]; url = f"https://ghostline.saqoo.sh/{ev}/"
+t = html.escape(json.load(open(f"{page}/index.json")).get("title") or ev)
+d = "FPV race flights replayed over a 3D Gaussian-splat scan of the venue."
+jpg = open(f"{page}/og.jpg", "rb").read(); i = 2
+try:
+    while jpg[i + 1] not in (0xC0, 0xC1, 0xC2): i += 2 + struct.unpack(">H", jpg[i + 2:i + 4])[0]   # the frame header: the size
+    h, w = struct.unpack(">HH", jpg[i + 5:i + 9])
+except (IndexError, struct.error): sys.exit("og.jpg is not a baseline / progressive JPEG (tools/og_image.py makes one)")
+assert (w, h) == (1200, 630), f"og.jpg is {w}x{h}, not 1200x630 (tools/og_image.py)"
+img = f"{url}og.jpg?v={hashlib.sha1(jpg).hexdigest()[:8]}"   # a new image is a new URL (og.jpg is cached a day)
+for f in ("index.html", "heat.html", "watch.html", "compare.html"):   # og:url on the entry only: a heat's link keeps its ?h=
+    s = open(f"{page}/{f}").read()
+    meta = (f'<meta property="og:type" content="website"><meta property="og:site_name" content="ghostline">'
+            f'<meta property="og:title" content="{t}"><meta property="og:description" content="{html.escape(d)}">'
+            + (f'<meta property="og:url" content="{url}">' if f == "index.html" else "") + f'<meta property="og:image" content="{img}">'
+            f'<meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">'
+            f'<meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="{img}">')
+    assert s.count("</head>") == 1, f
+    open(f"{page}/{f}", "w").write(s.replace("</head>", meta + "</head>"))
+PY
+    fi
     # the heat list belongs to the relay once the day starts: an empty one goes up only where there is none
     # (--ignore-existing: a failed listing must not read as "none" and overwrite the day's heats)
     mkdir -p "$TMP/list"
