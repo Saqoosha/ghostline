@@ -113,7 +113,7 @@ function drawDvr() {
     const v = Object.assign(document.createElement('video'), { src: f.video, muted: true, playsInline: true, preload: 'auto' })
     const box = document.createElement('figure'); box.style.setProperty('--c', `var(--${SLOTS[i]})`)
     const pic = document.createElement('div'); pic.className = 'pic'; pic.append(v)
-    box.append(Object.assign(document.createElement('figcaption'), { textContent: f.label, title: f.label }), pic); boxes.push(box); clips.push({ f, v })
+    box.append(Object.assign(document.createElement('figcaption'), { textContent: f.label, title: f.label }), pic); box.onclick = () => stage.toggleFollow(f.key); boxes.push(box); clips.push({ f, v })
   })
   $('dvr').replaceChildren(...boxes); $('dvr').hidden = !clips.length; document.body.classList.toggle('with-dvr', clips.length > 0)
 }

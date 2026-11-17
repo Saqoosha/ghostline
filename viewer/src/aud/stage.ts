@@ -19,6 +19,7 @@ export interface StagePilot { stream: string; slot: Slot; color: string; pos: pc
 export interface Stage { app: pc.Application; mode: Mode; onMode: (m: Mode) => void
   loadScene(progress?: (f: number) => void): Promise<{ title?: string }>; hq: boolean; setHQ(on: boolean): Promise<void>; setCourse(track: number[][] | null): void; pilot(stream: string, slot: Slot): StagePilot
   setMode(m: Mode): void; clear(): void
+  toggleFollow(key: string): void   // follow that pilot, or back to the orbit when already following it
   showLine: boolean; setShowLine(on: boolean): void }
 
 const css = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim()
@@ -75,8 +76,8 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   const cam = new pc.Entity('cam'); cam.addComponent('camera', { clearColor: hex(css('--paper') || '#f3f4f6'), fov: 60, nearClip: 0.1, farClip: 600 }); app.root.addChild(cam)
 
   // --- camera (as livepage.ts): orbit turns slowly round the course's middle, as near as holds the course and everyone up;
-  // top looks straight down; follow sits behind and above one pilot. Drag turns and tilts, the wheel zooms (Free: freecam.ts); a switch glides.
-  const view = { yawOffset: 30, topYaw: 0, pitch: innerHeight > innerWidth ? PITCH_TALL : PITCH0, zoom: 1 }
+  // top looks straight down; follow sits behind and above one pilot (an up / down drag raises / lowers it). Drag turns and tilts, the wheel zooms (Free: freecam.ts); a switch glides.
+  const view = { yawOffset: 30, topYaw: 0, pitch: innerHeight > innerWidth ? PITCH_TALL : PITCH0, zoom: 1, followUp: 3 }
   const home = { target: new pc.Vec3(), dist: 70 }, orb = { target: new pc.Vec3(), dist: 70, init: false }
   let orbitMin = 12                                   // the orbit's nearest (m) while it holds pilots or the course (index.json "orbitMin")
   const blendFrom = { pos: new pc.Vec3(), rot: new pc.Quat() }; let blendT = BLEND
@@ -109,6 +110,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY
     if (stage.mode === 'free') { if (drag.pan) free.pan(dx, dy); else free.look(dx, dy, drag.touch) }
     else if (stage.mode === 'top') view.topYaw -= dx * 0.3
+    else if (stage.mode[0] === 'p') view.followUp = Math.max(0.5, Math.min(15, view.followUp + dy * 0.03))
     else { view.yawOffset -= dx * 0.3; view.pitch = Math.max(-85, Math.min(15, view.pitch - dy * 0.3)) }
   })
   canvas.addEventListener('wheel', e => { if (stage.mode === 'free') free.wheel(e.deltaY); else setZoom(view.zoom * Math.exp(e.deltaY * 0.001)); e.preventDefault() }, { passive: false })
@@ -130,7 +132,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
       const p = pilots.get(stage.mode.slice(1))
       if (p?.pos) {
         const now = p.pos.clone(), fwd = p.fwd
-        cam.setPosition(now.clone().sub(fwd.clone().mulScalar(8 * view.zoom)).add(new pc.Vec3(0, 3 * view.zoom, 0))); cam.lookAt(now.add(fwd.clone().mulScalar(5))); return
+        cam.setPosition(now.clone().sub(fwd.clone().mulScalar(8 * view.zoom)).add(new pc.Vec3(0, view.followUp * view.zoom, 0))); cam.lookAt(now.add(fwd.clone().mulScalar(5))); return
       }
     }
     const r = new pc.Quat().setFromEulerAngles(view.pitch, view.yawOffset + TURN * t, 0)
@@ -218,6 +220,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
       const mx = this.matX; mx.useLighting = false; mx.diffuse = new pc.Color(0, 0, 0); mx.emissive = this.col; mx.opacity = 0.35; mx.blendType = pc.BLEND_NORMAL; mx.depthWrite = false; mx.depthTest = false; mx.stencilFront = mx.stencilBack = STENCIL_HIDDEN; mx.update()
       this.dotX.addComponent('render', { type: 'sphere', material: mx, castShadows: false, layers: [pc.LAYERID_IMMEDIATE] }); this.dotX.setLocalScale(0.14, 0.14, 0.14); this.dotX.enabled = false; app.root.addChild(this.dotX)
       this.tag.className = 'tag'; this.tag.style.setProperty('--c', this.color); this.tag.hidden = true; document.body.appendChild(this.tag)
+      this.tag.style.pointerEvents = 'auto'; this.tag.style.cursor = 'pointer'; this.tag.onclick = () => stage.toggleFollow(this.stream)
     }
     show(pos: number[], trail: (number[] | null)[], state: PilotState, label: { name: string; flag: string; note: string }) {
       const now = new pc.Vec3(pos[0], pos[1], pos[2]), flat = new pc.Vec3(pos[0], 0, pos[2])
@@ -370,6 +373,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
       home.target.set(mid(0), ys[ys.length >> 1], mid(2)); low = ys[0]; orb.init = false
     },
     pilot(stream, slot) { let p = pilots.get(stream); if (!p || p.slot !== slot) { p?.destroy(); p = new Pilot(stream, slot); pilots.set(stream, p) } return p },
+    toggleFollow(key) { stage.setMode(stage.mode === `p${key}` ? 'orbit' : `p${key}`) },
     setMode(m) { if (m === stage.mode) return; blendFrom.pos.copy(cam.getPosition()); blendFrom.rot.copy(cam.getRotation()); blendT = 0
       if (m === 'free') free.enter(cam)   // from where the camera is
       stage.mode = m; stage.onMode(m) },

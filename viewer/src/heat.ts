@@ -76,7 +76,7 @@ async function load() {
     const box = document.createElement('figure'); box.style.setProperty('--c', `var(--${p.slot})`)
     const v = Object.assign(document.createElement('video'), { src: dir + p.video, muted: true, playsInline: true, preload: 'auto' }); v.dataset.stream = p.stream
     const pic = document.createElement('div'); pic.className = 'pic'; pic.append(v)
-    box.append(Object.assign(document.createElement('figcaption'), { textContent: p.name, title: p.name }), pic); return box
+    box.append(Object.assign(document.createElement('figcaption'), { textContent: p.name, title: p.name }), pic); box.onclick = () => stage.toggleFollow(p.stream); return box
   }))
   document.body.classList.toggle('with-dvr', !$('dvr').hidden)
   // the official laps (race.json / live.json "official"), under the scene: each cell in its place's colour (look.css --tl ...)
@@ -101,9 +101,13 @@ async function load() {
 let bc: ReturnType<typeof createBroadcast> | null = null
 const BC_KEY = 'ghostline.broadcast'
 const lapC = $<HTMLCanvasElement>('lapc')
-lapC.onclick = e => {                                       // the official laps: a click seeks there; the progress: a row follows that pilot
-  if (laps.length) { const v = timeAt(lapC, laps, e.offsetX); if (v !== null && rp) { t = Math.max(0, Math.min(rp.dur, v)); syncVideos(true); resorted = false } return }
-  const s = progShown[Math.floor((e.offsetY - 3) / 26)]; if (s) stage.setMode(stage.mode === `p${s}` ? 'orbit' : `p${s}`)
+lapC.onclick = e => {                                       // the official laps: a click seeks there, on a name follows that pilot; the progress: a row follows that pilot
+  if (laps.length) {
+    const v = timeAt(lapC, laps, e.offsetX), row = laps[Math.floor((e.offsetY - 3) / 26)]
+    if (v !== null && rp) { t = Math.max(0, Math.min(rp.dur, v)); syncVideos(true); resorted = false } else if (v === null && row && e.offsetX < lapC.clientWidth / 2) stage.toggleFollow(row.cell)
+    return
+  }
+  const s = progShown[Math.floor((e.offsetY - 3) / 26)]; if (s) stage.toggleFollow(s)
 }
 
 // a heat without the official laps: the run's progress instead (aud/progress.ts, as the live page's), counted once over
