@@ -10,7 +10,7 @@
          the timeline and the footer. The header stays over the scene */
       :root { --band: 118px; --bottom: calc(var(--foot, 34px) + var(--time, 46px) + var(--band)); --side: 300px; --dvr: 0px; }
       /* the flights' DVR clips on the right (the night version's), as the replay page's: 4:3 each, the column as wide as four of them stacked */
-      body.with-dvr { --dvr: min(30vw, calc(((100vh - var(--head, 52px) - var(--foot, 34px) - var(--time, 46px)) / 4 - 22px) * 4 / 3 + 6px)); }
+      body.with-dvr { --dvr: var(--dvr-drag, min(30vw, calc(((100vh - var(--head, 52px) - var(--foot, 34px) - var(--time, 46px)) / 4 - 22px) * 4 / 3 + 6px))); }
       #dvr { position: fixed; right: 0; top: var(--head, 52px); bottom: calc(var(--foot, 34px) + var(--time, 46px)); z-index: 3; width: var(--dvr); display: flex; flex-direction: column; overflow: hidden; background: var(--paper); }
       #dvr[hidden] { display: none; }
       #dvr figure { cursor: pointer; margin: 0; flex: none; box-sizing: content-box; width: calc(100% - 6px); display: flex; flex-direction: column; border-left: 6px solid var(--c); background: #000; }

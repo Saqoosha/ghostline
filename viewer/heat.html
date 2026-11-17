@@ -16,7 +16,7 @@
       /* split, never stacked over the scene: the scene top left, the DVR clips in a column on the right (the night version),
          and along the bottom the laps band (aud/laptimeline.ts or aud/progress.ts, always four rows tall), the timeline and
          the footer. The header stays over the scene */
-      :root { --band: 118px; --bottom: calc(var(--foot, 34px) + var(--time, 46px) + var(--band)); --side: min(36vw, calc(((100vh - var(--head, 52px) - var(--foot, 34px) - var(--time, 46px)) / 4 - 22px) * 4 / 3 + 6px)); }   /* as wide as four 4:3 clips, each under its 22 px name band, stacked from the header to the timeline */
+      :root { --band: 118px; --bottom: calc(var(--foot, 34px) + var(--time, 46px) + var(--band)); --side: var(--side-drag, min(36vw, calc(((100vh - var(--head, 52px) - var(--foot, 34px) - var(--time, 46px)) / 4 - 22px) * 4 / 3 + 6px))); }   /* as wide as four 4:3 clips, each under its 22 px name band, stacked from the header to the timeline */
       body.stage #c { inset: var(--head, 52px) auto auto 0; width: 100%; height: calc(100% - var(--head, 52px) - var(--bottom)); }
       body.stage.with-dvr #c { width: calc(100% - var(--side)); }
       #laps { position: fixed; left: 0; right: 0; bottom: calc(var(--foot, 34px) + var(--time, 46px)); height: var(--band); z-index: 3; padding: 4px 20px; background: var(--paper); border-top: 1px solid var(--faint); }
