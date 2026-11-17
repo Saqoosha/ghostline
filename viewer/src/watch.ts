@@ -69,7 +69,7 @@ $('dp').replaceChildren(...DELAY.presets.map(([label, s]) => { const b = Object.
 showDelay()
 
 // --- the camera buttons
-const cams: [Mode, string][] = [['orbit', 'ORBIT'], ['top', 'TOP']]
+const cams: [Mode, string][] = [['orbit', 'ORBIT'], ['top', 'TOP'], ['free', 'FREE']]
 function drawCams() {
   $('cams').replaceChildren(...cams.map(([m, label]) => Object.assign(document.createElement('button'), { textContent: label, className: stage.mode === m ? 'on' : '', onclick: () => stage.setMode(m) })),
     Object.assign(document.createElement('button'), { textContent: 'FOLLOW', className: stage.mode[0] === 'p' ? 'on' : '', onclick: () => follow(1) }),
@@ -80,7 +80,7 @@ function follow(step: number) {                            // the next pilot in 
   const up = order.filter(s => states.get(s) === 'flying'); if (!up.length) return
   const k = stage.mode[0] === 'p' ? up.indexOf(stage.mode.slice(1)) : -1; stage.setMode(`p${up[(k + step + up.length) % up.length]}`)
 }
-window.addEventListener('keydown', e => { if (e.key === '1') stage.setMode('orbit'); if (e.key === '2') stage.setMode('top'); if (e.key === '3') follow(1) })
+window.addEventListener('keydown', e => { if (e.key === '1') stage.setMode('orbit'); if (e.key === '2') stage.setMode('top'); if (e.key === '4') stage.setMode('free'); if (e.key === '3') follow(1) })
 
 // --- the pilots of the heat shown: their answers on the heat's own clock (frames from its start), drawn by live.ts.
 // Every frame each pilot gets the answers of the last 15 s up to the view again (Timeline.between): one that arrived late

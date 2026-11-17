@@ -1,15 +1,16 @@
 // The audience pages' 3D (watch.ts live, heat.ts replay): the scan, the course line, a sphere, a trail and a name tag per
-// pilot, and the camera - Orbit, Top, Follow one pilot. Drawn as livepage.ts draws them (that page is the venue's; this one
-// leaves out its Free camera, BA switch and sliders). A pilot's colour is their cell's place in the grid (--tl ... --br, look.css).
+// pilot, and the camera - Orbit, Top, Free (aud/freecam.ts, as livepage.ts), Follow one pilot. Drawn as livepage.ts draws them
+// (that page is the venue's; this one leaves out its BA switch and sliders). A pilot's colour is their cell's place in the grid (--tl ... --br, look.css).
 import * as pc from 'playcanvas'
 import { L } from './i18n'
 import { loadHQ, pickScan, saveHQ, sceneBlob } from './scan'
 import { bakeSky } from '../sky'
 import { insetPolygon, RoomOcclusion, type Room } from '../occlude'
+import { FreeCam } from './freecam'
 
 export type Slot = 'tl' | 'tr' | 'bl' | 'br'
 export const SLOTS: Slot[] = ['tl', 'tr', 'bl', 'br']
-export type Mode = 'orbit' | 'top' | `p${string}`
+export type Mode = 'orbit' | 'top' | 'free' | `p${string}`
 export type PilotState = 'flying' | 'lost' | 'nopic'
 // line: a flight's whole line only (compare.ts): thin and light all along, no sphere and no name tag
 export interface StagePilot { stream: string; slot: Slot; color: string; pos: pc.Vec3 | null; line: boolean
@@ -60,32 +61,45 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   let orbitMin = 12                                   // the orbit's nearest (m) while it holds pilots or the course (index.json "orbitMin")
   const blendFrom = { pos: new pc.Vec3(), rot: new pc.Quat() }; let blendT = BLEND
   let course: pc.Vec3[] = [], line: pc.Vec3[] = [], lineS: number[] = [], low = -Infinity   // low: the course line's lowest point (the orbit stays over it)
-  let drag: { x: number; y: number } | null = null
+  // Free (aud/freecam.ts): supersplat-viewer's fly mode. The left drag looks, the right drag pans, the wheel moves forward,
+  // WASD / QE fly (shift faster, ctrl slower); one finger looks, two pan and spread to move forward. The room's walls go
+  // as in the orbit: from outside, those in front of the inside; with the camera in the room, none
+  const free = new FreeCam()
+  let drag: { x: number; y: number; pan: boolean; touch: boolean } | null = null
   // two fingers pinch the zoom (as the wheel) and do not turn; lifting one does not start a drag
-  const touches = new Map<number, { x: number; y: number }>(); let pinch: { d: number; zoom: number } | null = null
+  const touches = new Map<number, { x: number; y: number }>(); let pinch: { d: number; zoom: number; mx: number; my: number } | null = null
   const spread = () => { const [a, b] = [...touches.values()]; return Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)) }
   const setZoom = (z: number) => { view.zoom = Math.max(0.4, Math.min(3, z)) }
-  const rebase = () => { pinch = touches.size === 2 ? { d: spread(), zoom: view.zoom } : null }   // whenever two fingers are down, measured from now
+  const mid = () => { const [a, b] = [...touches.values()]; return { mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 } }
+  const rebase = () => { pinch = touches.size === 2 ? { d: spread(), zoom: view.zoom, ...mid() } : null }   // whenever two fingers are down, measured from now
   canvas.addEventListener('pointerdown', e => {
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY }); canvas.setPointerCapture(e.pointerId)
-    rebase(); drag = touches.size === 1 ? { x: e.clientX, y: e.clientY } : null
+    rebase(); drag = touches.size === 1 ? { x: e.clientX, y: e.clientY, pan: e.button !== 0, touch: e.pointerType === 'touch' } : null
   })
   const lift = (e: PointerEvent) => { if (!touches.delete(e.pointerId)) return; rebase(); drag = null }
   for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) canvas.addEventListener(ev, lift)
+  canvas.addEventListener('contextmenu', e => e.preventDefault())   // the right drag pans in Free
   canvas.addEventListener('pointermove', e => {
     if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY })
-    if (pinch) { setZoom(pinch.zoom * pinch.d / spread()); return }
+    if (pinch) {
+      if (stage.mode !== 'free') { setZoom(pinch.zoom * pinch.d / spread()); return }
+      const m = mid(), d = spread(); free.pinch(d - pinch.d); free.pan(m.mx - pinch.mx, m.my - pinch.my); pinch.d = d; pinch.mx = m.mx; pinch.my = m.my; return
+    }
     if (!drag) return
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY
-    if (stage.mode === 'top') view.topYaw -= dx * 0.3
+    if (stage.mode === 'free') { if (drag.pan) free.pan(dx, dy); else free.look(dx, dy, drag.touch) }
+    else if (stage.mode === 'top') view.topYaw -= dx * 0.3
     else { view.yawOffset -= dx * 0.3; view.pitch = Math.max(-85, Math.min(15, view.pitch - dy * 0.3)) }
   })
-  canvas.addEventListener('wheel', e => { setZoom(view.zoom * Math.exp(e.deltaY * 0.001)); e.preventDefault() }, { passive: false })
+  canvas.addEventListener('wheel', e => { if (stage.mode === 'free') free.wheel(e.deltaY); else setZoom(view.zoom * Math.exp(e.deltaY * 0.001)); e.preventDefault() }, { passive: false })
+  window.addEventListener('keydown', e => { if (stage.mode === 'free' && !['INPUT', 'SELECT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName) && free.key(e, true)) e.preventDefault() })
+  window.addEventListener('keyup', e => free.key(e, false)); window.addEventListener('blur', () => free.release())
 
   const pilots = new Map<string, Pilot>()
   function cameraAt(t: number, dt: number) {
     const up = [...pilots.values()].filter(p => p.pos && p.state === 'flying').map(p => p.pos as pc.Vec3)
     if (!orb.init) { orb.target.copy(home.target); orb.dist = home.dist; orb.init = true }
+    if (stage.mode === 'free') { free.apply(cam, dt, canvas.clientWidth, canvas.clientHeight); return }
     if (stage.mode === 'top') {
       cam.setPosition(home.target.x, home.target.y + home.dist * 1.1 * view.zoom, home.target.z); cam.setEulerAngles(-89.9, view.topYaw, 0); return
     }
@@ -330,9 +344,11 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
       home.target.set(mid(0), ys[ys.length >> 1], mid(2)); low = ys[0]; orb.init = false
     },
     pilot(stream, slot) { let p = pilots.get(stream); if (!p || p.slot !== slot) { p?.destroy(); p = new Pilot(stream, slot); pilots.set(stream, p) } return p },
-    setMode(m) { if (m === stage.mode) return; blendFrom.pos.copy(cam.getPosition()); blendFrom.rot.copy(cam.getRotation()); blendT = 0; stage.mode = m; stage.onMode(m) },
+    setMode(m) { if (m === stage.mode) return; blendFrom.pos.copy(cam.getPosition()); blendFrom.rot.copy(cam.getRotation()); blendT = 0
+      if (m === 'free') free.enter(cam)   // from where the camera is
+      stage.mode = m; stage.onMode(m) },
     clear() { for (const p of pilots.values()) p.hide() },
   }
-  Object.assign(window, { ghostline: { app, pc, pilots, stage } })   // for checking the page from outside
+  Object.assign(window, { ghostline: { app, pc, pilots, stage, free } })   // for checking the page from outside
   return stage
 }

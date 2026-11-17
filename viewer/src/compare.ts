@@ -135,11 +135,11 @@ $('play').onclick = () => { if (t >= dur) t = 0; setPlaying(!playing) }
 seek.oninput = () => { t = Number(seek.value); resorted = false; syncClips(true) }
 $('speed').replaceChildren(...[0.1, 0.5, 1].map(v => Object.assign(document.createElement('button'), { textContent: `${v}×`, className: v === speed ? 'on' : '',
   onclick: (e: Event) => { speed = v; for (const b of Array.from($('speed').children)) b.classList.toggle('on', b === e.target) } })))
-window.addEventListener('keydown', e => { if (e.key === ' ') { $('play').click(); e.preventDefault() } if (e.key === '1') stage.setMode('orbit'); if (e.key === '2') stage.setMode('top') })
+window.addEventListener('keydown', e => { if (e.key === ' ') { $('play').click(); e.preventDefault() } if (e.key === '1') stage.setMode('orbit'); if (e.key === '2') stage.setMode('top'); if (e.key === '4') stage.setMode('free') })
 function drawCams() {
   const btn = (m: Mode, label: string) => Object.assign(document.createElement('button'), { textContent: label, className: stage.mode === m ? 'on' : '', onclick: () => stage.setMode(m) })
   const k = stage.mode[0] === 'p' ? flights.findIndex(f => `p${f.key}` === stage.mode) : -1
-  $('cams').replaceChildren(btn('orbit', 'ORBIT'), btn('top', 'TOP'),
+  $('cams').replaceChildren(btn('orbit', 'ORBIT'), btn('top', 'TOP'), btn('free', 'FREE'),
     Object.assign(document.createElement('button'), { textContent: 'FOLLOW', className: k >= 0 ? 'on' : '', onclick: () => { if (flights.length) stage.setMode(`p${flights[(k + 1) % flights.length].key}`) } }),
     Object.assign(document.createElement('button'), { textContent: 'ALL', title: L('飛行の軌跡を全部', 'Whole flight paths'), className: all ? 'on' : '', onclick: () => { all = !all; try { localStorage.setItem('ghostline-compare-all', all ? '1' : '0') } catch { /* private window */ } drawCams() } }),
     hqButton(stage, drawCams, () => note('')))

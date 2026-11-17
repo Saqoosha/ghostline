@@ -130,7 +130,7 @@ window.addEventListener('keydown', e => {
   if (e.key === ' ') { $('play').click(); e.preventDefault() }
   if (e.key === 'ArrowLeft') { t = Math.max(0, t - 5); syncVideos(true) }
   if (e.key === 'ArrowRight' && rp) { t = Math.min(rp.dur, t + 5); syncVideos(true) }
-  if (e.key === '1') stage.setMode('orbit'); if (e.key === '2') stage.setMode('top')
+  if (e.key === '1') stage.setMode('orbit'); if (e.key === '2') stage.setMode('top'); if (e.key === '4') stage.setMode('free')
 })
 $('link').onclick = () => {                                 // this heat at this moment, as a link to send
   const q = new URLSearchParams(location.search); q.set('t', t.toFixed(1)); const url = `${location.origin}${location.pathname}?${q}`
@@ -155,7 +155,7 @@ function syncVideos(force = false) {
 function drawCams() {
   const btn = (m: Mode, label: string) => Object.assign(document.createElement('button'), { textContent: label, className: stage.mode === m ? 'on' : '', onclick: () => stage.setMode(m) })
   const up = rp?.pilots ?? [], k = stage.mode[0] === 'p' ? up.findIndex(p => `p${p.stream}` === stage.mode) : -1
-  $('cams').replaceChildren(btn('orbit', 'ORBIT'), btn('top', 'TOP'),
+  $('cams').replaceChildren(btn('orbit', 'ORBIT'), btn('top', 'TOP'), btn('free', 'FREE'),
     Object.assign(document.createElement('button'), { textContent: 'FOLLOW', className: k >= 0 ? 'on' : '', onclick: () => { if (up.length) stage.setMode(`p${up[(k + 1) % up.length].stream}`) } }),
     hqButton(stage, drawCams, () => note('')))
 }

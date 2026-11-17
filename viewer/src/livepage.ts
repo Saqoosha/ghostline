@@ -23,6 +23,7 @@ import * as pc from 'playcanvas'
 import { loadHQ, pickScan, saveHQ, sceneBlob } from './aud/scan'
 import { LiveDraw, type Answer } from './live'
 import { RoomOcclusion } from './occlude'
+import { FreeCam } from './aud/freecam'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const QS = new URLSearchParams(location.search)
@@ -73,12 +74,13 @@ const showFov = () => { $('fovv').textContent = fovIn.value.padStart(3) + '°'; 
 fovIn.oninput = () => { showFov(); store({ fov: Number(fovIn.value) }) }
 const halfFov = () => Number(fovIn.value) * Math.PI / 360
 
-// --- Free mode: drag orbits, shift or right drag pans, the wheel dollies (as the viewer's). The other modes: drag turns and tilts, the wheel zooms
-const orbit = { target: new pc.Vec3(0, 1, 0), yaw: 0, pitch: -45, dist: 12 }, tmpV = new pc.Vec3()
+// --- Free mode (aud/freecam.ts, shared with the audience pages): supersplat-viewer's fly mode - drag looks, right drag pans,
+// the wheel and WASD / QE fly. The other modes: drag turns and tilts, the wheel zooms
+const orbit = new FreeCam()
 let drag: { x: number; y: number; btn: number } | null = null
 canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, btn: e.button }; canvas.setPointerCapture(e.pointerId) })
-const keepView = () => { if (!NDI) store({ orbit: { target: [orbit.target.x, orbit.target.y, orbit.target.z], dist: orbit.dist, yaw: orbit.yaw, pitch: orbit.pitch }, view: { ...view }, cam: camMode }) }
-const setView = (o: any) => { if (o.target) orbit.target.set(o.target[0], o.target[1], o.target[2]); orbit.dist = o.dist ?? orbit.dist; orbit.yaw = o.yaw ?? orbit.yaw; orbit.pitch = o.pitch ?? orbit.pitch }
+const keepView = () => { if (!NDI) store({ orbit: orbit.state, view: { ...view }, cam: camMode }) }
+const setView = (o: any) => orbit.set(o)
 canvas.addEventListener('pointerup', () => { drag = null; keepView() })
 canvas.addEventListener('contextmenu', e => e.preventDefault())
 canvas.addEventListener('pointermove', e => {
@@ -86,14 +88,10 @@ canvas.addEventListener('pointermove', e => {
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY
   if (camMode === 'top') { view.topYaw -= dx * 0.3; return }
   if (camMode !== 'free') { view.yawOffset -= dx * 0.3; view.pitch = Math.max(-85, Math.min(-5, view.pitch - dy * 0.3)); return }
-  if (drag.btn === 0 && !e.shiftKey) { orbit.yaw -= dx * 0.3; orbit.pitch = Math.max(-89, Math.min(89, orbit.pitch - dy * 0.3)) }
-  else {
-    const r = new pc.Quat().setFromEulerAngles(orbit.pitch, orbit.yaw, 0), k = orbit.dist * 0.0015
-    orbit.target.sub(r.transformVector(new pc.Vec3(dx * k, 0, 0), tmpV)).add(r.transformVector(new pc.Vec3(0, dy * k, 0), tmpV))
-  }
+  if (drag.btn === 0) orbit.look(dx, dy, e.pointerType === 'touch'); else orbit.pan(dx, dy)
 })
 canvas.addEventListener('wheel', e => {
-  if (camMode === 'free') { orbit.dist = Math.max(0.5, orbit.dist * Math.exp(e.deltaY * 0.001)); keepView() }
+  if (camMode === 'free') { orbit.wheel(e.deltaY); keepView() }
   else { view.zoom = Math.max(0.4, Math.min(3, view.zoom * Math.exp(e.deltaY * 0.001))); keepView() }
   e.preventDefault()
 }, { passive: false })
@@ -112,11 +110,7 @@ const home = { target: new pc.Vec3(0, 0, 0), dist: 70 }    // the course (index.
 let line: pc.Vec3[] = [], lineS: number[] = []              // the course line in full, and each point's arc length (the dashes)
 let course: pc.Vec3[] = []                                 // the course line (index.json track), thinned: the orbit turns round its middle and holds all of it
 const orb = { target: new pc.Vec3(), dist: 70, init: false }
-function enterFree() {                                     // free starts where the camera is
-  const fwd = cam.forward.clone(), eye = cam.getPosition(), d = orb.dist
-  orbit.target.copy(eye).add(fwd.clone().mulScalar(d)); orbit.dist = d
-  orbit.yaw = Math.atan2(-fwd.x, -fwd.z) * 180 / Math.PI; orbit.pitch = Math.max(-89, Math.min(89, Math.asin(Math.max(-1, Math.min(1, fwd.y))) * 180 / Math.PI))
-}
+function enterFree() { orbit.enter(cam) }                 // free starts where the camera is
 function setMode(v: string) {
   if (v === camMode) return
   blendFrom.pos.copy(cam.getPosition()); blendFrom.rot.copy(cam.getRotation()); blendT = 0
@@ -137,6 +131,9 @@ window.addEventListener('keydown', e => {
   const ps = inOrder(), v = k <= 3 ? ['orbit', 'top', 'free'][k - 1] : ps[k - 4] ? 'p' + ps[k - 4].name : ''
   if (v) setMode(v)
 })
+// Free: WASD / QE held move it (keyup always lets go, whatever the mode now)
+window.addEventListener('keydown', e => { if (camMode === 'free' && !['INPUT', 'SELECT'].includes((e.target as HTMLElement).tagName)) orbit.key(e, true) })
+window.addEventListener('keyup', e => orbit.key(e, false)); window.addEventListener('blur', () => orbit.release())
 if (NDI) {                                                // mode orbit | top | p<output name> (not on the feed yet: orbit until it is), zoom 0.4-3
   $('panel').style.display = 'none'
   const ev = new EventSource('/api/cam/events')            // the browser retries a dropped connection, but gives up on an HTTP error: load again
@@ -148,8 +145,7 @@ function cameraAt(t: number, dt: number) {
   const up = [...pilots.values()].filter(p => p.dot.enabled && p.state > 1).map(p => p.dot.getPosition())   // in the air and answered
   if (!orb.init) { orb.target.copy(home.target); orb.dist = home.dist; orb.init = true }
   if (camMode === 'free') {
-    const r = new pc.Quat().setFromEulerAngles(orbit.pitch, orbit.yaw, 0)
-    cam.setPosition(r.transformVector(new pc.Vec3(0, 0, orbit.dist), new pc.Vec3()).add(orbit.target)); cam.setRotation(r); return
+    orbit.apply(cam, dt, canvas.clientWidth, canvas.clientHeight); return
   }
   if (camMode === 'top') {
     const r = new pc.Quat().setFromEulerAngles(-89.9, view.topYaw, 0)
