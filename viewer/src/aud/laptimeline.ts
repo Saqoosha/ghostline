@@ -3,8 +3,8 @@
 // HS at the holeshot and L<n> <time> at each pass, a dashed line 90 s after the pilot's own holeshot when the axis reaches it, and
 // the playhead. The passes are the official ones: the venue's timing (Speedhive) put into race.json / live.json as
 // "official" by tools/dvr/official_laps.py. A lap the decoder missed a pass in is one long lap there; it is labelled with
-// the laps it holds (L2-4), counted against the pilot's typical lap.
-export type Official = { session: string; cells: Record<string, { name: string; laps: number[]; ends: number[]; holeshot: number; laps_driven: number; best?: string }> }
+// the laps it holds (L2-4), counted against the pilot's typical lap and capped by the official count (lapNumbers).
+export type Official = { session: string; cells: Record<string, { name: string; laps: number[]; ends: number[]; holeshot: number; laps_driven?: number; best?: string }> }
 export type LapRow = { cell: string; name: string; color: string; hs: number; ends: number[]; laps: number[]; num: number[] }   // times in seconds from the replay's start; num: the lap count at each pass
 export const RACE = 90
 
@@ -15,18 +15,14 @@ export function lapRows(off: Official | undefined, start: number, colorOf: (cell
     .map(([cell, c]) => ({ cell, name: c.name, color: colorOf(cell), hs: (c.holeshot - start) / 1000, ends: c.ends.map(e => (e - start) / 1000), laps: c.laps, num: lapNumbers(c.laps, c.laps_driven) }))
 }
 
-// a lap the decoder missed a pass in holds more than one lap. The official count says how many were missed (Speedhive's
-// laps_driven includes them; RotorHazard's equals its passes, so a slow lap stays one), and they go to the laps longest
-// against the pilot's typical (median) lap; without a count, each lap holds as many as it is long against that lap
+// a lap holds as many laps as it is long against the pilot's typical (median) lap, but never more in all than the official
+// count: RotorHazard's equals its passes, so a slow lap stays one; Speedhive's can be higher with no long lap (then none is
+// split). Over the count, the laps whose last extra lap is least borne out by their length give it back first
 export function lapNumbers(laps: number[], driven?: number): number[] {
   const typical = [...laps].sort((a, b) => a - b)[Math.floor(laps.length / 2)] ?? 1
-  let k: number[]
-  if (typeof driven !== 'number') k = laps.map(l => Math.max(1, Math.round(l / typical)))
-  else {
-    k = laps.map(() => 1)
-    for (let extra = driven - laps.length; extra > 0 && laps.length; extra--) {
-      let best = 0; laps.forEach((l, i) => { if (l / typical - k[i] > laps[best] / typical - k[best]) best = i }); k[best]++
-    }
+  const k = laps.map(l => Math.max(1, Math.round(l / typical)))
+  for (let over = k.reduce((a, b) => a + b, 0) - Math.max(driven ?? Infinity, laps.length); over > 0; over--) {
+    let j = -1; laps.forEach((l, i) => { if (k[i] > 1 && (j < 0 || l / typical - k[i] < laps[j] / typical - k[j])) j = i }); k[j]--
   }
   let n = 0; return k.map(x => (n += x))
 }
