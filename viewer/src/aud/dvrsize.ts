@@ -10,9 +10,10 @@ export function dvrResize(pane: HTMLElement, cssVar: string, key: string) {
   if (!it) {
     const g = document.createElement('div'); g.className = 'dvr-grip'
     const scene = document.getElementById('c')
-    const max = () => Math.max(MIN, Math.min((pane.clientHeight / Math.max(1, pane.querySelectorAll('figure').length) - BAND) * 4 / 3 + BAR,
-      pane.clientWidth + (scene?.clientWidth ?? Infinity) - SCENE))
-    const set = (w: number) => { w = Math.round(Math.max(MIN, Math.min(max(), w))); document.documentElement.style.setProperty(cssVar, `${w}px`); return w }
+    const fit = () => (pane.clientHeight / Math.max(1, pane.querySelectorAll('figure').length) - BAND) * 4 / 3 + BAR
+    const max = () => Math.min(fit(), Math.max(MIN, pane.clientWidth + (scene?.clientWidth ?? Infinity) - SCENE))
+    // the clips' fit wins over MIN: on a short window four clips need a column narrower than MIN, or the last is cut off
+    const set = (w: number) => { w = Math.round(Math.max(BAR + 16, Math.min(max(), Math.max(MIN, w)))); document.documentElement.style.setProperty(cssVar, `${w}px`); return w }
     let saved = NaN; try { saved = Number(localStorage.getItem(key)) || NaN } catch { /* private window */ }
     const apply = () => { if (Number.isFinite(saved) && pane.clientHeight > 0) set(saved) }   // a hidden pane has no height to fit
     g.addEventListener('pointerdown', e => {
