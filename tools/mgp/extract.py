@@ -18,10 +18,15 @@ src, out, t0, t1 = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[
 FPS = float(sys.argv[5]) if len(sys.argv) > 5 else 5
 race = os.environ.get("RACE", os.path.splitext(os.path.basename(src))[0])
 LAYOUT = os.environ.get("LAYOUT", "8up")
-GRID, GCW, GCH, GFW = (2, 960, 540, 720) if LAYOUT == "4up" else (3, 640, 360, 480)   # the grid in the recording
+GRID, GCW, GCH, GFW = {"4up": (2, 960, 540, 720),
+                       # 4fill: the venue's ZowieBox 2x2 (UDGP 2026 R3), the 4:3 HDZero feed stretched over the whole cell;
+                       # its bottom 18 rows are black, so only the top 522 are the picture
+                       "4fill": (2, 960, 522, 960)}.get(LAYOUT, (3, 640, 360, 480))   # the grid in the recording
+GSTEP = 540 if LAYOUT == "4fill" else GCH               # row pitch of the grid
 W, H, CH, FW = 1920, 1080, 360, 480                     # every feed is handled at 480x360
 NS = GRID * GRID
-BAR = 42    # race overlay across the top of each cell: place, pilot, lap, lap time
+BAR = int(os.environ.get("BAR", 0 if LAYOUT == "4fill" else 42))   # race overlay across the top of each cell: place, pilot, lap, lap time
+SLOTS = [int(s) for s in os.environ["SLOTS"].split(",")] if os.environ.get("SLOTS") else None   # only these slots (the HDZero ones)
 MED_EVERY = 10   # every n-th live frame is kept for the median (prop mask)
 LAG = max(1, round(FPS / 3))   # frames in 1/3 s: the freeze test compares frames this far apart
 
@@ -39,7 +44,7 @@ def frames():
 
 def cell(f, slot):
     r, c = divmod(slot, GRID)
-    x0, y0 = c * GCW + (GCW - GFW) // 2, r * GCH
+    x0, y0 = c * GCW + (GCW - GFW) // 2, r * GSTEP
     im = f[y0:y0 + GCH, x0:x0 + GFW]
     return im if GFW == FW else cv2.resize(im, (FW, CH), interpolation=cv2.INTER_AREA)
 
@@ -66,6 +71,8 @@ print("frames", N)
 live = {}
 for slot in range(NS):
     s = S[slot]; bright, diff, hf = (np.array(s[k]) for k in ("bright", "diff", "hf"))
+    if SLOTS is not None and slot not in SLOTS:
+        continue
     if (bright > 30).mean() < 0.2:
         continue
     lv = (bright > 30) & (diff > 6.0) & (hf < 12)

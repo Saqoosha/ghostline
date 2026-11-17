@@ -9,10 +9,10 @@ import { clock, heatName, type HeatEntry, type HeatIndex } from './aud/listing'
 import { advance, drawProgress, makeCourse, newProg, progressOf, RACE_LAPS, type Course } from './aud/progress'
 import { resortWhenIdle } from './aud/racekit'
 import { fromLive, fromNight, heldFrom, type Replay } from './aud/record'
-import { createStage, hqButton, SLOTS, type Mode } from './aud/stage'
+import { createStage, hqButton, lineButton, moreButton, SLOTS, type Mode } from './aud/stage'
 
 applyStatic()
-document.querySelector('header')!.append(langToggle())
+document.querySelector('header')!.append(Object.assign(langToggle(), { className: 'btn opt' }))   // (opt: in the ⋯ menu on a phone, stage.ts moreButton)
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const QS = new URLSearchParams(location.search)
@@ -67,6 +67,7 @@ function saveUrl() { const q = new URLSearchParams(QS.has('e') ? { e: EVENT } : 
 async function refresh() {
   const got = await Promise.all(keys.map(loadFlight)), bad = got.filter((x): x is string => typeof x === 'string')
   flights = got.filter((x): x is Flight => typeof x !== 'string')
+  document.documentElement.style.setProperty('--rows', String(Math.max(1, flights.length)))   // the laps band's rows (a phone sizes it by them)
   for (const f of flights) f.label = flights.filter(o => o.name === f.name).length > 1 ? `${f.name} · ${heatOf(f.id)}` : f.name   // the same pilot twice: which heat
   stage.clear(); dur = Math.max(0, ...flights.map(f => f.pos.length / f.fps - f.hs + PRE))
   $<HTMLInputElement>('seek').max = String(dur); t = Math.min(t, dur); drawPicker(); drawDvr()
@@ -111,7 +112,8 @@ function drawDvr() {
     if (!f.video) return
     const v = Object.assign(document.createElement('video'), { src: f.video, muted: true, playsInline: true, preload: 'auto' })
     const box = document.createElement('figure'); box.style.setProperty('--c', `var(--${SLOTS[i]})`)
-    box.append(v, Object.assign(document.createElement('figcaption'), { textContent: f.label })); boxes.push(box); clips.push({ f, v })
+    const pic = document.createElement('div'); pic.className = 'pic'; pic.append(v)
+    box.append(Object.assign(document.createElement('figcaption'), { textContent: f.label, title: f.label }), pic); boxes.push(box); clips.push({ f, v })
   })
   $('dvr').replaceChildren(...boxes); $('dvr').hidden = !clips.length; document.body.classList.toggle('with-dvr', clips.length > 0)
 }
@@ -135,14 +137,14 @@ $('play').onclick = () => { if (t >= dur) t = 0; setPlaying(!playing) }
 seek.oninput = () => { t = Number(seek.value); resorted = false; syncClips(true) }
 $('speed').replaceChildren(...[0.1, 0.5, 1].map(v => Object.assign(document.createElement('button'), { textContent: `${v}×`, className: v === speed ? 'on' : '',
   onclick: (e: Event) => { speed = v; for (const b of Array.from($('speed').children)) b.classList.toggle('on', b === e.target) } })))
-window.addEventListener('keydown', e => { if (e.key === ' ') { $('play').click(); e.preventDefault() } if (e.key === '1') stage.setMode('orbit'); if (e.key === '2') stage.setMode('top') })
+window.addEventListener('keydown', e => { if (e.key === ' ') { $('play').click(); e.preventDefault() } if (e.key === '1') stage.setMode('orbit'); if (e.key === '2') stage.setMode('top'); if (e.key === '4') stage.setMode('free') })
 function drawCams() {
   const btn = (m: Mode, label: string) => Object.assign(document.createElement('button'), { textContent: label, className: stage.mode === m ? 'on' : '', onclick: () => stage.setMode(m) })
   const k = stage.mode[0] === 'p' ? flights.findIndex(f => `p${f.key}` === stage.mode) : -1
-  $('cams').replaceChildren(btn('orbit', 'ORBIT'), btn('top', 'TOP'),
+  $('cams').replaceChildren(btn('orbit', 'ORBIT'), btn('top', 'TOP'), btn('free', 'FREE'),
     Object.assign(document.createElement('button'), { textContent: 'FOLLOW', className: k >= 0 ? 'on' : '', onclick: () => { if (flights.length) stage.setMode(`p${flights[(k + 1) % flights.length].key}`) } }),
-    Object.assign(document.createElement('button'), { textContent: 'ALL', title: L('飛行の軌跡を全部', 'Whole flight paths'), className: all ? 'on' : '', onclick: () => { all = !all; try { localStorage.setItem('ghostline-compare-all', all ? '1' : '0') } catch { /* private window */ } drawCams() } }),
-    hqButton(stage, drawCams, () => note('')))
+    Object.assign(document.createElement('button'), { textContent: 'ALL', title: L('飛行の軌跡を全部', 'Whole flight paths'), className: (all ? 'on ' : '') + 'opt', onclick: () => { all = !all; try { localStorage.setItem('ghostline-compare-all', all ? '1' : '0') } catch { /* private window */ } drawCams() } }),
+    lineButton(stage, drawCams), hqButton(stage, drawCams, () => note('')), moreButton())
 }
 stage.onMode = () => { drawCams(); setTimeout(() => { resorted = false }, 800) }; drawCams()
 for (const ev of ['pointerup', 'wheel']) $('c').addEventListener(ev, () => { resorted = false })

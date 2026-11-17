@@ -1,6 +1,6 @@
 """The course line from live answers alone (rt_track.py .jsonl, any cells, any heats), when there is no race spec: no gate
 and no lap times. As make_race.py's line, the laps averaged by DTW, but the laps are found from the paths themselves.
-  rt_trackline.py out.json a.jsonl [b.jsonl ...]     env: MIN_INL (80), GAP (0.5 s), MIN_LEN (30 s), NEAR (2.5 m), GATE (a course line with a gate: cut the laps there)
+  rt_trackline.py out.json a.jsonl [b.jsonl ...]     env: MIN_INL (80), GAP (0.5 s), MIN_LEN (30 s), NEAR (2.5 m), MINLAP (5 s), NEAR3D, GATE (a course line with a gate: cut the laps there)
 - Flights: answers with MIN_INL inliers or more, split where no answer came for GAP s; those of MIN_LEN s or more, at 30 Hz.
 - Laps: a point of the longest flight that it passes again and again in the same direction (within NEAR m, heading within
   45 deg) cuts every flight there; a lap is one pass to the next. Laps far from the median duration or length are dropped.
@@ -51,10 +51,12 @@ print(f"{len(flights)} flights of {MIN_LEN:g} s or more, {sum(len(q) for q in fl
 if not flights: sys.exit("no flight long enough")
 
 def heading(Q, i): d = Q[min(i + 3, len(Q) - 1), [0, 2]] - Q[max(i - 3, 0), [0, 2]]; n = np.linalg.norm(d); return d / n if n > 1e-6 else d
+MINLAP = E("MINLAP", 5)                            # s: two passes closer than this are one lap
+AX = [0, 1, 2] if os.environ.get("NEAR3D") else [0, 2]   # NEAR3D=1: a course on two floors passes over the same spot twice a lap
 def passes(Q, ref, h):                              # the frames where Q goes through ref heading h: local minima of the distance
-    d = np.linalg.norm(Q[:, [0, 2]] - ref[[0, 2]], axis=1); out_ = []
+    d = np.linalg.norm(Q[:, AX] - ref[AX], axis=1); out_ = []
     for i in np.where(d < NEAR)[0]:
-        if d[i] == d[max(i - 15, 0):i + 16].min() and heading(Q, i) @ h > 0.7 and (not out_ or i - out_[-1] > 5 * FPS): out_.append(i)
+        if d[i] == d[max(i - 15, 0):i + 16].min() and heading(Q, i) @ h > 0.7 and (not out_ or i - out_[-1] > MINLAP * FPS): out_.append(i)
     return out_
 longest = max(flights, key=len); best = None
 if os.environ.get("GATE"):                          # a course line with a start gate (tracks/*.json): laps cut there, the line's way through it

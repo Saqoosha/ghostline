@@ -52,7 +52,8 @@ FULL_AFTER = int(os.environ.get("FULL_AFTER", 0))   # failed local relocalizatio
 VOTE_N = int(os.environ.get("VOTE_N", 1000))        # strongest query features used to vote (the pose uses all)
 TIMEOUT_S = float(os.environ.get("TIMEOUT_S", 0))   # >0: kill a folder's worker after this long
 RATIO, MAXD = 0.8, 0.7                            # COLMAP's SIFT matching defaults
-VIEW_W = 2.0                                      # map units per (1 - cos) of viewing-direction difference
+MEDIAN = int(os.environ.get("MEDIAN", 0))         # >0: median filter of this size before SIFT (3 for a breaking-up digital feed)
+VIEW_W = float(os.environ.get("VIEW_W", 2.0))     # map units per (1 - cos) of viewing-direction difference (a metric map: ~15)
 cv2.setNumThreads(1)
 SIFT = cv2.SIFT_create(4096, contrastThreshold=float(os.environ.get("CT", 0.02)))   # 0.02 ~ COLMAP peak_threshold x 3
 
@@ -187,7 +188,9 @@ def lens_camera(mp, lens):
 
 def features(fdir, files, mask):
     for f in files:
-        kp, qd = SIFT.detectAndCompute(cv2.imread(f"{fdir}/{f}", cv2.IMREAD_GRAYSCALE), mask)
+        g = cv2.imread(f"{fdir}/{f}", cv2.IMREAD_GRAYSCALE)
+        if MEDIAN: g = cv2.medianBlur(g, MEDIAN)   # HDZero breakup: isolated coloured blocks that SIFT takes for corners
+        kp, qd = SIFT.detectAndCompute(g, mask)
         o = np.argsort([-k.response for k in kp], kind="stable")
         kp, qd = [kp[i] for i in o], qd[o] if qd is not None else None
         xy = np.array([k.pt for k in kp], np.float64).reshape(-1, 2)

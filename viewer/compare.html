@@ -10,12 +10,13 @@
          the timeline and the footer. The header stays over the scene */
       :root { --band: 118px; --bottom: calc(var(--foot, 34px) + var(--time, 46px) + var(--band)); --side: 300px; --dvr: 0px; }
       /* the flights' DVR clips on the right (the night version's), as the replay page's: 4:3 each, the column as wide as four of them stacked */
-      body.with-dvr { --dvr: min(30vw, calc((100vh - var(--head, 52px) - var(--foot, 34px) - var(--time, 46px)) / 4 * 4 / 3 + 6px)); }
+      body.with-dvr { --dvr: min(30vw, calc(((100vh - var(--head, 52px) - var(--foot, 34px) - var(--time, 46px)) / 4 - 22px) * 4 / 3 + 6px)); }
       #dvr { position: fixed; right: 0; top: var(--head, 52px); bottom: calc(var(--foot, 34px) + var(--time, 46px)); z-index: 3; width: var(--dvr); display: flex; flex-direction: column; overflow: hidden; background: var(--paper); }
       #dvr[hidden] { display: none; }
-      #dvr figure { margin: 0; flex: none; box-sizing: content-box; width: calc(100% - 6px); aspect-ratio: 4 / 3; position: relative; border-left: 6px solid var(--c); background: #000; overflow: hidden; }
+      #dvr figure { margin: 0; flex: none; box-sizing: content-box; width: calc(100% - 6px); display: flex; flex-direction: column; border-left: 6px solid var(--c); background: #000; }
+      #dvr .pic { width: 100%; aspect-ratio: 4 / 3; overflow: hidden; }
       #dvr video { width: 100%; height: calc(100% * 360 / 348); object-fit: fill; display: block; }
-      #dvr figcaption { position: absolute; left: 8px; bottom: 6px; font: 400 11px var(--sans); letter-spacing: .06em; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, .8); white-space: pre; }
+      #dvr figcaption { box-sizing: border-box; height: 22px; line-height: 22px; padding: 0 8px; width: 0; min-width: 100%; background: rgba(255, 255, 255, .94); color: var(--ink); font: 500 12px/22px var(--sans); letter-spacing: .06em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }   /* the name as the 3D name tags have it (look.css .tag), on a band above the picture, off the OSD, beside the pilot's colour bar (width 0: it never widens the figure) */
       body.stage #c { inset: var(--head, 52px) auto auto var(--side); width: calc(100% - var(--side) - var(--dvr)); height: calc(100% - var(--head, 52px) - var(--bottom)); }
       .bar.time { bottom: var(--foot, 34px); height: 46px; border-top: 1px solid var(--faint); }
       #seek { flex: 1; accent-color: var(--ink); }
@@ -33,6 +34,7 @@
       #chosen.full { color: var(--alarm); }
       body .note { top: calc(var(--head, 52px) + (100vh - var(--head, 52px) - var(--bottom)) / 2); left: calc(var(--side) + (100vw - var(--side) - var(--dvr)) / 2); transform: translate(-50%, -50%); }
       @media (max-width: 720px) {
+        :root { --band: calc(var(--rows, 4) * 26px + 10px); }   /* the laps band as tall as its rows */
         :root { --side: 0px; }
         #pick { width: auto; right: 0; display: none; } body.picking #pick { display: block; } body.with-dvr { --dvr: 0px; } #dvr { display: none; }
         #laps { padding: 2px 16px; } .bar.time { gap: 10px; padding: 0 12px; } #clock { min-width: 0; } #seek { min-width: 0; }

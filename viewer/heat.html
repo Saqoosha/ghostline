@@ -16,7 +16,7 @@
       /* split, never stacked over the scene: the scene top left, the DVR clips in a column on the right (the night version),
          and along the bottom the laps band (aud/laptimeline.ts or aud/progress.ts, always four rows tall), the timeline and
          the footer. The header stays over the scene */
-      :root { --band: 118px; --bottom: calc(var(--foot, 34px) + var(--time, 46px) + var(--band)); --side: min(36vw, calc((100vh - var(--head, 52px) - var(--foot, 34px) - var(--time, 46px) - 0px) / 4 * 4 / 3 + 6px)); }   /* as wide as four 4:3 clips stacked from the header to the timeline */
+      :root { --band: 118px; --bottom: calc(var(--foot, 34px) + var(--time, 46px) + var(--band)); --side: min(36vw, calc(((100vh - var(--head, 52px) - var(--foot, 34px) - var(--time, 46px)) / 4 - 22px) * 4 / 3 + 6px)); }   /* as wide as four 4:3 clips, each under its 22 px name band, stacked from the header to the timeline */
       body.stage #c { inset: var(--head, 52px) auto auto 0; width: 100%; height: calc(100% - var(--head, 52px) - var(--bottom)); }
       body.stage.with-dvr #c { width: calc(100% - var(--side)); }
       #laps { position: fixed; left: 0; right: 0; bottom: calc(var(--foot, 34px) + var(--time, 46px)); height: var(--band); z-index: 3; padding: 4px 20px; background: var(--paper); border-top: 1px solid var(--faint); }
@@ -26,13 +26,15 @@
       .with-dvr #laps { right: var(--side); }
       #dvr { position: fixed; right: 0; top: var(--head, 52px); bottom: calc(var(--foot, 34px) + var(--time, 46px)); z-index: 3; width: var(--side); display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden; background: var(--paper); }
       #dvr[hidden] { display: none; }
-      #dvr figure { margin: 0; flex: none; box-sizing: content-box; width: calc(100% - 6px); aspect-ratio: 4 / 3; position: relative; border-left: 6px solid var(--c); background: #000; overflow: hidden; }   /* the picture 4:3 (its content box: the colour bar beside it) */
+      #dvr figure { margin: 0; flex: none; box-sizing: content-box; width: calc(100% - 6px); display: flex; flex-direction: column; border-left: 6px solid var(--c); background: #000; }
+      #dvr .pic { width: 100%; aspect-ratio: 4 / 3; overflow: hidden; }   /* the name's band, then the picture 4:3 (its content box: the colour bar beside it) */
       #dvr video { width: 100%; height: calc(100% * 360 / 348); object-fit: fill; display: block; }   /* the cell is the goggles' 4:3 picture stretched to 16:9, over 12 black lines at its foot: squeezed back to 4:3, the black pushed out below */
-      #dvr figcaption { position: absolute; left: 8px; bottom: 6px; font: 400 11px var(--sans); letter-spacing: .06em; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, .8); white-space: pre; }
+      #dvr figcaption { box-sizing: border-box; height: 22px; line-height: 22px; padding: 0 8px; width: 0; min-width: 100%; background: rgba(255, 255, 255, .94); color: var(--ink); font: 500 12px/22px var(--sans); letter-spacing: .06em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }   /* the name as the 3D name tags have it (look.css .tag), on a band above the picture, off the OSD, beside the pilot's colour bar (width 0: it never widens the figure) */
       @media (max-width: 720px) {
         :root { --side: 0px; }
         body.stage.with-dvr #c { width: 100%; height: calc(100% - var(--head, 52px) - var(--bottom) - 110px); }
-        #dvr { left: 0; top: auto; bottom: var(--bottom); width: auto; } .with-dvr #laps { right: 0; } #dvr { height: 110px; flex-direction: row; padding: 6px 16px; border-left: 0; border-top: 1px solid var(--faint); } #dvr figure { flex: none; width: auto; height: 100%; aspect-ratio: 4 / 3; }
+        #dvr { left: 0; top: auto; bottom: var(--bottom); width: auto; } .with-dvr #laps { right: 0; } #dvr { height: 110px; flex-direction: row; padding: 6px 16px; border-left: 0; border-top: 1px solid var(--faint); } #dvr figure { flex: none; width: auto; height: 100%; } #dvr .pic { width: auto; height: calc(100% - 22px); } #dvr figcaption { font-size: 11px; letter-spacing: .02em; padding: 0 4px; }   /* "ReinaStyle❤FPV" fits a 100 px picture */
+        :root { --band: calc(var(--rows, 4) * 26px + 10px); } #dvr { padding: 4px 12px; }
         #laps { padding: 2px 16px; } .bar.time { gap: 10px; padding: 0 12px; } #clock { min-width: 0; } #seek { min-width: 0; } #speed button { padding: 4px 3px; } }
     </style>
   </head>
@@ -42,9 +44,9 @@
       <a id="home" class="mark" href="./"><span>ghost</span><i></i><span>line</span></a>
       <span class="what" id="title" style="color: var(--dim)"></span>
       <span class="what" id="heat"></span>
-      <span class="ver" id="ver"></span>
+      <span class="ver opt" id="ver"></span>
       <span class="grow"></span>
-      <a class="btn" id="cmp" href="compare.html" title="このヒートの選手を比べるページで開く" data-en="Compare" data-en-title="Open this heat's pilots on the compare page">比べる</a>
+      <a class="btn opt" id="cmp" href="compare.html" title="このヒートの選手を比べるページで開く" data-en="Compare" data-en-title="Open this heat's pilots on the compare page">比べる</a>
       <span class="seg" id="cams"></span>
     </header>
     <aside id="dvr" hidden></aside>
