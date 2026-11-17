@@ -37,7 +37,7 @@ body.stage { overflow: hidden; }
 .seg button.on { color: var(--ink); border-bottom-color: var(--ink); }
 .seg .quality { display: inline-flex; margin-left: 14px; padding-left: 14px; border-left: 1px solid var(--faint); }   /* the scan's quality, set apart from the cameras */
 .dvr-grip { position: absolute; left: 0; top: 0; bottom: 0; width: 8px; z-index: 1; cursor: ew-resize; touch-action: none; }   /* the DVR column's left edge (aud/dvrsize.ts) */
-.dvr-grip:hover, .dvr-grip.on { background: rgba(12, 15, 20, .25); }
+.dvr-grip:hover, .dvr-grip.on { background: var(--faint); }
 .more { display: none; }   /* ⋯: a phone's menu for the .opt controls (stage.ts moreButton) */
 a.btn { text-decoration: none; border-bottom-color: var(--faint); } a.btn:hover { border-bottom-color: var(--ink); }   /* a link: the chosen button's line, faint (a text underline sat higher) */
 .delay { display: flex; align-items: center; gap: 4px; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); white-space: nowrap; }
