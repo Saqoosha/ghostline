@@ -57,7 +57,7 @@ export function drawLaps(c: HTMLCanvasElement, rows: LapRow[], t: number): numbe
   rows.forEach((row, k) => {
     const y = 3 + k * ROW + ROW / 2
     g.fillStyle = row.color; g.fillRect(0, y - 8, 4, 16)
-    g.fillStyle = '#0c0f14'; g.font = `700 ${small ? 11 : 13}px "Helvetica Neue", "Hiragino Sans", sans-serif`; g.fillText(`${row.cell}  ${row.name}`, 10, y, x0 - 16)
+    g.fillStyle = '#0c0f14'; g.font = `700 ${small ? 11 : 13}px "Helvetica Neue", "Hiragino Sans", sans-serif`; g.fillText(/^s\d+$/.test(row.cell) ? row.name : `${row.cell}  ${row.name}`, 10, y, x0 - 16)   // a bare stream id (s0) means nothing to a viewer: the name alone
     g.fillStyle = 'rgba(12, 15, 20, .1)'; g.fillRect(x0, y + 3, x1 - x0, 5)
     // the laps, strong and light by turns; only as far as the playhead
     const marks = [row.hs, ...row.ends]
