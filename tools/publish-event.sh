@@ -74,17 +74,22 @@ case "$WHAT" in
     if [ -e "$SCENE/og.jpg" ]; then
       cp -L "$SCENE/og.jpg" "$PAGE/og.jpg"
       python3 - "$PAGE" "$EV" <<'PY'
-import html, json, sys
+import hashlib, html, json, struct, sys
 page, ev = sys.argv[1:3]; url = f"https://ghostline.saqoo.sh/{ev}/"
 t = html.escape(json.load(open(f"{page}/index.json")).get("title") or ev)
-d = "FPV flights reconstructed from the pilots' DVR video, replayed over a 3D Gaussian-splat scan."
+d = "FPV race flights replayed over a 3D Gaussian-splat scan of the venue."
+jpg = open(f"{page}/og.jpg", "rb").read(); i = 2
+while jpg[i + 1] not in (0xC0, 0xC1, 0xC2): i += 2 + struct.unpack(">H", jpg[i + 2:i + 4])[0]   # the frame header: the size
+h, w = struct.unpack(">HH", jpg[i + 5:i + 9])
+assert (w, h) == (1200, 630), f"og.jpg is {w}x{h}, not 1200x630 (tools/og_image.py)"
+img = f"{url}og.jpg?v={hashlib.sha1(jpg).hexdigest()[:8]}"   # a new image is a new URL (og.jpg is cached a day)
 for f in ("index.html", "heat.html", "watch.html", "compare.html"):   # og:url on the entry only: a heat's link keeps its ?h=
     s = open(f"{page}/{f}").read()
     meta = (f'<meta property="og:type" content="website"><meta property="og:site_name" content="ghostline">'
             f'<meta property="og:title" content="{t}"><meta property="og:description" content="{html.escape(d)}">'
-            + (f'<meta property="og:url" content="{url}">' if f == "index.html" else "") + f'<meta property="og:image" content="{url}og.jpg">'
+            + (f'<meta property="og:url" content="{url}">' if f == "index.html" else "") + f'<meta property="og:image" content="{img}">'
             f'<meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">'
-            f'<meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="{url}og.jpg">')
+            f'<meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="{img}">')
     assert s.count("</head>") == 1, f
     open(f"{page}/{f}", "w").write(s.replace("</head>", meta + "</head>"))
 PY
