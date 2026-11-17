@@ -13,7 +13,7 @@
       body.with-dvr { --dvr: min(30vw, calc(((100vh - var(--head, 52px) - var(--foot, 34px) - var(--time, 46px)) / 4 - 22px) * 4 / 3 + 6px)); }
       #dvr { position: fixed; right: 0; top: var(--head, 52px); bottom: calc(var(--foot, 34px) + var(--time, 46px)); z-index: 3; width: var(--dvr); display: flex; flex-direction: column; overflow: hidden; background: var(--paper); }
       #dvr[hidden] { display: none; }
-      #dvr figure { margin: 0; flex: none; box-sizing: content-box; width: calc(100% - 6px); display: flex; flex-direction: column; border-left: 6px solid var(--c); background: #000; }
+      #dvr figure { cursor: pointer; margin: 0; flex: none; box-sizing: content-box; width: calc(100% - 6px); display: flex; flex-direction: column; border-left: 6px solid var(--c); background: #000; }
       #dvr .pic { width: 100%; aspect-ratio: 4 / 3; overflow: hidden; }
       #dvr video { width: 100%; height: calc(100% * 360 / 348); object-fit: fill; display: block; }
       #dvr figcaption { box-sizing: border-box; height: 22px; line-height: 22px; padding: 0 8px; width: 0; min-width: 100%; background: rgba(255, 255, 255, .94); color: var(--ink); font: 500 12px/22px var(--sans); letter-spacing: .06em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }   /* the name as the 3D name tags have it (look.css .tag), on a band above the picture, off the OSD, beside the pilot's colour bar (width 0: it never widens the figure) */
