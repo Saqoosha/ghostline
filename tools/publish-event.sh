@@ -13,6 +13,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EV="${1:?event, e.g. jdl-2026-10-25}"; WHAT="${2:?scene folder, --track <file> or --night <folder>}"
 [[ "$EV" =~ ^(staging-)?[a-z0-9][a-z0-9-]*$ ]] || { echo "not an event name: $EV" >&2; exit 2; }
+# one thing per run: anything after the third argument (a second --night / --track) was ignored without a word, and the
+# heats did not go up (UDGP 2026 R3, 2026-11-17); a title that is an option is the same mistake
+[ $# -le 3 ] || { echo "one thing per run; run again for: ${*:4}" >&2; exit 2; }
+[[ "$WHAT" == --* || "${3:-}" != --* ]] || { echo "the title looks like an option: $3 (one thing per run)" >&2; exit 2; }
 BUCKET="vdgs"; REMOTE="${VDGS_R2_REMOTE:-r2}"; MOUNT="${VDGS_R2_ENV:-$HOME/.claude/1p-mounts/vdgs.env}"
 DRY=(); [ -n "${DRY_RUN:-}" ] && DRY=(--dry-run)
 DEST="$REMOTE:$BUCKET/dvr/$EV"
