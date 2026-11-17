@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { lapRows, standings, type Official } from './laptimeline'
+import { lapNumbers, lapRows, standings, type Official } from './laptimeline'
 
 const off: Official = { session: 's', cells: {
   R2: { name: 'A', laps: [11, 11.5, 12], ends: [21000, 32500, 44500], holeshot: 10000, laps_driven: 3 },
@@ -9,6 +9,13 @@ const off: Official = { session: 's', cells: {
 const rows = lapRows(off, 0, () => '#000', ['R2', 'F1', 'R4', 'R5'])
 
 test('a missed pass counts the laps it holds', () => expect(rows[1].num).toEqual([1, 2, 4]))
+
+test('the official count bounds the missed laps', () => {
+  expect(lapNumbers([17, 18, 138.5, 17], 4)).toEqual([1, 2, 3, 4])            // RotorHazard: a slow lap is one lap
+  expect(lapNumbers([20, 20, 20, 60, 40], 8)).toEqual([1, 2, 3, 6, 8])        // Speedhive: 3 missed, to the longest laps
+  expect(lapNumbers([20, 20, 61], 4)).toEqual([1, 2, 4])                      // fewer missed than the lap's length says
+  expect(lapNumbers([20, 20, 41])).toEqual([1, 2, 4])                              // no count: by length
+})
 
 test('standings at the playhead show only the passes made by then', () => {
   expect(standings(rows, 25).map(s => [s.pos, s.laps, s.best])).toEqual([[1, 1, 11], [2, 1, 10.5], [0, 0, null]])

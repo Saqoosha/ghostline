@@ -12,13 +12,23 @@ export function lapRows(off: Official | undefined, start: number, colorOf: (cell
   if (!off) return []
   return Object.entries(off.cells)
     .sort(([a], [b]) => ((order.indexOf(a) + 9) % 9) - ((order.indexOf(b) + 9) % 9))
-    .map(([cell, c]) => ({ cell, name: c.name, color: colorOf(cell), hs: (c.holeshot - start) / 1000, ends: c.ends.map(e => (e - start) / 1000), laps: c.laps, num: lapNumbers(c.laps) }))
+    .map(([cell, c]) => ({ cell, name: c.name, color: colorOf(cell), hs: (c.holeshot - start) / 1000, ends: c.ends.map(e => (e - start) / 1000), laps: c.laps, num: lapNumbers(c.laps, c.laps_driven) }))
 }
 
-// a lap the decoder missed a pass in holds as many laps as it is long against the pilot's typical (median) lap
-function lapNumbers(laps: number[]): number[] {
+// a lap the decoder missed a pass in holds more than one lap. The official count says how many were missed (Speedhive's
+// laps_driven includes them; RotorHazard's equals its passes, so a slow lap stays one), and they go to the laps longest
+// against the pilot's typical (median) lap; without a count, each lap holds as many as it is long against that lap
+export function lapNumbers(laps: number[], driven?: number): number[] {
   const typical = [...laps].sort((a, b) => a - b)[Math.floor(laps.length / 2)] ?? 1
-  let n = 0; return laps.map(l => (n += Math.max(1, Math.round(l / typical))))
+  let k: number[]
+  if (typeof driven !== 'number') k = laps.map(l => Math.max(1, Math.round(l / typical)))
+  else {
+    k = laps.map(() => 1)
+    for (let extra = driven - laps.length; extra > 0 && laps.length; extra--) {
+      let best = 0; laps.forEach((l, i) => { if (l / typical - k[i] > laps[best] / typical - k[best]) best = i }); k[best]++
+    }
+  }
+  let n = 0; return k.map(x => (n += x))
 }
 
 // the standings at t, from the passes made by then: more laps first, then the earlier last pass. A lap holding several
