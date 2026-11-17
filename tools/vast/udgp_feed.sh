@@ -22,7 +22,9 @@ rm -f trial_*.mp4
 $PY $T/udgp_pinhole.py "$SRC" "$START" "$DUR" "$SLOT" "$R/cams/hdzero-nano90-$best-lens.json" fw > /dev/null
 bash $T/udgp_reverse.sh fw rv > /dev/null
 rm -f fw_t.jsonl rv_t.jsonl                                  # no answers left from an earlier attempt
-track fw fw_t & a=$!; track rv rv_t & b=$!; wait $a; wait $b  # a bare wait returns 0 whatever the trackers did
+track fw fw_t & a=$!; track rv rv_t & b=$!
+fa=0; fb=0; wait $a || fa=$?; wait $b || fb=$?                # both waited for (a bare wait returns 0 whatever they did)
+[ $fa = 0 ] && [ $fb = 0 ] || { echo "$NAME: tracker failed (fw $fa, rv $fb), see fw_t.log / rv_t.log" >&2; exit 1; }
 $PY $T/udgp_merge_track.py fw_t.jsonl rv_t.jsonl "$NAME.jsonl" > merge.txt
 rm -f fw.mp4 rv.mp4
 $PY -c "import json,sys; json.dump(dict(name=sys.argv[1], lens=sys.argv[2], trial=int(sys.argv[3]), merge=open('merge.txt').read().strip()), open('done.json','w'))" "$NAME" "$best" "$bn"

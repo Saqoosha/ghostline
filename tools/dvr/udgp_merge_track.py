@@ -8,7 +8,7 @@ fw, rv, out = sys.argv[1:4]
 F = {r["i"]: r for r in map(json.loads, open(fw))}
 R = list(map(json.loads, open(rv)))
 N = max(F) + 1
-if max(r["i"] for r in R) + 1 != N: sys.exit(f"{fw} ends at frame {N - 1}, {rv} at {max(r['i'] for r in R)}: a run stopped early")
+if not R or max(r["i"] for r in R) + 1 != N: sys.exit(f"{fw} ends at frame {N - 1}, {rv} at {max((r['i'] for r in R), default=-1)}: a run stopped early")
 B = {}
 for r in R:
     if "pos" in r: B[N - 1 - r["i"]] = dict(r, i=N - 1 - r["i"], how="rev-" + r.get("how", ""))

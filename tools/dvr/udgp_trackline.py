@@ -33,11 +33,15 @@ for f in sorted(glob.glob(src + '/*/race.json')):
         t = np.array([r[0] for r in rows]); P = np.array([r[1] for r in rows])
         keep = np.ones(len(t), bool)                  # like udgp_heats.clean(): a lone pose both neighbours need > VMAX to reach
         for _ in range(5):
-            i = np.flatnonzero(keep); v = np.linalg.norm(np.diff(P[i], axis=0), axis=1) / np.maximum(np.diff(t[i]), 1e-3)
+            i = np.flatnonzero(keep)
+            if len(i) < 3: break
+            v = np.linalg.norm(np.diff(P[i], axis=0), axis=1) / np.maximum(np.diff(t[i]), 1e-3)
             bad = np.r_[v[0] > VMAX, (v[:-1] > VMAX) & (v[1:] > VMAX), v[-1] > VMAX]
             if not bad.any(): break
             keep[i[bad]] = False
-        t, P = t[keep], P[keep]; ALL.append(P); cut = np.where(np.diff(t) > 0.5)[0] + 1
+        t, P = t[keep], P[keep]
+        if len(t) < 3: continue
+        ALL.append(P); cut = np.where(np.diff(t) > 0.5)[0] + 1
         for a, b in zip(np.r_[0, cut], np.r_[cut, len(t)]):
             if t[b - 1] - t[a] < 30: continue
             tt = np.arange(t[a], t[b - 1], 1 / FPS); Q = smooth(np.c_[[np.interp(tt, t[a:b], P[a:b, d]) for d in range(3)]].T, 3)

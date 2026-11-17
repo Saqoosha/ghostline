@@ -23,7 +23,7 @@ export type RoofPlane = { p: [number, number, number]; g: [number, number]; xr?:
 const MAX_ROOF = 8
 
 const GLSL = /* glsl */ `
-uniform vec4 uOccCam;   // xyz the camera, w its distance to the room (0 inside)
+uniform vec4 uOccCam;   // xyz the camera, w its distance to the room (a lower bound; -1 inside)
 uniform vec4 uOccBox;    // x0, z0, y0, y1 (already pulled in)
 uniform vec4 uOccDisk;   // cx, cz, r (pulled in), 1 if the circle is used
 uniform vec4 uOccFar;    // x1, z1 (pulled in; 1e30 without), the cut's height (1e30 without), its fade (m either side)
@@ -95,7 +95,7 @@ bool occInside(vec3 p) {
 // the room does, or when its line of sight from the camera, carried on past it (t = 1 at p), enters the room - grown by
 // the sphere's size as seen at the room's distance, so a large splat beside the line still counts - only beyond p.
 bool occHidden(vec3 p, float rad) {
-    if (occInside(p) || uOccCam.w <= 0.0) return false;   // the camera in the room: nothing (a non-convex plan would hide its own walls)
+    if (occInside(p) || uOccCam.w < 0.0) return false;   // the camera in the room: nothing (a non-convex plan would hide its own walls)
     vec3 d = p - uOccCam.xyz;
     float dist = length(d);
     if (dist - rad < uOccCam.w) return true;
@@ -235,7 +235,10 @@ export class RoomOcclusion {
   update(camPos: pc.Vec3) {
     if (!this.on || camPos.distance(this.last) < 1e-4) return
     this.last.copy(camPos); this.camArr[0] = camPos.x; this.camArr[1] = camPos.y; this.camArr[2] = camPos.z
-    this.camArr[3] = this.distance(camPos)
+    const d = this.distance(camPos)
+    // inside, exactly (distance() is only a lower bound under a roof plane over part of the plan)
+    const inside = this.poly.length ? this.planDistance(camPos.x, camPos.z) === 0 && camPos.y > this.box[2] && camPos.y < this.top(camPos.x, camPos.z) : d === 0
+    this.camArr[3] = inside ? -1 : d
     this.gs.setParameter('uOccCam', this.camArr)
   }
 }

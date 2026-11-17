@@ -6,7 +6,7 @@
 #   DJI 0021 (inside the hall) / 0022 (outside, aerial): sharpest of every 10 frames, no masks (people kept)
 # The new SfM is Sim3-aligned onto the current ws/sparse/0 through the shared 360 frames (udgp_hq_align.py), so it
 # sits in the same z-up metric frame as the current scan.
-# usage: udgp_hq_build.sh extract|sfm|align|split|train|merge|web   
+# usage: udgp_hq_build.sh extract|sfm|align|split|train|merge|web
 set -euo pipefail
 S=~/tools/spirula/spirula
 W=~/work/udgp-2026-r3
