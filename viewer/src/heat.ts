@@ -12,6 +12,7 @@ import { drawLaps, lapRows, timeAt, type LapRow } from './aud/laptimeline'
 import { advance, drawProgress, makeCourse, newProg, progressOf, RACE_LAPS, type Course } from './aud/progress'
 import { createStage, hqButton, lineButton, moreButton, SLOTS, type Mode, type PilotState } from './aud/stage'
 import { createBroadcast, type Broadcast } from './aud/broadcast'
+import { dvrResize } from './aud/dvrsize'
 
 applyStatic()
 document.querySelector('header')!.append(Object.assign(langToggle(), { className: 'btn opt' }))   // (opt: in the ⋯ menu on a phone, stage.ts moreButton)
@@ -79,6 +80,7 @@ async function load() {
     box.append(Object.assign(document.createElement('figcaption'), { textContent: p.name, title: p.name }), pic); box.onclick = () => stage.toggleFollow(p.stream); return box
   }))
   document.body.classList.toggle('with-dvr', !$('dvr').hidden)
+  dvrResize($('dvr'), '--side-drag', 'ghostline-dvr-width')
   // the official laps (race.json / live.json "official"), under the scene: each cell in its place's colour (look.css --tl ...)
   const css = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim()
   laps = lapRows(rp.official, rp.start, cell => css('--' + (SLOTS[rp!.order.indexOf(cell)] ?? 'tl')) || '#5b4bff', rp.order)

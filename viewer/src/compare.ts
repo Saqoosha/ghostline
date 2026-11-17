@@ -10,6 +10,7 @@ import { advance, drawProgress, makeCourse, newProg, progressOf, RACE_LAPS, type
 import { resortWhenIdle } from './aud/racekit'
 import { fromLive, fromNight, heldFrom, type Replay } from './aud/record'
 import { createStage, hqButton, lineButton, moreButton, SLOTS, type Mode } from './aud/stage'
+import { dvrResize } from './aud/dvrsize'
 
 applyStatic()
 document.querySelector('header')!.append(Object.assign(langToggle(), { className: 'btn opt' }))   // (opt: in the ⋯ menu on a phone, stage.ts moreButton)
@@ -116,6 +117,7 @@ function drawDvr() {
     box.append(Object.assign(document.createElement('figcaption'), { textContent: f.label, title: f.label }), pic); box.onclick = () => stage.toggleFollow(f.key); boxes.push(box); clips.push({ f, v })
   })
   $('dvr').replaceChildren(...boxes); $('dvr').hidden = !clips.length; document.body.classList.toggle('with-dvr', clips.length > 0)
+  dvrResize($('dvr'), '--dvr-drag', 'ghostline-dvr-width-compare')
 }
 const clipAt = (f: Flight) => t - PRE + f.hs
 function syncClips(force = false) {
