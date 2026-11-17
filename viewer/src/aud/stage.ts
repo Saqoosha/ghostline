@@ -7,6 +7,7 @@ import { loadHQ, pickScan, saveHQ, sceneBlob } from './scan'
 import { bakeSky } from '../sky'
 import { insetPolygon, RoomOcclusion, type Room } from '../occlude'
 import { FreeCam } from './freecam'
+import { Cutaway } from './cutaway'
 
 export type Slot = 'tl' | 'tr' | 'bl' | 'br'
 export const SLOTS: Slot[] = ['tl', 'tr', 'bl', 'br']
@@ -17,7 +18,8 @@ export interface StagePilot { stream: string; slot: Slot; color: string; pos: pc
   show(pos: number[], trail: (number[] | null)[], state: PilotState, label: { name: string; flag: string; note: string }): void; hide(): void }
 export interface Stage { app: pc.Application; mode: Mode; onMode: (m: Mode) => void
   loadScene(progress?: (f: number) => void): Promise<{ title?: string }>; hq: boolean; setHQ(on: boolean): Promise<void>; setCourse(track: number[][] | null): void; pilot(stream: string, slot: Slot): StagePilot
-  setMode(m: Mode): void; clear(): void }
+  setMode(m: Mode): void; clear(): void
+  showLine: boolean; setShowLine(on: boolean): void }
 
 const css = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim()
 const hex = (h: string) => new pc.Color(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255)
@@ -39,9 +41,26 @@ const SHOT = new URLSearchParams(typeof location === 'undefined' ? '' : location
 export const hqButton = (stage: Stage, redraw: () => void, done: () => void) => {
   const q = (hq: boolean, label: string, title: string) => Object.assign(document.createElement('button'), { textContent: label, title, className: stage.hq === hq ? 'on' : '',
     onclick: () => { if (stage.hq !== hq) { stage.setHQ(hq).then(done, e => console.error('scan', e)); redraw() } } })
-  const box = Object.assign(document.createElement('span'), { className: 'quality', title: L('スキャンの画質', 'Scan quality') })
+  const box = Object.assign(document.createElement('span'), { className: 'quality opt', title: L('スキャンの画質', 'Scan quality') })
   box.append(q(false, 'LITE', L('軽いスキャン（80 万 splat、12 MB）', 'Light scan (0.8M splats, 12 MB)')), q(true, 'HQ', L('高画質のスキャン（300 万 splat、45 MB）', 'High-quality scan (3M splats, 45 MB)')))
   return box
+}
+// the course line on or off (LINE, and the key L on every page), this browser's choice, on unless turned off
+const loadLine = () => { try { return localStorage.getItem('ghostline-line') !== '0' } catch { return true } }
+const saveLine = (on: boolean) => { try { localStorage.setItem('ghostline-line', on ? '1' : '0') } catch { /* private window: not kept */ } }
+let lineRedraw = () => {}
+export const lineButton = (stage: Stage, redraw: () => void) => {
+  lineRedraw = redraw
+  return Object.assign(document.createElement('button'), { textContent: 'LINE', title: L('コースの線（L）', 'Course line (L)'), className: (stage.showLine ? 'on ' : '') + 'opt',
+    onclick: () => { stage.setShowLine(!stage.showLine); redraw() } })
+}
+// on a phone the header keeps the cameras and puts the rest (each marked .opt: the scan's quality, LINE, the language,
+// Compare, ...) behind ⋯, shown under the cameras while it is open (look.css); on a wide screen ⋯ is not shown
+export const moreButton = () => {
+  const open = () => !!document.querySelector('.bar.top.open')
+  const b = Object.assign(document.createElement('button'), { textContent: '⋯', title: L('ほかの設定', 'More'), className: 'more' + (open() ? ' on' : '') })
+  b.onclick = () => { b.classList.toggle('on', !!b.closest('.bar.top')?.classList.toggle('open')) }
+  return b
 }
 export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   const app = new pc.Application(canvas, { mouse: new pc.Mouse(canvas), touch: new pc.TouchDevice(canvas), graphicsDeviceOptions: { antialias: !PHONE } })   // MSAA: the trail fades by alpha-to-coverage, as mgp.ts - not on a phone, where 4x the splats' fill dropped the frame rate
@@ -94,6 +113,9 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   canvas.addEventListener('wheel', e => { if (stage.mode === 'free') free.wheel(e.deltaY); else setZoom(view.zoom * Math.exp(e.deltaY * 0.001)); e.preventDefault() }, { passive: false })
   window.addEventListener('keydown', e => { if (stage.mode === 'free' && !['INPUT', 'SELECT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName) && free.key(e, true)) e.preventDefault() })
   window.addEventListener('keyup', e => free.key(e, false)); window.addEventListener('blur', () => free.release())
+  window.addEventListener('keydown', e => {
+    if ((e.key === 'l' || e.key === 'L') && !e.metaKey && !e.ctrlKey && !['INPUT', 'SELECT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) { stage.setShowLine(!stage.showLine); lineRedraw() }
+  })
 
   const pilots = new Map<string, Pilot>()
   function cameraAt(t: number, dt: number) {
@@ -136,6 +158,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   const STENCIL_MARK = new pc.StencilParameters({ func: pc.FUNC_ALWAYS, ref: 0, readMask: 255, writeMask: 255, fail: pc.STENCILOP_KEEP, zfail: pc.STENCILOP_KEEP, zpass: pc.STENCILOP_INCREMENT })
   const STENCIL_HIDDEN = new pc.StencilParameters({ func: pc.FUNC_LESSEQUAL, ref: XRAY_SPLATS, readMask: 255, writeMask: 0, fail: pc.STENCILOP_KEEP, zfail: pc.STENCILOP_KEEP, zpass: pc.STENCILOP_KEEP })
   app.systems.gsplat!.on('material:created', (m: pc.Material) => { m.stencilFront = m.stencilBack = STENCIL_MARK; m.update() })
+  const cutaway = Cutaway.fromQuery(app, SHOT)   // on by default (?cutaway=0 off), ?xray= (aud/cutaway.ts)
   const xray = (o: number, tint: pc.Color) => { const m = new pc.StandardMaterial(); m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.cull = pc.CULLFACE_NONE
     m.emissiveVertexColor = true; m.emissive = tint; m.opacityVertexColor = true; m.opacityVertexColorChannel = 'a'; m.opacity = o
     m.blendType = pc.BLEND_NORMAL; m.depthWrite = false; m.depthTest = false; m.stencilFront = m.stencilBack = STENCIL_HIDDEN; m.update(); return m }
@@ -160,12 +183,13 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
 
   // --- the course line: a white dashed band, written with depth before the splats as the trail (the splats in front of it
   // cover it), and an x-ray of it after them, so a stretch under an upper floor or behind a wall shows faintly
-  const lineMesh = new pc.Mesh(app.graphicsDevice); lineMesh.clear(true, false); emptyMesh(lineMesh)
+  const lineMesh = new pc.Mesh(app.graphicsDevice); lineMesh.clear(true, false); emptyMesh(lineMesh); const lineEnts: pc.Entity[] = []
   { const m = new pc.StandardMaterial(); m.useLighting = false; m.diffuse = new pc.Color(0, 0, 0); m.cull = pc.CULLFACE_NONE; m.emissiveVertexColor = true; m.emissive = new pc.Color(1, 1, 1)
     m.opacityVertexColor = true; m.opacityVertexColorChannel = 'a'; m.opacity = LINE_A; m.blendType = pc.BLEND_NONE; m.depthWrite = true; m.depthTest = true
     if (PHONE) m.opacityDither = pc.DITHER_BLUENOISE; else m.alphaToCoverage = true; m.update()
     const e = new pc.Entity('course'); e.addComponent('render', { meshInstances: [new pc.MeshInstance(lineMesh, m)] }); app.root.addChild(e)
-    const x = new pc.Entity('course-xray'); x.addComponent('render', { meshInstances: [new pc.MeshInstance(lineMesh, xray(LINE_XRAY, new pc.Color(0.45, 0.85, 1)))], layers: [pc.LAYERID_IMMEDIATE] }); app.root.addChild(x) }
+    const x = new pc.Entity('course-xray'); x.addComponent('render', { meshInstances: [new pc.MeshInstance(lineMesh, xray(LINE_XRAY, new pc.Color(0.45, 0.85, 1)))], layers: [pc.LAYERID_IMMEDIATE] }); app.root.addChild(x)
+    lineEnts.push(e, x); for (const q of lineEnts) q.enabled = loadLine() }
   function drawLine(eye: pc.Vec3) {
     const n = line.length; if (!n) { emptyMesh(lineMesh); return }
     const pos: number[] = [], col: number[] = [], nrm: number[] = [], idx: number[] = [], tan = new pc.Vec3(), vw = new pc.Vec3(), side = new pc.Vec3()
@@ -267,6 +291,7 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
   app.on('update', (dt: number) => {
     if (!SHOT.has('still')) t += dt   // ?still: the orbit stays at its first angle (screenshots from one view)
     cameraAt(t, dt); roomAt(dt)
+    cutaway?.update(cam.getPosition(), [...pilots.values()].filter(p => p.pos && p.state === 'flying').map(p => p.pos as pc.Vec3))
     if (blendT < BLEND) { blendT = Math.min(BLEND, blendT + dt); const u = blendT / BLEND, k = u * u * (3 - 2 * u)
       cam.setPosition(new pc.Vec3().lerp(blendFrom.pos, cam.getPosition(), k)); cam.setRotation(new pc.Quat().slerp(blendFrom.rot, cam.getRotation(), k)) }
     const eye = cam.getPosition(), pxWorld = 2 * Math.tan(30 * Math.PI / 180) / Math.max(1, canvas.clientHeight)
@@ -348,6 +373,8 @@ export function createStage(canvas: HTMLCanvasElement, base: string): Stage {
       if (m === 'free') free.enter(cam)   // from where the camera is
       stage.mode = m; stage.onMode(m) },
     clear() { for (const p of pilots.values()) p.hide() },
+    showLine: loadLine(),
+    setShowLine(on) { stage.showLine = on; for (const q of lineEnts) q.enabled = on; saveLine(on) },
   }
   Object.assign(window, { ghostline: { app, pc, pilots, stage, free } })   // for checking the page from outside
   return stage

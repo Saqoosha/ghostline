@@ -10,11 +10,11 @@ import { resortWhenIdle } from './aud/racekit'
 import { fromLive, fromNight, heldFrom, type Replay } from './aud/record'
 import { drawLaps, lapRows, timeAt, type LapRow } from './aud/laptimeline'
 import { advance, drawProgress, makeCourse, newProg, progressOf, RACE_LAPS, type Course } from './aud/progress'
-import { createStage, hqButton, SLOTS, type Mode, type PilotState } from './aud/stage'
+import { createStage, hqButton, lineButton, moreButton, SLOTS, type Mode, type PilotState } from './aud/stage'
 import { createBroadcast, type Broadcast } from './aud/broadcast'
 
 applyStatic()
-document.querySelector('header')!.append(langToggle())
+document.querySelector('header')!.append(Object.assign(langToggle(), { className: 'btn opt' }))   // (opt: in the ⋯ menu on a phone, stage.ts moreButton)
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const QS = new URLSearchParams(location.search)
@@ -75,11 +75,13 @@ async function load() {
   $('dvr').replaceChildren(...rp.pilots.filter(p => p.video).map(p => {
     const box = document.createElement('figure'); box.style.setProperty('--c', `var(--${p.slot})`)
     const v = Object.assign(document.createElement('video'), { src: dir + p.video, muted: true, playsInline: true, preload: 'auto' }); v.dataset.stream = p.stream
-    box.append(v, Object.assign(document.createElement('figcaption'), { textContent: p.name })); return box
+    const pic = document.createElement('div'); pic.className = 'pic'; pic.append(v)
+    box.append(Object.assign(document.createElement('figcaption'), { textContent: p.name, title: p.name }), pic); return box
   }))
   document.body.classList.toggle('with-dvr', !$('dvr').hidden)
   // the official laps (race.json / live.json "official"), under the scene: each cell in its place's colour (look.css --tl ...)
   const css = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim()
+  document.documentElement.style.setProperty('--rows', String(Math.max(1, rp.pilots.length)))   // the laps band's rows (a phone sizes it by them)
   laps = lapRows(rp.official, rp.start, cell => css('--' + (SLOTS[rp!.order.indexOf(cell)] ?? 'tl')) || '#5b4bff', rp.order)
   // the broadcast's sound, when the heat has it (aud/broadcast.ts): on or off as the viewer last left it (this browser only;
   // off at first). Left on, but the browser wants a click before any sound: shown off, the setting kept for the next visit
@@ -157,7 +159,7 @@ function drawCams() {
   const up = rp?.pilots ?? [], k = stage.mode[0] === 'p' ? up.findIndex(p => `p${p.stream}` === stage.mode) : -1
   $('cams').replaceChildren(btn('orbit', 'ORBIT'), btn('top', 'TOP'), btn('free', 'FREE'),
     Object.assign(document.createElement('button'), { textContent: 'FOLLOW', className: k >= 0 ? 'on' : '', onclick: () => { if (up.length) stage.setMode(`p${up[(k + 1) % up.length].stream}`) } }),
-    hqButton(stage, drawCams, () => note('')))
+    lineButton(stage, drawCams), hqButton(stage, drawCams, () => note('')), moreButton())
 }
 // once more after the camera stops: a drag or a wheel while paused, the end of a switch's glide
 stage.onMode = () => { drawCams(); setTimeout(() => { resorted = false }, 800) }; drawCams()

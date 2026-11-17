@@ -36,6 +36,7 @@ body.stage { overflow: hidden; }
 .seg button:hover, .btn:hover { color: var(--ink); }
 .seg button.on { color: var(--ink); border-bottom-color: var(--ink); }
 .seg .quality { display: inline-flex; margin-left: 14px; padding-left: 14px; border-left: 1px solid var(--faint); }   /* the scan's quality, set apart from the cameras */
+.more { display: none; }   /* ⋯: a phone's menu for the .opt controls (stage.ts moreButton) */
 a.btn { text-decoration: none; border-bottom-color: var(--faint); } a.btn:hover { border-bottom-color: var(--ink); }   /* a link: the chosen button's line, faint (a text underline sat higher) */
 .delay { display: flex; align-items: center; gap: 4px; font: 400 11px var(--mono); letter-spacing: .14em; color: var(--dim); white-space: nowrap; }
 .delay output { display: inline-block; min-width: 46px; text-align: center; color: var(--ink); font-variant-numeric: tabular-nums; }
@@ -63,6 +64,10 @@ a.btn { text-decoration: none; border-bottom-color: var(--faint); } a.btn:hover 
 @media (max-width: 720px) {
   .bar.top { height: auto; flex-wrap: wrap; gap: 6px 14px; padding: 8px 16px; }
   .bar.top #title { display: none; }                                  /* the day's name is on the front page */
+  /* the header: the page's name, then the cameras on one line with ⋯ at its end; the rest only while ⋯ is open, on the lines below */
+  .bar.top { gap: 2px 12px; padding: 6px 12px; } .bar.top #cams { flex-basis: 100%; flex-wrap: wrap; justify-content: flex-start; }
+  .bar.top:not(.open) .opt { display: none !important; } .bar.top .more { display: inline-block; margin-left: auto; font-size: 15px; letter-spacing: 0; }
+  .bar.top.open #cams .opt { order: 1; } .bar.top.open #cams::after { content: ""; flex-basis: 100%; height: 0; }   /* a line break between the cameras and the rest */ .bar.top.open #cams .quality { margin-left: 0; padding-left: 0; border-left: 0; }
   .bar.foot { padding: 6px 16px; gap: 4px 12px; }
   .pilots { left: 16px; top: auto; bottom: calc(var(--foot, 34px) + var(--time, 0px) + 10px); min-width: 0; }
   .mark i { width: 24px; }
